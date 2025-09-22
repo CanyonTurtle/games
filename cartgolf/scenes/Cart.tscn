@@ -1,0 +1,28 @@
+[gd_scene load_steps=5 format=3 uid="uid://crjpgkwhwjvmd"]
+
+[ext_resource type="Script" path="res://scripts/Cart.gd" id="1_c8x8p"]
+[ext_resource type="Material" uid="uid://5ubyskx0x0x5" path="res://assets/materials/blue_cart_material.tres" id="2_blue"]
+
+[sub_resource type="BoxMesh" id="BoxMesh_1wv7o"]
+size = Vector3(1, 0.5, 1.5)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1wv7o"]
+size = Vector3(1, 0.5, 1.5)
+
+[node name="Cart" type="RigidBody3D"]
+mass = 2.0
+script = ExtResource("1_c8x8p")
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_1wv7o")
+surface_material_override/0 = ExtResource("2_blue")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape3D_1wv7o")
+
+[node name="CameraMount" type="Node3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="Camera3D" type="Camera3D" parent="CameraMount"]
+transform = Transform3D(1, 0, 0, 0, 0.866025, 0.5, 0, -0.5, 0.866025, 0, 2, 3)
+

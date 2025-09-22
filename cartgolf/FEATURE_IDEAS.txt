@@ -1,0 +1,31 @@
+Cart Golf - Feature Ideas
+==========================
+
+WORLDS & LEVELS
+---------------
+- 3 worlds (each is a different parking lot)
+  * Could have different themes: suburban mall, city street, industrial area
+  * Each world could have unique obstacles and layouts
+  * Progressive difficulty across worlds
+
+GAMEPLAY MECHANICS
+------------------
+- Slow time during re-flick (to allow microadjustment)?
+  * Could add precision gameplay element
+  * Maybe triggered by holding a key during aim
+  * Visual effect like bullet-time with particles
+
+POWERUPS & COLLECTIBLES
+-----------------------
+- Powerup: extra flick (pickup item)
+  * Could spawn randomly on levels
+  * Visual design: glowing shopping cart icon or +1 symbol
+  * Adds strategic element - risk/reward for going off optimal path
+
+FUTURE CONSIDERATIONS
+--------------------
+- Different cart types with unique physics?
+- Multiplayer/co-op modes?
+- Level editor for custom parking lots?
+- Leaderboards and time trials?
+- Weather effects (rain = slippery, wind = drift)?

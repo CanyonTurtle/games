@@ -1,0 +1,151 @@
+[gd_scene load_steps=11 format=3 uid="uid://dhq2ksjcqj4kj"]
+
+[ext_resource type="Script" uid="uid://4qp28ns3fdv2" path="res://scripts/Game.gd" id="1_0f3g8"]
+[ext_resource type="PackedScene" uid="uid://crjpgkwhwjvmd" path="res://scenes/Cart.tscn" id="2_4p7i8"]
+[ext_resource type="PackedScene" uid="uid://b6f0xhq5k7xn8" path="res://scenes/CartStation.tscn" id="3_7xq2w"]
+[ext_resource type="Theme" uid="uid://mobile_theme" path="res://assets/mobile_theme.tres" id="4_mobile_theme"]
+
+[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1wv7o"]
+sky_top_color = Color(0.5, 0.7, 1, 1)
+sky_horizon_color = Color(0.8, 0.9, 1, 1)
+sky_curve = 0.15
+ground_bottom_color = Color(0.2, 0.169, 0.133, 1)
+ground_horizon_color = Color(0.8, 0.9, 1, 1)
+ground_curve = 0.15
+
+[sub_resource type="Sky" id="Sky_1wv7o"]
+sky_material = SubResource("ProceduralSkyMaterial_1wv7o")
+
+[sub_resource type="Environment" id="Environment_1wv7o"]
+background_mode = 2
+sky = SubResource("Sky_1wv7o")
+ambient_light_source = 3
+ambient_light_color = Color(1, 1, 1, 1)
+ambient_light_energy = 0.3
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_1wv7o"]
+size = Vector2(50, 50)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_1wv7o"]
+size = Vector3(50, 1, 50)
+
+[sub_resource type="BoxMesh" id="BoxMesh_2wv7o"]
+size = Vector3(2, 3, 1)
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_2wv7o"]
+size = Vector3(2, 3, 1)
+
+[node name="Game" type="Node3D"]
+script = ExtResource("1_0f3g8")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_1wv7o")
+
+[node name="Ground" type="StaticBody3D" parent="."]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ground"]
+mesh = SubResource("PlaneMesh_1wv7o")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Ground"]
+shape = SubResource("BoxShape3D_1wv7o")
+
+[node name="Cart" parent="." groups=["cart"] instance=ExtResource("2_4p7i8")]
+transform = Transform3D(0, 0, -1, 0, 1, 0, 1, 0, 0, -10, 1, 0)
+
+[node name="CartStation" parent="." instance=ExtResource("3_7xq2w")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 15, 0.1, 0)
+
+[node name="Obstacle" type="StaticBody3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 5, 1.5, 0)
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Obstacle"]
+mesh = SubResource("BoxMesh_2wv7o")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Obstacle"]
+shape = SubResource("BoxShape3D_2wv7o")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.707107, -0.5, 0.5, 0, 0.707107, 0.707107, -0.707107, -0.5, 0.5, 0, 10, 0)
+
+[node name="UI" type="Control" parent="."]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme = ExtResource("4_mobile_theme")
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="FlicksLabel" type="Label" parent="UI"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 0.0
+anchor_right = 1.0
+anchor_bottom = 0.0
+offset_top = 20.0
+offset_bottom = 80.0
+text = "Flicks: 3"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="GameOverPanel" type="Panel" parent="UI"]
+visible = false
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -150.0
+offset_right = 200.0
+offset_bottom = 150.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="WinLabel" type="Label" parent="UI/GameOverPanel"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -50.0
+offset_top = -40.0
+offset_right = 50.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "You Win!"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="RestartButton" type="Button" parent="UI/GameOverPanel"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -80.0
+offset_top = 10.0
+offset_right = 80.0
+offset_bottom = 50.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Restart"
+
+[node name="MenuButton" type="Button" parent="UI/GameOverPanel"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -80.0
+offset_top = 60.0
+offset_right = 80.0
+offset_bottom = 100.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "Main Menu"
