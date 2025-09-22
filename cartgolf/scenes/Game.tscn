@@ -1,15 +1,14 @@
-[gd_scene load_steps=11 format=3 uid="uid://dhq2ksjcqj4kj"]
+[gd_scene load_steps=14 format=3 uid="uid://dhq2ksjcqj4kj"]
 
 [ext_resource type="Script" uid="uid://4qp28ns3fdv2" path="res://scripts/Game.gd" id="1_0f3g8"]
 [ext_resource type="PackedScene" uid="uid://crjpgkwhwjvmd" path="res://scenes/Cart.tscn" id="2_4p7i8"]
 [ext_resource type="PackedScene" uid="uid://b6f0xhq5k7xn8" path="res://scenes/CartStation.tscn" id="3_7xq2w"]
-[ext_resource type="Theme" uid="uid://mobile_theme" path="res://assets/mobile_theme.tres" id="4_mobile_theme"]
+[ext_resource type="Theme" path="res://assets/mobile_theme.tres" id="4_mobile_theme"]
+[ext_resource type="Shader" uid="uid://c4pn0hxaajx0i" path="res://shaders/CRT.gdshader" id="5_crt_shader"]
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_1wv7o"]
 sky_top_color = Color(0.5, 0.7, 1, 1)
 sky_horizon_color = Color(0.8, 0.9, 1, 1)
-sky_curve = 0.15
-ground_bottom_color = Color(0.2, 0.169, 0.133, 1)
 ground_horizon_color = Color(0.8, 0.9, 1, 1)
 ground_curve = 0.15
 
@@ -34,6 +33,11 @@ size = Vector3(2, 3, 1)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_2wv7o"]
 size = Vector3(2, 3, 1)
+
+[sub_resource type="ShaderMaterial" id="CRTMaterial"]
+shader = ExtResource("5_crt_shader")
+shader_parameter/scanline_width = 6.690000270275
+shader_parameter/scanline_tint = Color(0.8392157, 0.9372549, 0.9372549, 0.7019608)
 
 [node name="Game" type="Node3D"]
 script = ExtResource("1_0f3g8")
@@ -72,18 +76,18 @@ layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-theme = ExtResource("4_mobile_theme")
 grow_horizontal = 2
 grow_vertical = 2
+theme = ExtResource("4_mobile_theme")
 
 [node name="FlicksLabel" type="Label" parent="UI"]
 layout_mode = 1
-anchors_preset = 2
-anchor_top = 0.0
+anchors_preset = 10
 anchor_right = 1.0
-anchor_bottom = 0.0
 offset_top = 20.0
 offset_bottom = 80.0
+grow_horizontal = 2
+grow_vertical = 0
 text = "Flicks: 3"
 horizontal_alignment = 1
 vertical_alignment = 1
@@ -149,3 +153,16 @@ offset_bottom = 100.0
 grow_horizontal = 2
 grow_vertical = 2
 text = "Main Menu"
+
+[node name="CRTOverlay" type="ColorRect" parent="UI"]
+z_index = -1
+z_as_relative = false
+material = SubResource("CRTMaterial")
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+color = Color(1, 1, 1, 0)
