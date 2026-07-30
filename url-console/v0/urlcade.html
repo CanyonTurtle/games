@@ -249,9 +249,14 @@ function assemble(lines, sym){
    3. The lifecycle-hook VM — stack machine, see DESIGN.md §7
    ============================================================ */
 const MAX_STEPS = 20000;
+// Reused across every hook call (~7/tick * 60 ticks/sec) instead of
+// allocating a fresh array each time. Safe: hook execution is always
+// synchronous and never re-entrant (no opcode calls back into runHook).
+const vmStack = [];
 function runHook(bytecode, ctx){
   if(!bytecode || bytecode.length===0) return true;
-  const stack = [];
+  const stack = vmStack;
+  stack.length = 0;
   let ip = 0, steps = 0;
   function u8(){ return bytecode[ip++]; }
   function i16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; let v=lo|(hi<<8); if(v & 0x8000) v -= 0x10000; return v; }
@@ -635,7 +640,13 @@ class World {
       rng: () => self_.rng(),
       playSound: id => self_.playSound(id),
     };
-    this.runGlobalHook('on_init', {});
+    // Reused across every hook call this session (self/a/b/input mutated in
+    // place instead of Object.assign-ing a fresh object + copying the ~10
+    // unchanging ctxBase fields every single invocation — up to ~7 hook
+    // calls/tick * 60 ticks/sec). Safe because runHook only ever reads ctx
+    // synchronously and never retains a reference past the call.
+    this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, input:0});
+    this.runGlobalHook('on_init');
   }
   buildBitmap(asset, palette, transparent){
     const off = document.createElement('canvas');
@@ -661,19 +672,22 @@ class World {
     this.entities.push(e);
     return e;
   }
-  runGlobalHook(name, extra){
+  runGlobalHook(name){
     const bc = this.cart.hooks[name];
-    const ctx = Object.assign({}, this.ctxBase, {self:null,a:null,b:null,input:this.input}, extra);
+    const ctx = this.ctxScratch;
+    ctx.self = null; ctx.a = null; ctx.b = null; ctx.input = this.input;
     return runHook(bc, ctx);
   }
   runEntityHook(name, entity){
     const bc = this.cart.hooks[name];
-    const ctx = Object.assign({}, this.ctxBase, {self:entity,a:null,b:null,input:this.input});
+    const ctx = this.ctxScratch;
+    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
     return runHook(bc, ctx);
   }
   runCollideHook(a,b){
     const bc = this.cart.hooks['on_collide'];
-    const ctx = Object.assign({}, this.ctxBase, {self:null,a,b,input:this.input});
+    const ctx = this.ctxScratch;
+    ctx.self = null; ctx.a = a; ctx.b = b; ctx.input = this.input;
     return runHook(bc, ctx);
   }
   getTileAt(x,y){
@@ -716,8 +730,8 @@ class World {
     // their own post-spawn state below, so they appear at the right place
     // immediately instead of interpolating in from stale/zeroed values.
     for(const e of this.entities) e.prevProps = e.props.slice();
-    this.runGlobalHook('on_input', {});
-    this.runGlobalHook('on_frame', {});
+    this.runGlobalHook('on_input');
+    this.runGlobalHook('on_frame');
     for(const e of this.entities.slice()){ if(e.active) this.runEntityHook('on_tick', e); }
     this.entities = this.entities.filter(e=>e.active);
     for(let i=0;i<this.entities.length;i++){

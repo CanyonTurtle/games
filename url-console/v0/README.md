@@ -84,6 +84,24 @@ and it's exercised on every play, not just asserted.
   corrects by a little on the next frame instead of a lot (smoothness over
   perfect real-time accuracy after a stall).
 
+  The stutter persisted, prompting a specific follow-up hypothesis: is
+  running the `on_input` hook on touch actually expensive? Measured
+  directly rather than reasoned about — `on_input` costs ~1 microsecond
+  per call, a full `world.step()` ~2-5 microseconds, both 3-4 orders of
+  magnitude too small to explain a dropped ~16.7ms frame, and a
+  higher-fidelity touch simulation (Chromium's real touch-input dispatch,
+  not just synthetic DOM events) still showed zero frame-timing anomaly
+  around the touch. That rules the hook out with numbers, not a guess.
+  Found and fixed a real (if unconfirmed-as-root-cause) source of GC
+  pressure while measuring it, though: every hook call was allocating a
+  fresh context object (`Object.assign`-ing ~10 unchanging fields plus
+  self/a/b/input) and a fresh VM operand-stack array — up to ~7 times a
+  tick at 60 ticks/sec. Both are now reused and mutated in place instead
+  (safe: hook execution is synchronous and never re-entrant), which
+  measurably roughly halved per-step cost in the same benchmark. Whether
+  that's enough to resolve a stutter that only reproduces on a real
+  touchscreen remains to be seen.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 
