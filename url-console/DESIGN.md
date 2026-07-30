@@ -173,7 +173,8 @@ Hook points (each either present with a bytecode offset, or absent —
 absence costs 1 bit):
 
 - `on_init` — once, at cart load
-- `on_tick` — once per logic step
+- `on_frame` — once per logic step, **global** (spawning, timers, whole-cart bookkeeping)
+- `on_tick(self)` — once per logic step, **per active entity** (see below — amended after the Flappy Bird dogfood, §13)
 - `on_input(button_mask)`
 - `on_collide(type_a, type_b)`
 - `on_timer(timer_id)`
@@ -181,19 +182,40 @@ absence costs 1 bit):
 - `on_score_change(delta)`
 - `on_draw_extra` — optional overlay after the automatic tile/entity draw
 
+`on_tick` was originally sketched as a single global call. The Flappy
+Bird dogfood (§13) found that's a dead end for anything with a
+dynamic-length entity set: with no arrays or loops in the VM, there's no
+way for one global call to iterate "all pipes." Splitting it into a
+global `on_frame` (spawning, score-independent bookkeeping) and a
+per-entity `on_tick(self)` (physics, per-entity scoring/despawn, same
+shape as `on_collide(a, b)`) resolves it without adding loop primitives.
+
 VM shape:
 - Integer/fixed-point only (16.16), **no floats** — cross-browser float
   determinism is not guaranteed by spec, and determinism is load-bearing
   here (replays, ghosts, shared seeds all depend on it).
 - Small operand stack (depth 16), a handful of 3-bit-indexed scratch
   registers, and mediated access to: current entity's properties
-  (pos/vel/hp/type/anim-frame), tile get/set, global flags, RNG.next(),
-  score, sound-trigger, sprite-override.
-- Dense encoding: the ~16 hottest ops (push-small-int, add, sub,
-  get/set-entity-prop, compare, branch, jump-if-zero, call-local-sub,
-  return, get/set-tile, random, play-sound, spawn) get a 4-bit opcode;
-  a 4-bit escape value opens a secondary byte-wide table for rarer ops.
-  No strings, no heap, no dynamic allocation.
+  (pos/vel/hp/type/anim-frame, plus two generic `custom0`/`custom1`
+  scratch fields per entity — added after §13 turned up a real need for
+  game-specific per-entity bookkeeping, like "have I already scored
+  this pipe," that doesn't fit any named property), tile get/set,
+  global flags, RNG.next(), score, sound-trigger, sprite-override.
+- A small **constant pool**: a handful (e.g. 8) of named fixed-point
+  values declared in the header and referenced from bytecode by index
+  (`PUSHC n`) instead of re-encoding literals inline. Cheaper once a
+  constant (gravity, scroll speed) is used more than once, and gives
+  designers one place to retune a cart instead of hunting through
+  bytecode. Also added after §13.
+- Dense encoding: the ~16 hottest ops (push-small-int, push-const,
+  add, sub, get/set-entity-prop, compare, branch, jump-if-zero,
+  call-local-sub, return, get/set-tile, random, play-sound, spawn,
+  **kill**) get a 4-bit opcode; a 4-bit escape value opens a secondary
+  byte-wide table for rarer ops. `KILL self` (remove an entity) was
+  missing from the first draft — obvious in hindsight, but nothing
+  else in the format catches an unbounded-entity-growth bug, so it's
+  promoted to the hot table. No strings, no heap, no dynamic
+  allocation.
 - **Hard step budget per hook invocation** (e.g. 2000 VM steps). Exceeding
   it aborts that hook call and surfaces a visible "cart fault" indicator
   — never a silent hang, since this is untrusted code executing from a
@@ -253,7 +275,50 @@ body:
 Base64url-encoded and dictionary-compressed, this is expected to land
 comfortably in the "standard" size class.
 
-## 12. Open questions
+## 12. Dogfood: Flappy Bird
+
+Full worked cart (header, palette, constant pool, entity type table,
+sprite/tile bitmaps, and complete per-hook bytecode listing) at
+`examples/flappy-bird.md`. Short version: **it fits, easily, even
+uncompressed** — around 165 raw bytes, ~220 base64url characters, inside
+even the "micro" (≤280 char) size class without needing the preset
+dictionary at all. Bit budget was never the risk for a game this small.
+
+What the exercise actually stress-tested, and changed, was the hook/VM
+model (§7) and the header (§4–§6):
+
+- **`on_tick` had to split** into a global `on_frame` and a per-entity
+  `on_tick(self)` — a single global tick call has no way to iterate a
+  dynamic-length entity list without loops/arrays, which the VM
+  deliberately doesn't have.
+- **`KILL self`** was missing. Nothing else expires an off-screen pipe;
+  without it entity count grows without bound.
+- **Entities needed generic scratch fields** (`custom0`, `custom1`) —
+  "has this pipe already been scored" isn't position, velocity, hp,
+  type, or animation frame, and won't be the last thing like it a
+  future cart needs.
+- **Not every entity is a single sprite blit.** Flappy's pipes have a
+  gap-dependent height, so they render as a repeated tile column, not
+  a fixed bitmap. This needed a new header segment — an **entity type
+  table** mapping each type id to a `render_kind` (sprite / tile-column
+  / rect) and an asset index — which cart_type 63 uses directly and
+  which the declarative genre templates (§5) could also reference for
+  non-uniform entities instead of assuming "entity = sprite" always.
+- **A constant pool earns its keep even in a tiny cart.** Gravity,
+  flap impulse, and scroll speed are each read every tick; naming them
+  once in the header and referencing them by index from bytecode both
+  saves bytes past the first use and gives a human one place to retune
+  the feel of the game.
+
+One gap surfaced but *not* resolved — see the open questions below:
+per-entity hooks cleanly expose `self` (`on_tick`) or `a`/`b`
+(`on_collide`), but scoring in `flappy-bird.md` needed a pipe to read
+the *bird's* `pos_x`, i.e. a property off an entity that is neither.
+The example leans on a global entity-id handle (`g_player`) and an
+implied "read a prop off an arbitrary entity by id" addressing mode
+that §7 doesn't actually define yet.
+
+## 13. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
@@ -269,6 +334,17 @@ comfortably in the "standard" size class.
   envelope format?
 
 **VM & hooks**
+- How does bytecode read a property off an entity that is neither
+  `self` nor `a`/`b`? The Flappy Bird cart (§12) needs a pipe's
+  `on_tick` to read the bird's `pos_x` and leans on an unspecified
+  "resolve entity-id global, then read a prop off it" addressing mode.
+  Is that a named opcode (`LOADE <handle_global>.<prop>`), or does it
+  argue for letting hooks take more than one bound entity in cases
+  beyond `on_collide`?
+- Now that `on_tick` is per-entity and `on_frame` is global (§7,
+  amended after §12), is that two-hook split enough, or do other
+  genres need a third granularity (e.g. per-entity-*type*, once per
+  frame, for "move every pipe as a group" style behavior)?
 - Stack machine vs register machine: stack machines compress better
   under generic LZ but register machines are often denser natively —
   has anyone actually benchmarked this for a corpus this small?
