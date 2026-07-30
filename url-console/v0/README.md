@@ -140,6 +140,38 @@ and it's exercised on every play, not just asserted.
   three cars on top of each other for 8000 ticks (constant collisions,
   entity count peaking at 63): no crash, no fault.
 
+  Rather than keep guessing at the touch-specific angle, took an
+  automated CPU profile instead: a random-input bot (holding/releasing
+  keys at random intervals, restarting on death) driving each cart for
+  15 real seconds under Chrome DevTools' sampling profiler
+  (`Profiler.start`/`stop` over CDP). Flappy Bird looked healthy — ~90%
+  idle, the single biggest actual JS hotspot was `renderHUD` at only
+  0.22% of samples. It was still worth fixing: `renderHUD` called
+  `getElementById` and wrote `textContent`/`style.display`
+  *unconditionally* every one of the 60 frames/sec, even though the HUD
+  only changes a few times a minute. Now the elements are cached once and
+  the DOM is only touched when the computed value actually differs from
+  last frame's — `renderHUD`'s self-time dropped ~85% in the same
+  profile (164 → 25 samples out of ~74k).
+
+  The racer told a completely different story: **0.23% idle, 97.88%**
+  in undifferentiated V8 "(program)" time — essentially pegging the
+  thread the entire 15 seconds, nothing like Flappy Bird's profile
+  shape. Traced it to the map renderer: the racer's 40×28 tile grid was
+  being redrawn tile-by-tile, every frame, in both backends — confirmed
+  directly by counting calls, 1,120 tiles + entities = 1,123
+  `glDrawTexturedQuad` calls in a single frame, ~67,000/sec at 60fps,
+  for a map that `buildTrack()` only ever computes once and never
+  changes again. Fixed by pre-rendering the static tilemap to an
+  offscreen canvas once at load (and a GL texture from that canvas when
+  WebGL is active), so both renderers now draw the whole map as a
+  single quad instead of one draw call per tile. Re-profiled after:
+  **87.24% idle, 11.82% "(program)"** — back to matching Flappy Bird's
+  shape. This is very likely the single biggest performance fix in the
+  whole investigation, even though it was found while chasing an
+  unrelated bug report specifically about Flappy Bird, which has no
+  tilemap at all and was never affected by it.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

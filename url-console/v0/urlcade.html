@@ -636,6 +636,23 @@ class World {
     this.track = null;
     if(cart.mapGenerator === 1){
       this.track = buildTrack(cart.track);
+      // Pre-render the static tilemap once at load instead of redrawing every
+      // tile every frame. A CPU profile under random input (see README) found
+      // this was issuing ~1120 GL draw calls/frame for the racer's map alone
+      // (~67,000/sec at 60fps) for a grid that never changes after buildTrack()
+      // runs — one draw call for the whole map, from here on, in both renderers.
+      const grid = this.track.grid;
+      const mapCanvas = document.createElement('canvas');
+      mapCanvas.width = grid[0].length * 8;
+      mapCanvas.height = grid.length * 8;
+      const mctx = mapCanvas.getContext('2d');
+      for(let y=0;y<grid.length;y++){
+        for(let x=0;x<grid[0].length;x++){
+          mctx.drawImage(this.tileCanvases[grid[y][x]-1], x*8, y*8);
+        }
+      }
+      this.mapCanvas = mapCanvas;
+      if(USE_GL) this.glMapTexture = buildGLTexture(mapCanvas);
     }
     const self_ = this;
     this.ctxBase = {
@@ -1558,6 +1575,7 @@ function disposeGLTextures(w){
   if(!w || !gl) return;
   for(const t of w.glSpriteTextures || []) gl.deleteTexture(t);
   for(const t of w.glTileTextures || []) gl.deleteTexture(t);
+  if(w.glMapTexture) gl.deleteTexture(w.glMapTexture);
 }
 
 USE_GL = initGL();
@@ -1779,12 +1797,7 @@ function render(alpha){
 function renderSceneCanvas(alpha){
   const cart = world.cart;
   if(world.track){
-    for(let y=0;y<world.track.grid.length;y++){
-      for(let x=0;x<world.track.grid[0].length;x++){
-        const tid = world.track.grid[y][x];
-        ctx2d.drawImage(world.tileCanvases[tid-1], x*8, y*8);
-      }
-    }
+    ctx2d.drawImage(world.mapCanvas, 0, 0); // pre-rendered once at load, see World constructor
   } else {
     ctx2d.fillStyle = world.palette[cart.backdropFillIndex] || '#222';
     ctx2d.fillRect(0, 0, canvas.width, canvas.height);
@@ -1802,12 +1815,9 @@ function renderSceneGL(alpha){
   gl.uniform2f(glUniforms.screenSize, canvas.width, canvas.height);
   if(world.track){
     gl.clear(gl.COLOR_BUFFER_BIT);
-    for(let y=0;y<world.track.grid.length;y++){
-      for(let x=0;x<world.track.grid[0].length;x++){
-        const tid = world.track.grid[y][x];
-        glDrawTexturedQuad(world.glTileTextures[tid-1], x*8, y*8, 8, 8, 0);
-      }
-    }
+    // pre-rendered once at load (see World constructor) — one draw call for
+    // the whole map instead of one per tile, every frame
+    glDrawTexturedQuad(world.glMapTexture, 0, 0, canvas.width, canvas.height, 0);
   } else {
     const [br,bg,bb] = cssColorToRGB(world.palette[cart.backdropFillIndex] || '#222');
     gl.clearColor(br/255, bg/255, bb/255, 1);
@@ -1840,6 +1850,16 @@ function drawEntityGL(e, alpha){
   }
 }
 
+// Cached once — a random-input CPU profile (see README) found renderHUD as
+// the single biggest actual JS hotspot in the whole game, ahead of rendering
+// itself, because it called getElementById and wrote textContent/style.display
+// unconditionally on every one of the 60 frames/sec even when nothing in the
+// HUD had changed (which is most frames — the score/lap only updates a few
+// times a minute). Both are fixed below: cache the elements, and skip the DOM
+// write entirely when the computed value is identical to last frame's.
+const hudEl = document.getElementById('hud');
+const faultBannerEl = document.getElementById('faultBanner');
+let lastHudText = null, lastFaultVisible = null;
 function renderHUD(){
   const cart = world.cart;
   const parts = [];
@@ -1859,8 +1879,10 @@ function renderHUD(){
       parts.push(line.label);
     }
   }
-  document.getElementById('hud').textContent = parts.join('   ');
-  document.getElementById('faultBanner').style.display = world.cartFault ? 'block' : 'none';
+  const text = parts.join('   ');
+  if(text !== lastHudText){ hudEl.textContent = text; lastHudText = text; }
+  const faultVisible = world.cartFault ? 'block' : 'none';
+  if(faultVisible !== lastFaultVisible){ faultBannerEl.style.display = faultVisible; lastFaultVisible = faultVisible; }
 }
 
 // Fixed-timestep simulation, decoupled from however fast the display
