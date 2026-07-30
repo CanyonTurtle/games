@@ -27,6 +27,18 @@ and it's exercised on every play, not just asserted.
 - The track-piece grammar turtle-interpreting a token sequence into a
   tile grid + checkpoint table at load time.
 - Per-type declared entity fields (not a fixed generic scratch count).
+- **Fixed-timestep simulation decoupled from the display, with render
+  interpolation** (`DESIGN.md` §8): the sim now runs a real 60Hz clock via
+  an accumulator (any number of ticks per rendered frame, to catch up if
+  one ran long) instead of the original "step once if 33ms elapsed, else
+  redraw the same positions" — measured before the fix, ~63% of rendered
+  frames were pixel-identical to the previous one. Rendering interpolates
+  each entity's position/heading between its last two tick states; the
+  actual simulation state (what collisions and scoring see) is always the
+  fixed-tick value, so this is purely cosmetic. Per-tick constants
+  (gravity, accel, friction, turn rate, spawn/particle timers) were
+  rescaled to match, so gameplay pacing is the same as before — only the
+  smoothness changed, not the speed.
 - **Composable generators, not a genre switch** (`DESIGN.md` §15): the
   backdrop, HUD, and touch-control layout are each declared by the cart
   and interpreted generically by the runtime — nothing in `render()` or

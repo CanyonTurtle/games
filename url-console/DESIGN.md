@@ -277,6 +277,23 @@ server needed. This is the natural async-multiplayer story for a
 serverless format: ghost replays, ChallengeLink-style score attacks,
 no real-time netcode implied or promised.
 
+**Simulation rate is fixed and decoupled from display rate, and rendering
+interpolates between ticks.** V0 first ran the simulation once per
+elapsed-33ms check inside the render loop itself — so on a 60Hz+ display,
+most rendered frames simply redrew the previous tick's positions
+unchanged (measured: ~63% of frames were pixel-identical to the frame
+before, which is exactly what reads as "choppy"). The fix is the standard
+one: the simulation always advances in fixed ticks (any number of them
+per rendered frame, to catch up if a frame ran long) entirely independent
+of however fast requestAnimationFrame fires, and the renderer is handed
+`alpha` — how far into the next, not-yet-simulated tick real time has
+gotten — and linearly interpolates each entity's position (and, angle-
+aware, heading) between its last two tick states for display. This is
+presentation-only: the actual simulation state used for collisions,
+scoring, and anything else consequential is exactly the fixed-tick value,
+never the interpolated one, so replay/ghost determinism (above) is
+untouched by how smoothly a given viewer's display happens to render it.
+
 ## 9. Safety model
 
 Carts execute the moment a link is opened. Non-negotiables:

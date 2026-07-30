@@ -690,6 +690,12 @@ class World {
   }
   step(){
     if(this.cartFault) return;
+    // Snapshot pre-step state for render interpolation (§8 amendment) before
+    // anything mutates it. Entities spawned *during* this step won't be
+    // caught here (they don't exist yet) — they get a snapshot equal to
+    // their own post-spawn state below, so they appear at the right place
+    // immediately instead of interpolating in from stale/zeroed values.
+    for(const e of this.entities) e.prevProps = e.props.slice();
     this.runGlobalHook('on_input', {});
     this.runGlobalHook('on_frame', {});
     for(const e of this.entities.slice()){ if(e.active) this.runEntityHook('on_tick', e); }
@@ -702,6 +708,7 @@ class World {
       }
     }
     this.entities = this.entities.filter(e=>e.active);
+    for(const e of this.entities) if(!e.prevProps) e.prevProps = e.props.slice();
   }
 }
 function cssColorToRGB(col){
@@ -926,7 +933,11 @@ function buildFlappyCart(){
       {kind:0, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_score, srcB:0, delta:0, suffixConstIdx:255, label:'Score'},
       {kind:1, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'Crashed - refresh link to retry'},
     ],
-    constants: [0.35, -3.2, 2.0, 34, 16, 130, 70, 220, 160, 40, 90, 16],
+    // GRAVITY/FLAP_IMPULSE/SCROLL_SPEED halved and SPAWN_PERIOD doubled vs
+    // the original 30Hz tuning — the sim now runs at 60Hz (see the loop()
+    // comment near render()), so per-tick rates are rescaled to keep the
+    // same *real-time* feel; only the render smoothness changed, not the pace.
+    constants: [0.175, -1.6, 1.0, 34, 16, 130, 140, 220, 160, 40, 90, 16],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0},
       {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
@@ -1266,7 +1277,10 @@ function buildRacerCart(){
       {kind:2, sourceKind:1, srcA:RACER_GLOBAL_NAMES.g_car_player, srcB:11, delta:0, suffixConstIdx:255, clamp:0, label:'Finished #'},
       {kind:1, sourceKind:0, srcA:RACER_GLOBAL_NAMES.g_race_over, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Race over!'},
     ],
-    constants: [0.15, 4, 0.03, 0.08, 0.2, 14, 3, 0.6, 10, 2, startX, startY, 0.3],
+    // ACCEL/TURN_RATE halved, friction retentions square-rooted, PARTICLE_TTL
+    // doubled vs the original 30Hz tuning — same reasoning as the flappy
+    // cart: the sim now runs at 60Hz, rescaled to keep real-time feel fixed.
+    constants: [0.075, 2, 0.015, 0.041, 0.106, 14, 3, 0.6, 20, 2, startX, startY, 0.3],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:6, collisionH:6, extFieldCount:4},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:3, collisionH:3, extFieldCount:1},
@@ -1475,6 +1489,8 @@ function startGame(key){
   world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
   setupTouchControls(world.cart);
   running = true;
+  lastTime = null;
+  accumulator = 0;
   fitCanvas();
 }
 
@@ -1489,27 +1505,44 @@ function backToMenu(){
   history.replaceState(null, '', location.pathname + location.search);
 }
 
-function drawEntity(e){
+// Linear-interpolate a prop between the last two simulation steps for
+// smooth rendering at whatever rate the display refreshes, independent of
+// the (fixed, deterministic) simulation rate — see DESIGN.md §8 amendment.
+// This is presentation-only: nothing here feeds back into game state.
+function ilerp(e, idx, alpha){
+  const p = e.prevProps ? e.prevProps[idx] : e.props[idx];
+  return p + (e.props[idx] - p) * alpha;
+}
+// Same, but shortest-path around the 0/360 wrap — for headings.
+function ilerpAngle(e, idx, alpha){
+  const p = e.prevProps ? e.prevProps[idx] : e.props[idx];
+  const c = e.props[idx];
+  const delta = ((c - p + 180) % 360 + 360) % 360 - 180;
+  return p + delta * alpha;
+}
+
+function drawEntity(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
-  if(type.renderKind === 1){ // tile column
+  const x = ilerp(e, 0, alpha), y = ilerp(e, 1, alpha);
+  if(type.renderKind === 1){ // tile column — position interpolates, extent/cap don't (discrete, only change at spawn)
     const extent = Math.max(0, Math.floor(e.props[8]));
     const capAtTop = e.props[10] === 0;
     const bodyCanvas = world.tileCanvases[type.assetIndex];
     const capCanvas = world.tileCanvases[type.assetIndex+1];
     for(let row=0; row<extent; row++){
       const isCapRow = capAtTop ? row===0 : row===extent-1;
-      ctx2d.drawImage(isCapRow?capCanvas:bodyCanvas, e.props[0], e.props[1]+row*8);
+      ctx2d.drawImage(isCapRow?capCanvas:bodyCanvas, x, y+row*8);
     }
   } else {
     const spr = world.spriteCanvases[type.assetIndex];
     if(type.rotateFlag){
       ctx2d.save();
-      ctx2d.translate(e.props[0], e.props[1]);
-      ctx2d.rotate(e.props[8]*Math.PI/180);
+      ctx2d.translate(x, y);
+      ctx2d.rotate(ilerpAngle(e, 8, alpha) * Math.PI/180);
       ctx2d.drawImage(spr, -spr.width/2, -spr.height/2);
       ctx2d.restore();
     } else {
-      ctx2d.drawImage(spr, e.props[0]-spr.width/2, e.props[1]-spr.height/2);
+      ctx2d.drawImage(spr, x-spr.width/2, y-spr.height/2);
     }
   }
 }
@@ -1519,7 +1552,7 @@ function drawEntity(e){
 // the HUD generator (a declared list of readouts) are both interpreted
 // generically here. Nothing in this function branches on cart identity,
 // cart_type, or which genre a cart happens to look like — see DESIGN.md §15.
-function render(){
+function render(alpha){
   const cart = world.cart;
   if(world.track){
     for(let y=0;y<world.track.grid.length;y++){
@@ -1536,7 +1569,7 @@ function render(){
       ctx2d.fillRect(0, canvas.height - cart.backdropGroundHeight, canvas.width, cart.backdropGroundHeight);
     }
   }
-  for(const e of world.entities) drawEntity(e);
+  for(const e of world.entities) drawEntity(e, alpha);
 
   const parts = [];
   for(const line of cart.hudSpec){
@@ -1559,16 +1592,34 @@ function render(){
   document.getElementById('faultBanner').style.display = world.cartFault ? 'block' : 'none';
 }
 
-let lastStep = 0;
-const STEP_MS = 1000/30;
+// Fixed-timestep simulation, decoupled from however fast the display
+// refreshes (60/120/144Hz...) — see DESIGN.md §8 amendment. The old version
+// stepped once per elapsed-33ms check and rendered whatever that left
+// on screen, so most rAF frames just redrew the previous tick's positions
+// unchanged: measured empirically, ~63% of frames were pixel-identical to
+// the one before, which is exactly what reads as "choppy." Here, `world`
+// always advances in fixed STEP_MS increments (any number of them per
+// frame, to catch up if a frame ran long), and render() is handed `alpha`
+// — how far into the *next*, not-yet-simulated tick we are — so motion is
+// interpolated (see ilerp/ilerpAngle) smoothly at whatever rate rAF fires,
+// while the simulation itself stays exactly as deterministic as before.
+const STEP_MS = 1000/60;
+const MAX_ACCUMULATED_MS = STEP_MS * 5; // don't try to catch up forever after a backgrounded tab
+let lastTime = null;
+let accumulator = 0;
 function loop(ts){
   if(running && world){
+    if(lastTime === null) lastTime = ts;
+    accumulator = Math.min(accumulator + (ts - lastTime), MAX_ACCUMULATED_MS);
+    lastTime = ts;
     world.input = buttonMaskFromKeys();
-    if(ts - lastStep >= STEP_MS){
-      lastStep = ts;
+    while(accumulator >= STEP_MS){
       world.step();
+      accumulator -= STEP_MS;
     }
-    render();
+    render(accumulator / STEP_MS);
+  } else {
+    lastTime = null; // avoid a stale huge dt when the next game starts
   }
   requestAnimationFrame(loop);
 }
