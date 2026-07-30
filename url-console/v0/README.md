@@ -70,8 +70,19 @@ and it's exercised on every play, not just asserted.
   controls hint, and touch controls all became floating overlays with a
   gradient scrim instead of occupying their own layout rows that used to
   shrink the canvas to make room.
-
-## What V0 cuts, on purpose, relative to `DESIGN.md`
+- **A reported touch-triggered stutter in Flappy Bird** led to an
+  investigation, not a guess: instrumenting frame timing showed the
+  fixed-timestep accumulator occasionally runs 2 simulation steps in one
+  rendered frame, continuously, unrelated to touch (expected — no display
+  refreshes at exactly 60.000Hz, interpolation is supposed to make this
+  invisible) — so a touch-specific stall has to come from real touch-event/
+  compositor overhead a headless test can't reproduce. Couldn't confirm the
+  exact cause conclusively, but found and removed one legitimate, real
+  cost along the way (`backdrop-filter: blur()` on the back button — an
+  expensive re-sample of a canvas that's redrawing every frame behind it),
+  and tightened the accumulator's catch-up cap so *any* main-thread hiccup
+  corrects by a little on the next frame instead of a lot (smoothness over
+  perfect real-time accuracy after a stall).
 
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:

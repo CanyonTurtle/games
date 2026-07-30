@@ -108,9 +108,13 @@
     pointer-events:none;}
   #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
     text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;padding-right:74px;}
-  #backBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.6);color:#fff;
+  #backBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
     border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
-    font-family:var(--mono);font-size:12px;letter-spacing:.03em;backdrop-filter:blur(3px);
+    font-family:var(--mono);font-size:12px;letter-spacing:.03em;
+    /* no backdrop-filter: it forces a re-sample of whatever's behind it on every
+       composite, and the canvas behind it repaints every frame — a real,
+       avoidable GPU cost on mobile, found while chasing a reported touch
+       stutter. A flatter, more opaque background reads almost identically. */
     touch-action:manipulation;}
   #backBtn:hover{border-color:var(--accent);color:var(--accent);}
 
@@ -1562,7 +1566,7 @@ function wireHoldButton(el){
   const bit = Number(el.dataset.bit);
   const press = e => { e.preventDefault(); setTouchBit(bit, true, el); };
   const release = () => setTouchBit(bit, false, el);
-  el.addEventListener('pointerdown', press);
+  el.addEventListener('pointerdown', press, {passive:false}); // explicit: this listener calls preventDefault()
   el.addEventListener('pointerup', release);
   el.addEventListener('pointercancel', release);
   el.addEventListener('pointerleave', release);
@@ -1586,7 +1590,7 @@ function setupTouchControls(cart){
 (function wireCanvasTap(){
   const press = e => { if(canvasTapBit !== null){ e.preventDefault(); touchBits.add(canvasTapBit); } };
   const release = () => { if(canvasTapBit !== null) touchBits.delete(canvasTapBit); };
-  canvas.addEventListener('pointerdown', press);
+  canvas.addEventListener('pointerdown', press, {passive:false}); // explicit: this listener calls preventDefault()
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
   canvas.addEventListener('pointerleave', release);
@@ -1819,7 +1823,17 @@ function renderHUD(){
 // interpolated (see ilerp/ilerpAngle) smoothly at whatever rate rAF fires,
 // while the simulation itself stays exactly as deterministic as before.
 const STEP_MS = 1000/60;
-const MAX_ACCUMULATED_MS = STEP_MS * 5; // don't try to catch up forever after a backgrounded tab
+// Capped low on purpose: if the main thread stalls for any reason (a
+// backgrounded tab, or — what a reported touch-triggered stutter pointed
+// at — a real device's touch-event/compositor overhead that a headless
+// test can't reproduce), a bigger cap would "catch up" with a burst of
+// several steps in one rendered frame. The frame(s) during the stall are
+// dropped no matter what (the browser can't paint while blocked), but a
+// smaller cap means the *next* frame corrects by a little rather than a
+// lot — the game clock falls slightly behind wall-clock during a real
+// stall instead of visibly snapping forward to catch up. Smoothness over
+// perfect real-time accuracy is the right tradeoff for this game.
+const MAX_ACCUMULATED_MS = STEP_MS * 2;
 let lastTime = null;
 let accumulator = 0;
 function loop(ts){
