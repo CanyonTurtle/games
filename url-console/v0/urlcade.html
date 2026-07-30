@@ -617,6 +617,7 @@ class World {
   constructor(cart){
     this.cart = cart;
     this.entities = [];
+    this.boxPool = []; // reused AABB scratch objects for collision detection, see getBoxInto()
     this.nextId = 1;
     this.globals = new Array(16).fill(0);
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
@@ -705,18 +706,27 @@ class World {
     if(ty<0||ty>=this.track.grid.length||tx<0||tx>=this.track.grid[0].length) return TILE_GRASS;
     return this.track.grid[ty][tx];
   }
-  getBox(e){
+  // Writes e's AABB into `out` instead of returning a fresh object. The
+  // O(n²) pairwise collision scan below used to call the allocating
+  // version twice per pair (via overlap()), recomputing and reallocating
+  // the *same* entity's box once for every other entity it was compared
+  // against — O(n²) allocations for what only needs O(n). Measured
+  // negligible at the entity counts either cart actually reaches (a few
+  // microseconds for ~10 entities), but it's real, avoidable churn in a
+  // hot per-tick loop, found while checking whether collision was the
+  // source of a reported stutter.
+  getBoxInto(e, out){
     const type = this.cart.entityTypes[e.typeId];
     if(type.renderKind === 1){ // tile column
       const extent = Math.max(0, Math.floor(e.props[8]));
-      return {x0:e.props[0], y0:e.props[1], x1:e.props[0]+8, y1:e.props[1]+extent*8};
+      out.x0 = e.props[0]; out.y0 = e.props[1];
+      out.x1 = e.props[0] + 8; out.y1 = e.props[1] + extent*8;
+    } else {
+      const w = type.collisionW, h = type.collisionH;
+      out.x0 = e.props[0]-w/2; out.y0 = e.props[1]-h/2;
+      out.x1 = e.props[0]+w/2; out.y1 = e.props[1]+h/2;
     }
-    const w = type.collisionW, h = type.collisionH;
-    return {x0:e.props[0]-w/2, y0:e.props[1]-h/2, x1:e.props[0]+w/2, y1:e.props[1]+h/2};
-  }
-  overlap(a,b){
-    const A=this.getBox(a), B=this.getBox(b);
-    return A.x0<B.x1 && A.x1>B.x0 && A.y0<B.y1 && A.y1>B.y0;
+    return out;
   }
   playSound(id){
     try{
@@ -743,9 +753,28 @@ class World {
     this.runGlobalHook('on_frame');
     for(const e of this.entities.slice()){ if(e.active) this.runEntityHook('on_tick', e); }
     this.entities = this.entities.filter(e=>e.active);
-    for(let i=0;i<this.entities.length;i++){
-      for(let j=i+1;j<this.entities.length;j++){
-        if(this.overlap(this.entities[i], this.entities[j])){
+    // Compute each entity's AABB once (O(n)) into a reused pool, instead of
+    // the old overlap()-calls-getBox()-twice-per-pair pattern, which recomputed
+    // and reallocated the *same* entity's box once per other entity it was
+    // checked against (O(n²) allocations for what only needs O(n) — see
+    // getBoxInto's comment). The comparison itself stays O(n²), but it's now
+    // four numeric comparisons on already-built boxes, no allocation at all.
+    //
+    // `n` is captured once, deliberately: on_collide can SPAWN (the racer's
+    // collision particles do), which would otherwise grow entities.length
+    // *during* this same pass. The old per-pair overlap() calls happened to
+    // tolerate that silently (plain array indexing never goes out of bounds
+    // on a growing array); the box pool is sized up front, so it can't. Fixing
+    // it this way also gives more predictable behavior: an entity born mid-pass
+    // joins collision detection next tick, not immediately in the tick it spawned.
+    const n = this.entities.length;
+    while(this.boxPool.length < n) this.boxPool.push({x0:0,y0:0,x1:0,y1:0});
+    for(let i=0;i<n;i++) this.getBoxInto(this.entities[i], this.boxPool[i]);
+    for(let i=0;i<n;i++){
+      const A = this.boxPool[i];
+      for(let j=i+1;j<n;j++){
+        const B = this.boxPool[j];
+        if(A.x0<B.x1 && A.x1>B.x0 && A.y0<B.y1 && A.y1>B.y0){
           this.runCollideHook(this.entities[i], this.entities[j]);
         }
       }

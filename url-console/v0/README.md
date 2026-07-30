@@ -119,6 +119,27 @@ and it's exercised on every play, not just asserted.
   all five (HUD, controls, topbar, back button, fault banner) actually
   pick it up now.
 
+  Fourth hypothesis: is the O(n²) pairwise collision scan expensive?
+  Measured directly, at the actual entity counts either cart reaches
+  (~10): a few microseconds, negligible — but the measurement surfaced
+  a real inefficiency anyway. `getBox()` allocated a fresh object *every
+  call*, and the old `overlap()`-per-pair pattern called it twice per
+  pair — recomputing and reallocating the *same* entity's box once for
+  every other entity it was checked against (O(n²) allocations for
+  what only needs O(n)). Confirmed the quadratic blowup is real at
+  artificial entity counts (100 entities: ~135us; still small in
+  absolute terms, but the trend is unmistakable) — replaced it with
+  `getBoxInto()`, computing each entity's box once per tick into a
+  reused pool, so the O(n²) part left is just four numeric comparisons,
+  no allocation. This refactor briefly broke collision detection outright
+  (an entity spawned mid-collision-pass, which the racer's particles do,
+  grew `entities.length` past the pool's pre-sized length) — caught by
+  the regression suite, not shipped broken, and fixed by capturing the
+  entity count once at the top of the pass rather than letting it grow
+  underneath a fixed-size pool. Stress-tested afterward by pinning all
+  three cars on top of each other for 8000 ticks (constant collisions,
+  entity count peaking at 63): no crash, no fault.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 
