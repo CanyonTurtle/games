@@ -52,7 +52,10 @@ Each one is a reasonable next step, not a design admission of defeat:
   a plain countdown global decremented each frame rather than a
   dedicated timer hook/opcode.
 - **Digital input only**, exactly as `DESIGN.md` assumed — no analog
-  steering.
+  steering. Both keyboard (arrows/space) and on-screen touch buttons
+  drive the same held-bit `button_mask`, so a "hold" on a touch button
+  behaves identically to holding down a key — mobile isn't a second,
+  differently-behaved input path.
 - **Racer track pieces are cardinal-only** (straight, 90° turns,
   start/finish, checkpoint). The 45°-curve and chicane pieces from
   `examples/race-car.md` aren't implemented; the interpreter would

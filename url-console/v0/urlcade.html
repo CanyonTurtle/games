@@ -1,10 +1,16 @@
 <title>The Urlcade — V0</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
 <style>
   :root{
     --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
     --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
     --accent:#e0a030; --focus:#e0c060;
     --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
   }
   @media (prefers-color-scheme: light){
     :root{
@@ -23,16 +29,21 @@
     --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
     --accent:#a8571a; --focus:#8a4614;
   }
-  *{box-sizing:border-box;}
-  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--ink);
-    font-family:var(--mono);}
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);overflow-x:hidden;overscroll-behavior:none;
+    height:100%;height:100dvh;}
+  body{width:100%;}
   a{color:inherit;}
   :focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
   @media (prefers-reduced-motion: no-preference){
     .cart, .playbtn{transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;}
+    .view.active{animation:viewIn .22s ease both;}
   }
+  @keyframes viewIn{from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none}}
 
-  #menu{max-width:760px;margin:0 auto;padding:44px 20px 80px;}
+  #menu{display:none;max-width:760px;margin:0 auto;padding:calc(28px + var(--safe-t)) 18px 60px;}
+  #menu.active{display:block;}
   .faceplate{border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:22px;}
   .faceplate .model{font-size:11px;letter-spacing:.18em;color:var(--ink-dim);
     text-transform:uppercase;margin:0 0 6px;}
@@ -74,26 +85,54 @@
   #menu > footer{margin-top:40px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
     padding-top:16px;}
 
-  #gameWrap{display:none;min-height:100%;text-align:center;padding:18px 12px 60px;
+  #gameWrap{
+    display:none; flex-direction:column;
+    position:fixed; inset:0; overflow:hidden;
     background:
       repeating-linear-gradient(180deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.06) 2px 4px),
-      var(--bg);}
-  .bezel{display:inline-block;padding:10px;background:var(--bg-elevated);
-    border:1px solid var(--rule);border-radius:6px;margin-top:6px;}
-  #gameWrap canvas{background:#222;image-rendering:pixelated;display:block;border-radius:2px;}
-  #hud{color:var(--ink-dim);font-size:13px;letter-spacing:.03em;margin:0 0 4px;
-    font-variant-numeric:tabular-nums;text-transform:uppercase;}
-  #backBtn{position:fixed;top:14px;left:14px;background:var(--bg-elevated);color:var(--ink);
+      var(--bg);
+    padding:calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) calc(10px + var(--safe-b)) calc(10px + var(--safe-l));
+  }
+  #gameWrap.active{display:flex;}
+  .topbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;min-height:38px;}
+  #hud{flex:1;color:var(--ink-dim);font-size:12.5px;letter-spacing:.03em;text-align:center;
+    font-variant-numeric:tabular-nums;text-transform:uppercase;padding-right:74px;}
+  #backBtn{flex:0 0 auto;background:var(--bg-elevated);color:var(--ink);
     border:1px solid var(--rule);padding:7px 12px;border-radius:3px;cursor:pointer;
-    font-family:var(--mono);font-size:12px;letter-spacing:.03em;z-index:2;}
+    font-family:var(--mono);font-size:12px;letter-spacing:.03em;z-index:2;
+    touch-action:manipulation;}
   #backBtn:hover{border-color:var(--accent);color:var(--accent);}
-  #faultBanner{display:none;color:#e05a4e;font-weight:700;margin-top:10px;font-size:13px;
-    letter-spacing:.03em;}
-  .controls{color:var(--ink-dim);font-size:11.5px;letter-spacing:.03em;margin-top:10px;
-    text-transform:uppercase;}
+
+  .canvas-area{flex:1 1 auto;min-height:0;min-width:0;width:100%;max-width:640px;max-height:640px;
+    margin:6px auto;display:flex;align-items:center;justify-content:center;
+    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:6px;padding:8px;}
+  #screen{image-rendering:pixelated;background:#222;border-radius:2px;
+    touch-action:none;-webkit-user-select:none;user-select:none;}
+
+  #faultBanner{display:none;color:#e05a4e;font-weight:700;font-size:12.5px;
+    letter-spacing:.03em;text-align:center;flex:0 0 auto;}
+  .controls{color:var(--ink-dim);font-size:11px;letter-spacing:.03em;margin:6px 0 2px;
+    text-transform:uppercase;text-align:center;flex:0 0 auto;}
+
+  .touch-controls{flex:0 0 auto;display:none;align-items:flex-end;justify-content:space-between;
+    gap:16px;padding:6px 4px calc(4px + var(--safe-b));min-height:88px;}
+  .touch-controls.active{display:flex;}
+  .touch-controls .side{display:flex;gap:10px;}
+  .touch-btn{
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none;
+    width:64px;height:64px;border-radius:50%;border:1px solid var(--rule);
+    background:var(--bg-elevated);color:var(--ink);font-family:var(--mono);
+    font-size:22px;line-height:1;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;opacity:.92;
+  }
+  .touch-btn.wide{width:auto;padding:0 26px;border-radius:32px;font-size:14px;
+    letter-spacing:.05em;font-weight:700;text-transform:uppercase;}
+  .touch-btn.active{background:var(--accent);color:#141110;border-color:var(--accent);
+    transform:scale(.94);}
+  @media (min-width:620px){ .touch-btn{width:56px;height:56px;font-size:19px;} }
 </style>
 
-<div id="menu">
+<div id="menu" class="view">
   <div class="faceplate">
     <p class="model">Model V0 &middot; static runtime, no server</p>
     <h1>The Urlcade <span class="dim">// cartridge shelf</span></h1>
@@ -107,12 +146,15 @@
   encoding and the preset-dictionary compressor from the spec are future work.</footer>
 </div>
 
-<div id="gameWrap">
-  <button id="backBtn">&larr; shelf</button>
-  <div id="hud"></div>
-  <div class="bezel"><canvas id="screen"></canvas></div>
+<div id="gameWrap" class="view">
+  <div class="topbar">
+    <button id="backBtn">&larr; shelf</button>
+    <div id="hud"></div>
+  </div>
+  <div class="canvas-area"><canvas id="screen"></canvas></div>
   <div class="controls" id="controlsText"></div>
   <div id="faultBanner">CART FAULT — step budget exceeded</div>
+  <div id="touchControls" class="touch-controls"></div>
 </div>
 
 <script>
@@ -1165,7 +1207,7 @@ registerCart('racer', 'Race Car', 'Left/Right = steer, Up = accelerate', 'cart_t
 const canvas = document.getElementById('screen');
 const ctx2d = canvas.getContext('2d');
 let world = null, currentKey = null, running = false, keysDown = new Set();
-const SCALE = 3;
+let touchBits = new Set();
 
 function buttonMaskFromKeys(){
   let m = 0;
@@ -1174,8 +1216,63 @@ function buttonMaskFromKeys(){
   if(keysDown.has('ArrowUp')) m |= 4;
   if(keysDown.has('ArrowDown')) m |= 8;
   if(keysDown.has(' ')) m |= 16;
+  for(const b of touchBits) m |= b;
   return m;
 }
+
+/* Touch controls — one on-screen layout per cart, held-button semantics
+   (matches the keyboard: TESTBIT is read every frame, not edge-triggered,
+   so holding a button is exactly like holding a key). */
+const TOUCH_LAYOUTS = {
+  flappy: () => `
+    <div class="side"></div>
+    <div class="side">
+      <button type="button" class="touch-btn wide" data-bit="16" aria-label="Flap">&#9650; FLAP</button>
+    </div>
+  `,
+  racer: () => `
+    <div class="side">
+      <button type="button" class="touch-btn" data-bit="1" aria-label="Steer left">&#9664;</button>
+      <button type="button" class="touch-btn" data-bit="2" aria-label="Steer right">&#9654;</button>
+    </div>
+    <div class="side">
+      <button type="button" class="touch-btn" data-bit="4" aria-label="Accelerate">&#9650;</button>
+    </div>
+  `,
+};
+function setTouchBit(bit, on, el){
+  if(on) touchBits.add(bit); else touchBits.delete(bit);
+  if(el) el.classList.toggle('active', on);
+}
+function wireHoldButton(el){
+  const bit = Number(el.dataset.bit);
+  const press = e => { e.preventDefault(); setTouchBit(bit, true, el); };
+  const release = () => setTouchBit(bit, false, el);
+  el.addEventListener('pointerdown', press);
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+  el.addEventListener('pointerleave', release);
+  el.addEventListener('contextmenu', e => e.preventDefault());
+}
+function setupTouchControls(key){
+  touchBits = new Set();
+  const el = document.getElementById('touchControls');
+  const layout = TOUCH_LAYOUTS[key];
+  el.innerHTML = layout ? layout() : '';
+  el.classList.toggle('active', !!layout);
+  el.querySelectorAll('.touch-btn').forEach(wireHoldButton);
+}
+// tap-and-hold anywhere on the canvas also flaps (bit 16) — harmless for
+// carts that don't read that bit, and the natural mobile gesture for flappy.
+(function wireCanvasFlap(){
+  const press = e => { e.preventDefault(); touchBits.add(16); };
+  const release = () => touchBits.delete(16);
+  canvas.addEventListener('pointerdown', press);
+  canvas.addEventListener('pointerup', release);
+  canvas.addEventListener('pointercancel', release);
+  canvas.addEventListener('pointerleave', release);
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
+})();
 
 function renderMenu(){
   const list = document.getElementById('cartList');
@@ -1203,6 +1300,19 @@ function renderMenu(){
   }
 }
 
+const canvasArea = document.querySelector('.canvas-area');
+function fitCanvas(){
+  if(!world) return;
+  const pad = 16; // .canvas-area's own padding, 8px each side
+  const availW = canvasArea.clientWidth - pad;
+  const availH = canvasArea.clientHeight - pad;
+  const scale = Math.max(0.25, Math.min(availW / world.cart.screenW, availH / world.cart.screenH));
+  canvas.style.width = Math.floor(world.cart.screenW * scale) + 'px';
+  canvas.style.height = Math.floor(world.cart.screenH * scale) + 'px';
+}
+window.addEventListener('resize', fitCanvas);
+window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 50));
+
 function findCartByHash(hash){
   for(const key of Object.keys(CARTS)) if(CARTS[key].payload === hash) return key;
   return null;
@@ -1211,26 +1321,32 @@ function findCartByHash(hash){
 function startGame(key){
   currentKey = key;
   const cartInfo = CARTS[key];
-  document.getElementById('menu').style.display = 'none';
-  document.getElementById('gameWrap').style.display = 'block';
+  document.getElementById('menu').classList.remove('active');
+  const gw = document.getElementById('gameWrap');
+  gw.classList.remove('active'); void gw.offsetWidth; gw.classList.add('active'); // restart the view-in animation
   document.getElementById('controlsText').textContent = cartInfo.controlsText;
   document.getElementById('faultBanner').style.display = 'none';
+  // canvas pixel buffer stays at native cart resolution; fitCanvas() below
+  // computes the CSS display size to best-fit whatever box the flex layout
+  // (mobile portrait, tablet, wide desktop — all alike) actually gives it.
   canvas.width = cartInfo.decoded.screenW;
   canvas.height = cartInfo.decoded.screenH;
-  canvas.style.width = (cartInfo.decoded.screenW*SCALE)+'px';
-  canvas.style.height = (cartInfo.decoded.screenH*SCALE)+'px';
+  setupTouchControls(key);
   // decode a FRESH copy straight from the URL bytes so the running game
   // is provably reconstructed from the fragment, not the authoring object.
   world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
   running = true;
+  fitCanvas();
 }
 
 function backToMenu(){
   running = false;
   world = null;
   currentKey = null;
-  document.getElementById('gameWrap').style.display = 'none';
-  document.getElementById('menu').style.display = 'block';
+  touchBits = new Set();
+  document.getElementById('gameWrap').classList.remove('active');
+  const m = document.getElementById('menu');
+  m.classList.remove('active'); void m.offsetWidth; m.classList.add('active');
   history.replaceState(null, '', location.pathname + location.search);
 }
 
