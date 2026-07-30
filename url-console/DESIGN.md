@@ -552,9 +552,9 @@ New open questions this raised, folded into §16 below:
 
 Full write-up at `examples/three-more-carts.md`. Design-level for all
 three at first pass, same as Flappy Bird and the race car started; the
-roguelike has since been promoted to a real, playable cart in
-`v0/urlcade.html` (see §15.1) — platformer and arena shooter remain
-design-level dogfoods, a deliberate scope cut rather than an oversight.
+roguelike and the platformer have since been promoted to real, playable
+carts in `v0/urlcade.html` (see §15.1 and §15.2) — the arena shooter
+remains design-level, a deliberate scope cut rather than an oversight.
 The three were picked specifically to pressure-test what §14's
 composable-generator pivot left thin: a genuinely different **map
 generator** archetype, whether "generator" needs to keep growing new
@@ -579,10 +579,9 @@ concrete new presentation concept.
   genuinely new engine surface rather than a data-driven version of
   something already built. Its map needs (open path, elevation changes)
   don't fit the track grammar's closed-loop assumption, so a third map
-  generator id is proposed (`map_generator = 3`) — while flagging
-  plainly that #1 and #3 are structurally similar enough that they might
-  want to be one generator with a declared topology flag instead of two
-  near-duplicates; left open rather than guessed at from two data points.
+  generator id was proposed (`map_generator = 3`); §15.2 resolves the
+  "is it actually the same generator as #1" question this raised, once
+  it was built for real instead of guessed at from the design alone.
 - **Arena shooter (wave survival)** found the opposite of a gap twice
   over: wave-based enemy spawning is just Flappy's pipe-spawn countdown
   idiom (§12) with two more globals, and projectiles are structurally
@@ -600,11 +599,11 @@ more ground than expected going in. That's evidence the composable-
 generator model (§14) is closer to done than to half-built — most of
 what a new genre needs turns out to already be there.
 
-New open questions this raised:
+New open questions this raised (the first is since resolved — see §15.2):
 
-- Are `map_generator` ids 1 (loop) and 3 (linear path, proposed) actually
-  one generator with a topology flag, not two? Two data points (racer,
-  platformer) isn't enough to decide confidently.
+- ~~Are `map_generator` ids 1 (loop) and 3 (linear path, proposed)
+  actually one generator with a topology flag, not two?~~ Resolved by
+  building #3 for real: no, kept separate — see §15.2.
 - Fog of war (roguelike) has no answer yet — a per-tile visibility state,
   and either a runtime-computed radius or cart-maintained visibility
   bytecode. Deferred deliberately rather than resolved in haste.
@@ -694,6 +693,102 @@ composable-generator model than the paper dogfood alone could give:
 paper dogfooding checks whether a design *reads* as sufficient; actually
 building the cart checks whether the *existing implementation* really
 was as generic as it claimed.
+
+### 15.2 From design doc to real cart: building Run & Jump
+
+Turning the platformer from a design-level dogfood into a real cart
+(`registerCart('platformer', ...)`) meant actually implementing both
+things §15 flagged as genuine gaps — `MOVE_SOLID` and camera — rather
+than just naming them. Building them settled questions the design doc
+could only pose:
+
+- **`MOVE_SOLID`'s exact contract.** The design doc described the shape
+  ("moves self against the tilemap one axis at a time... resolving
+  position and zeroing blocked velocity") but not the mechanism. Built
+  as: resolve X first, then Y, each axis probing the leading edge (in
+  the direction of travel) at two points spanning the box's extent on
+  the *other* axis, inset 1px to avoid a false hit from the diagonally
+  adjacent tile. Solidity itself reuses `TILE_SURFACE` — no new
+  cart-declared field: `tileSurface(tile) !== 0` means solid, so the
+  platformer's tile bank needs exactly one override (`{AIR: 0}`) with
+  every other tile id defaulting to identity (nonzero = solid). This
+  wasn't the plan going in — `tileSurfaceOverrides` was built as a bug
+  fix for the racer's startline (§15.1) — but it turned out to be
+  exactly the right generic mechanism for "which tiles are solid" too,
+  a second, unplanned use that's a stronger validation of the mechanism
+  than either use alone.
+- **The camera confirmed itself as a genuinely different kind of
+  addition than `SETTILE` or `MOVE_SOLID`.** Those two are opcodes a
+  cart's own bytecode calls; the camera is instead a cart-*declared*
+  value (`followGlobal` + clamp bounds, round-tripped through the binary
+  format exactly like backdrop/HUD/input already are) that the *runtime*
+  reads on every render, unconditionally, with no bytecode involvement
+  at all. It slots into the same "generator" family as backdrop/HUD/
+  input-layout/map-generator (§14) rather than the opcode family — the
+  fourth composable concept, confirmed by turning out to need the exact
+  same shape (cart declares data, runtime interprets it generically) as
+  the first three.
+- **The `map_generator` unification question, resolved by building #3
+  instead of guessing from two data points.** Both the racer's grammar
+  and the platformer's are turtle-interpreted token streams that emit a
+  tile grid plus a checkpoint list — genuinely the same *category*. But
+  the racer stamps a fixed-width path *perpendicular* to travel at every
+  step, while the platformer walks *columns* maintaining a running
+  ground height with tokens (`STEP_UP`/`STEP_DOWN`/`GAP`) that only mean
+  anything for a heightmap and have no notion of turning at all. A
+  "topology flag" would have to switch between two structurally
+  different stamping algorithms internally — that's not a flag, that's
+  two generators sharing a wrapper. Kept as separate ids (`map_generator`
+  1 and 3). The open question is answered, not by philosophy, but by the
+  fact that trying to write the unified version would have been more
+  code, not less.
+- **A new authoring idiom, not a new opcode: variable-operand tokens.**
+  The platformer's token stream needed marker tokens with no operand
+  (`COIN`, `ENEMY` — like the racer's `CHECKPOINT`) alongside tokens that
+  need a width (`FLAT`, `STEP_UP`, `STEP_DOWN`, `GAP`, `BLOCK`). Solved
+  the same way the VM's own opcode table solves "some instructions take
+  operands, some don't": a small per-token-id lookup the parser consults
+  as it walks the stream, mirroring `OPS`'s per-opcode operand specs.
+  Found one real authoring bug this way, worth naming: computing
+  `NUM_COINS`/`NUM_ENEMIES` via a naive `tokens.filter(t => t === COIN)`
+  is wrong, because width *values* share the same small-integer space as
+  marker token *ids* (this level's own `GAP,5` and `BLOCK,6` collide
+  with `COIN`(5) and `ENEMY`(6)) — caught by the test suite (checkpoint
+  count didn't match spawned entity count), fixed by reading the counts
+  off the generator's own position-aware walk instead of re-deriving them
+  naively. A reminder that "small integer stream with mixed fixed/
+  variable-operand tokens" is a real parsing problem even at this scale,
+  not just bytecode's problem.
+- **Gravity, jump, patrol AI, and coin pickup all confirmed needing
+  nothing new**, same pattern as the roguelike: jump is gated by an
+  ordinary `GETTILE`+`TILE_SURFACE` probe just below the feet (no
+  "am I grounded" flag from `MOVE_SOLID` itself — the cart derives it
+  from the same primitive it already had); patrol enemies flip direction
+  via the same probe pattern applied ahead-and-below (ledge detection)
+  or by noticing `MOVE_SOLID` zeroed their velocity (wall detection);
+  coin pickup reuses the roguelike's deferred-kill idiom verbatim
+  (`on_collide` can't despawn `a`/`b`, so it zeroes hp and the coin's own
+  `on_tick` checks and kills itself) — now confirmed twice, in two
+  unrelated carts, as the general answer to "how does on_collide ever
+  remove an entity."
+- **Terminal velocity needed nothing new either** — `CLAMP_ABS`, already
+  in the opcode table for the racer's AI steering (§13), clamps
+  accumulating fall speed just as well as it clamps a turn rate. A third
+  confirmation (alongside `GET_CHECKPOINT` and `TILE_SURFACE`) that a
+  handful of these opcodes are more general-purpose than the genre they
+  were first written for.
+
+Two real engine additions this round (`MOVE_SOLID`, camera — both
+predicted by the paper dogfood), one design question resolved by
+building rather than debating, one real authoring bug caught by the test
+suite, and four more confirmations that the existing primitive set
+covers new genres without growing. Combined with §15.1's roguelike
+findings, four of five genres dogfooded so far (Flappy, racer,
+roguelike, platformer) needed at most one or two real primitive
+additions each, and every addition has so far been exactly the kind the
+paper dogfood predicted before any code was written — the design-level
+pass is earning its keep as a genuine predictor, not just a formality
+before implementation.
 
 ## 16. Open questions
 

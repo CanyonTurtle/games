@@ -201,6 +201,7 @@ const OPS = [
   ['DIST',[]],['CLAMP_ABS',[]],['LERP',[]],['NORM_ANGLE',[]],
   ['TESTBIT',['u8']],['LOAD_INPUT',[]],['PLAYSOUND',['u8']],['HALT',[]],
   ['SETTILE',[]],
+  ['MOVE_SOLID',[]],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -327,6 +328,41 @@ function runHook(bytecode, ctx){
       case 49: { const id=u8(); if(ctx.playSound) ctx.playSound(id); break; }
       case 50: return true; // HALT
       case 51: { const tileId=stack.pop(), y=stack.pop(), x=stack.pop(); ctx.setTile(x,y,tileId); break; } // SETTILE
+      case 52: { // MOVE_SOLID — axis-separated tile collision, see DESIGN.md §15/§16
+        const e = ctx.self;
+        if(e){
+          const type = ctx.world.cart.entityTypes[e.typeId];
+          const hw = type.collisionW/2, hh = type.collisionH/2;
+          const solidAt = (px,py) => ctx.tileSurface(ctx.getTile(px,py)) !== 0;
+          // X axis: probe the leading edge (in the direction of travel) at
+          // two points spanning the box height, inset 1px to avoid
+          // corner-only false positives from the tile diagonally adjacent.
+          let nx = e.props[0] + e.props[2];
+          if(e.props[2] !== 0){
+            const dir = e.props[2] > 0 ? 1 : -1;
+            const edgeX = nx + dir*hw;
+            if(solidAt(edgeX, e.props[1]-hh+1) || solidAt(edgeX, e.props[1]+hh-1)){
+              const tileX = Math.floor(edgeX/8);
+              nx = dir>0 ? tileX*8 - hw : (tileX+1)*8 + hw;
+              e.props[2] = 0;
+            }
+          }
+          e.props[0] = nx;
+          // Y axis: same idea, resolves both floor-landing and ceiling-bonk.
+          let ny = e.props[1] + e.props[3];
+          if(e.props[3] !== 0){
+            const dir = e.props[3] > 0 ? 1 : -1;
+            const edgeY = ny + dir*hh;
+            if(solidAt(e.props[0]-hw+1, edgeY) || solidAt(e.props[0]+hw-1, edgeY)){
+              const tileY = Math.floor(edgeY/8);
+              ny = dir>0 ? tileY*8 - hh : (tileY+1)*8 + hh;
+              e.props[3] = 0;
+            }
+          }
+          e.props[1] = ny;
+        }
+        break;
+      }
       default: console.warn('unknown opcode', op); return false;
     }
   }
@@ -488,7 +524,23 @@ function encodeCart(cart){
     w.u8(cave.gridW); w.u8(cave.gridH);
     w.u8(cave.fillProb); w.u8(cave.iterations); w.u8(cave.wallThreshold);
     w.u8(cave.goldCount);
+  } else if(cart.mapGenerator === 3){
+    const p = cart.platform;
+    w.u8(p.gridH);
+    w.u8(p.startGroundY); w.u8(p.minGroundY); w.u8(p.maxGroundY);
+    w.u8(p.tokens.length);
+    w.bytesRaw(p.tokens);
   }
+
+  // camera: which entity (by global handle, 255 = none/static — the whole
+  // map always fit the viewport with no camera before this) the renderer
+  // follows, clamped to declared bounds. Always present, defaulting to "no
+  // camera" for carts that don't need one, same pattern as backdrop fields
+  // being written-but-unused when a map generator covers the whole frame.
+  const cam = cart.camera || {followGlobal:255, clampMinX:0, clampMinY:0, clampMaxX:0, clampMaxY:0};
+  w.u8(cam.followGlobal);
+  w.u16(cam.clampMinX); w.u16(cam.clampMinY);
+  w.u16(cam.clampMaxX); w.u16(cam.clampMaxY);
 
   for(const name of HOOK_NAMES){
     const bc = cart.hooks[name] || new Uint8Array(0);
@@ -571,7 +623,19 @@ function decodeCart(bytes){
     const fillProb = r.u8(), iterations = r.u8(), wallThreshold = r.u8();
     const goldCount = r.u8();
     cart.cave = {gridW, gridH, fillProb, iterations, wallThreshold, goldCount};
+  } else if(cart.mapGenerator === 3){
+    const gridH = r.u8();
+    const startGroundY = r.u8(), minGroundY = r.u8(), maxGroundY = r.u8();
+    const tokenCount = r.u8();
+    const tokens = Array.from(r.bytesN(tokenCount));
+    cart.platform = {gridH, startGroundY, minGroundY, maxGroundY, tokens};
   }
+
+  cart.camera = {
+    followGlobal: r.u8(),
+    clampMinX: r.u16(), clampMinY: r.u16(),
+    clampMaxX: r.u16(), clampMaxY: r.u16(),
+  };
 
   cart.hooks = {};
   for(const name of HOOK_NAMES){
@@ -726,6 +790,93 @@ function buildCave(cave, rng){
 }
 
 /* ============================================================
+   6c. Turtle-grammar heightmap generator — DESIGN.md §15/§16
+   (platformer, map_generator = 3)
+
+   Resolves the open question left in §15 ("are map_generator 1 (racer's
+   closed-loop track) and a proposed 3 actually one generator with a
+   topology flag, or two"): building this made it concrete. Both are
+   turtle-interpreted token grammars in the abstract sense (walk a token
+   list, mutate a cursor, stamp tiles, emit checkpoints) — but the racer
+   stamps a fixed-width path *perpendicular* to travel at every step
+   (§12), while this walks *columns* left-to-right maintaining a running
+   ground height, with tokens that only make sense for a heightmap
+   (STEP_UP/STEP_DOWN/GAP) and no notion of turning at all. A shared
+   "topology flag" would have to switch between two structurally
+   different stamping algorithms internally anyway — that's not a flag,
+   that's two generators wearing a trenchcoat. Kept as a separate id.
+   Same category (turtle grammar over an authored token list, emitting a
+   tile grid + a checkpoint list), different generator.
+   ============================================================ */
+const PLATFORM_TOKENS = { FLAT:0, STEP_UP:1, STEP_DOWN:2, GAP:3, BLOCK:4, COIN:5, ENEMY:6 };
+// FLAT/STEP_UP/STEP_DOWN/GAP/BLOCK are each followed by one width byte in
+// the token stream (variable-operand tokens, the same idea as the VM's own
+// per-opcode operand specs in OPS); COIN/ENEMY are bare markers, consistent
+// with how the racer's CHECKPOINT token doesn't advance the cursor either.
+const PLATFORM_WIDTH_TOKENS = new Set([0,1,2,3,4]);
+const PLATFORM_AIR=1, PLATFORM_GROUND=2, PLATFORM_DIRT=3, PLATFORM_BRICK=4;
+function buildPlatformLevel(level){
+  const gridH = level.gridH;
+  let gridW = 0;
+  for(let i=0;i<level.tokens.length;i++){
+    if(PLATFORM_WIDTH_TOKENS.has(level.tokens[i])) gridW += level.tokens[++i];
+  }
+  const grid = [];
+  for(let y=0;y<gridH;y++) grid.push(new Array(gridW).fill(PLATFORM_AIR));
+  function fillColumn(x, topY){
+    if(x<0||x>=gridW) return;
+    for(let y=topY;y<gridH;y++) grid[y][x] = (y===topY) ? PLATFORM_GROUND : PLATFORM_DIRT;
+  }
+  let gx = 0, groundY = level.startGroundY;
+  const coinCps = [], enemyCps = [];
+  for(let i=0;i<level.tokens.length;i++){
+    const t = level.tokens[i];
+    if(t === PLATFORM_TOKENS.FLAT){
+      const w = level.tokens[++i];
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.STEP_UP){
+      const w = level.tokens[++i];
+      groundY = Math.max(level.minGroundY, groundY-1);
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.STEP_DOWN){
+      const w = level.tokens[++i];
+      groundY = Math.min(level.maxGroundY, groundY+1);
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.GAP){
+      // No death plane (V0 scope cut — see README): a gap just removes the
+      // floor down to the level's very bottom row, which stays solid as a
+      // catch-all safety net, so missing a jump costs distance, not a run.
+      const w = level.tokens[++i];
+      for(let k=0;k<w;k++){
+        if(gx>=0 && gx<gridW) grid[gridH-1][gx] = PLATFORM_GROUND;
+        gx++;
+      }
+    } else if(t === PLATFORM_TOKENS.BLOCK){
+      const w = level.tokens[++i];
+      const by = Math.max(0, groundY-4);
+      for(let k=0;k<Math.min(3,w);k++){ const x=gx+k; if(x>=0&&x<gridW) grid[by][x]=PLATFORM_BRICK; }
+      gx += w;
+    } else if(t === PLATFORM_TOKENS.COIN){
+      coinCps.push({x:(gx+0.5)*8, y:(groundY-3+0.5)*8});
+    } else if(t === PLATFORM_TOKENS.ENEMY){
+      enemyCps.push({x:(gx+0.5)*8, y:(groundY-1)*8});
+    }
+  }
+  const startCp = {x:16, y:(level.startGroundY-1)*8};
+  return {
+    grid,
+    // [0] = player start, [1..numCoins] = coins, [numCoins+1..] = enemies —
+    // a third distinct use of the same generic checkpoint-list mechanism
+    // (racer: lap checkpoints; roguelike: start+stairs; here: an indexed
+    // catalog of spawn points, with the cart's own constants telling
+    // on_init where each section begins and ends).
+    checkpoints: [startCp, ...coinCps, ...enemyCps],
+    numCoins: coinCps.length,
+    numEnemies: enemyCps.length,
+  };
+}
+
+/* ============================================================
    7. World runtime — entities, hooks, collisions, game loop
    ============================================================ */
 function mulberry32(seed){
@@ -748,6 +899,7 @@ class World {
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
     this.input = 0;
     this.cartFault = false;
+    this.cameraX = 0; this.cameraY = 0; // recomputed every render() via updateCamera()
     this.palette = generatePalette(cart);
     this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, this.palette, true));
     this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, this.palette, false));
@@ -761,6 +913,7 @@ class World {
     this.map = null;
     if(cart.mapGenerator === 1) this.map = buildTrack(cart.track);
     else if(cart.mapGenerator === 2) this.map = buildCave(cart.cave, () => this.rng());
+    else if(cart.mapGenerator === 3) this.map = buildPlatformLevel(cart.platform);
     if(this.map){
       // Pre-render the static tilemap once at load instead of redrawing every
       // tile every frame. A CPU profile under random input (see README) found
@@ -2012,6 +2165,407 @@ function buildRoguelikeCart(){
 }
 
 /* ============================================================
+   9c. Cart authoring — Platformer / Run & Jump
+   (see url-console/examples/three-more-carts.md §2 for the design-level
+   dogfood this implements: solid-tile collision needing a real opcode
+   (MOVE_SOLID), a level wider than one screen needing a real new
+   composable concept (camera) — both built for real here, alongside
+   confirmations that gravity/jump/patrol-AI/coin-pickup needed nothing
+   new beyond what MOVE_SOLID + the existing opcode set already provide.)
+   ============================================================ */
+const PLATFORM_CONST_NAMES = {
+  GRAVITY:0, MOVE_SPEED:1, JUMP_VELOCITY:2, ENEMY_SPEED:3, PLAYER_START_HP:4,
+  ENEMY_ATK:5, LEVEL_W:6, LEVEL_H:7, NUM_COINS:8, NUM_ENEMIES:9, MAX_FALL_SPEED:10,
+};
+const PLATFORM_GLOBAL_NAMES = {
+  g_player:0, g_dead:1, g_won:2, g_score:3, g_scratch:4, g_i:5, g_cx:6, g_cy:7,
+};
+const PLATFORM_SYM = {constants:PLATFORM_CONST_NAMES, globals:PLATFORM_GLOBAL_NAMES};
+
+// Entity type ids used as PUSHI literals in the hooks below (like the
+// racer's/roguelike's hooks push their own type ids directly): 0=PLAYER,
+// 1=COIN, 2=ENEMY.
+const PLATFORM_HOOKS_SRC = {
+  on_init: `
+    SPAWN 0
+    STOREG g_player
+    PUSHI 0
+    GET_CHECKPOINT
+    STOREE g_player 1
+    STOREE g_player 0
+    PUSHC PLAYER_START_HP
+    STOREE g_player 5
+    PUSHI 0
+    STOREG g_dead
+    PUSHI 0
+    STOREG g_won
+    PUSHI 0
+    STOREG g_score
+
+    PUSHI 0
+    STOREG g_i
+    coin_loop:
+    LOADG g_i
+    PUSHI 1
+    ADD
+    GET_CHECKPOINT
+    STOREG g_cy
+    STOREG g_cx
+    SPAWN 1
+    STOREG g_scratch
+    LOADG g_cx
+    STOREE g_scratch 0
+    LOADG g_cy
+    STOREE g_scratch 1
+    PUSHI 1
+    STOREE g_scratch 5
+    LOADG g_i
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_i
+    PUSHC NUM_COINS
+    CMPLT
+    JNZ coin_loop
+
+    PUSHI 0
+    STOREG g_i
+    enemy_loop:
+    LOADG g_i
+    PUSHC NUM_COINS
+    ADD
+    PUSHI 1
+    ADD
+    GET_CHECKPOINT
+    STOREG g_cy
+    STOREG g_cx
+    SPAWN 2
+    STOREG g_scratch
+    LOADG g_cx
+    STOREE g_scratch 0
+    LOADG g_cy
+    STOREE g_scratch 1
+    PUSHI 1
+    STOREE g_scratch 8
+    LOADG g_i
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_i
+    PUSHC NUM_ENEMIES
+    CMPLT
+    JNZ enemy_loop
+    HALT
+  `,
+  on_input: `
+    LOADG g_dead
+    JNZ done
+    LOADG g_won
+    JNZ done
+
+    LOAD_INPUT
+    TESTBIT 0
+    JZ chk_right
+    PUSHC MOVE_SPEED
+    NEG
+    STOREE g_player 2
+    JMP moved_x
+    chk_right:
+    LOAD_INPUT
+    TESTBIT 1
+    JZ zero_x
+    PUSHC MOVE_SPEED
+    STOREE g_player 2
+    JMP moved_x
+    zero_x:
+    PUSHI 0
+    STOREE g_player 2
+    moved_x:
+
+    LOAD_INPUT
+    TESTBIT 2
+    JZ done
+    LOADE g_player 0
+    LOADE g_player 1
+    PUSHI 5
+    ADD
+    GETTILE
+    TILE_SURFACE
+    JZ done
+    PUSHC JUMP_VELOCITY
+    STOREE g_player 3
+    done:
+    HALT
+  `,
+  on_frame: `
+    LOADG g_dead
+    JNZ done
+    LOADG g_won
+    JNZ done
+    LOADE g_player 5
+    PUSHI 0
+    CMPLE
+    JZ chk_win
+    PUSHI 1
+    STOREG g_dead
+    JMP done
+    chk_win:
+    LOADE g_player 0
+    PUSHC LEVEL_W
+    PUSHI 20
+    SUB
+    CMPGE
+    JZ done
+    PUSHI 1
+    STOREG g_won
+    done:
+    HALT
+  `,
+  on_tick: `
+    LOAD_SELF 4
+    PUSHI 1
+    CMPEQ
+    JZ not_coin
+    LOAD_SELF 5
+    PUSHI 0
+    CMPLE
+    JZ tick_end
+    KILL_SELF
+    JMP tick_end
+
+    not_coin:
+    LOAD_SELF 4
+    PUSHI 0
+    CMPEQ
+    JNZ tick_player
+    LOAD_SELF 4
+    PUSHI 2
+    CMPEQ
+    JNZ tick_enemy
+    JMP tick_end
+
+    tick_player:
+    LOAD_SELF 3
+    PUSHC GRAVITY
+    ADD
+    PUSHC MAX_FALL_SPEED
+    CLAMP_ABS
+    STORE_SELF 3
+    MOVE_SOLID
+    JMP tick_end
+
+    tick_enemy:
+    LOAD_SELF 3
+    PUSHC GRAVITY
+    ADD
+    PUSHC MAX_FALL_SPEED
+    CLAMP_ABS
+    STORE_SELF 3
+    LOAD_SELF 8
+    PUSHC ENEMY_SPEED
+    MUL
+    STORE_SELF 2
+    MOVE_SOLID
+    LOAD_SELF 2
+    JNZ chk_ledge
+    LOAD_SELF 8
+    NEG
+    STORE_SELF 8
+    JMP tick_end
+    chk_ledge:
+    LOAD_SELF 0
+    LOAD_SELF 8
+    PUSHI 5
+    MUL
+    ADD
+    LOAD_SELF 1
+    PUSHI 5
+    ADD
+    GETTILE
+    TILE_SURFACE
+    JNZ tick_end
+    LOAD_SELF 8
+    NEG
+    STORE_SELF 8
+
+    tick_end:
+    HALT
+  `,
+  on_collide: `
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    AND
+    JNZ hit_coin_b
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ hit_coin_a
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 2
+    CMPEQ
+    AND
+    JNZ hit_enemy_b
+    LOAD_A 4
+    PUSHI 2
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ hit_enemy_a
+    JMP done
+
+    hit_coin_b:
+    PUSHI 0
+    STORE_B 5
+    LOADG g_score
+    PUSHI 1
+    ADD
+    STOREG g_score
+    JMP done
+
+    hit_coin_a:
+    PUSHI 0
+    STORE_A 5
+    LOADG g_score
+    PUSHI 1
+    ADD
+    STOREG g_score
+    JMP done
+
+    hit_enemy_b:
+    LOAD_A 5
+    PUSHC ENEMY_ATK
+    SUB
+    STORE_A 5
+    JMP done
+
+    hit_enemy_a:
+    LOAD_B 5
+    PUSHC ENEMY_ATK
+    SUB
+    STORE_B 5
+
+    done:
+    HALT
+  `,
+};
+
+function buildPlatformerCart(){
+  const airPixels = hexRowsToPixels(new Array(8).fill('77777777'));
+  const groundPixels = hexRowsToPixels([
+    '11111111','11211121','22222222','22322232',
+    '23222322','22322232','22232223','23222322',
+  ]);
+  const dirtPixels = hexRowsToPixels([
+    '22222222','22322232','23222322','22222222',
+    '22322232','22222222','23222322','22222222',
+  ]);
+  const brickPixels = hexRowsToPixels([
+    '00000000','02220222','02220222','00000000',
+    '22202220','22202220','00000000','02220222',
+  ]);
+  const playerPixels = hexRowsToPixels([
+    '00099000','09aaaa90','9aaaaaa9','09a99a90',
+    '000aa000','00a99a00','0a9009a0','09000090',
+  ]);
+  const enemyPixels = hexRowsToPixels([
+    '00000000','03333330','03633630','03333330',
+    '33333333','30333303','03000030','00000000',
+  ]);
+  const coinPixels = hexRowsToPixels([
+    '00000000','00ffff00','0fbbbbf0','fbbbbbbf',
+    'fbbbbbbf','0fbbbbf0','00ffff00','00000000',
+  ]);
+
+  const T = PLATFORM_TOKENS;
+  const tokens = [
+    T.FLAT,16, T.COIN, T.FLAT,10, T.STEP_UP,8, T.COIN, T.ENEMY,
+    T.FLAT,10, T.GAP,6, T.FLAT,8, T.STEP_DOWN,8, T.BLOCK,6, T.COIN,
+    T.FLAT,10, T.ENEMY, T.FLAT,8, T.STEP_UP,8, T.GAP,5, T.FLAT,10,
+    T.COIN, T.ENEMY, T.FLAT,12,
+  ];
+  const platform = {gridH:20, startGroundY:14, minGroundY:8, maxGroundY:18, tokens};
+  // Author-time only: run the real generator once just to read off gridW and
+  // numCoins/numEnemies. Deliberately NOT a naive tokens.filter(t=>t===T.COIN)
+  // — width bytes share the same small integer space as marker token ids
+  // (this level's own GAP,5 and BLOCK,6 collide with COIN(5)/ENEMY(6)), so
+  // only a real position-aware walk of the stream (which buildPlatformLevel
+  // already does, to place checkpoints) counts correctly.
+  const built = buildPlatformLevel(platform);
+  const gridW = built.grid[0].length;
+  const numCoins = built.numCoins, numEnemies = built.numEnemies;
+  const screenW = 256, screenH = 160;
+
+  const cart = {
+    formatVersion: 1,
+    cartType: 4, // advisory label only — see DESIGN.md §14
+    paletteMode: 1,
+    paletteParams: [205, 0, 25, 55, 35, 75, 150, 0],
+    rngSeed: 5,
+    modeFlags: 0,
+    screenW, screenH, // viewport size — the level itself is gridW*8 wide, see camera below
+    mapGenerator: 3, // turtle-grammar heightmap generator (§16) — see the
+                      // §16 comment above buildPlatformLevel for how this
+                      // relates to (and differs from) the racer's map_generator=1
+    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
+    camera: {
+      followGlobal: PLATFORM_GLOBAL_NAMES.g_player,
+      clampMinX: 0, clampMinY: 0,
+      clampMaxX: Math.max(0, gridW*8 - screenW),
+      clampMaxY: Math.max(0, platform.gridH*8 - screenH), // 0 here: level height == viewport height, so only X scrolls
+    },
+    inputActiveButtons: 1|2|4,
+    inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION, // same left/right+action
+      // *shape* the racer uses — the touch template only had to encode a
+      // layout, never "steering" specifically, confirming the fix to
+      // describeControls() (which used to hardcode that word) was right.
+    inputButtonLabels: {1:'Left', 2:'Right', 4:'Jump'},
+    hudSpec: [
+      {kind:0, sourceKind:0, srcA:PLATFORM_GLOBAL_NAMES.g_score, srcB:0, delta:0, suffixConstIdx:255, label:'Coins'},
+      {kind:1, sourceKind:0, srcA:PLATFORM_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'You died - refresh link to retry'},
+      {kind:1, sourceKind:0, srcA:PLATFORM_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'You win! Refresh link to play again'},
+    ],
+    constants: [0.35, 1.6, -6.2, 0.8, 1, 1, gridW*8, platform.gridH*8, numCoins, numEnemies, 6],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:8, extFieldCount:0}, // PLAYER
+      {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // COIN
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // ENEMY (ext 8 = facing)
+    ],
+    sprites: [ {w:8,h:8,pixels:playerPixels}, {w:8,h:8,pixels:enemyPixels}, {w:8,h:8,pixels:coinPixels} ],
+    tiles: [
+      {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
+      {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:brickPixels},
+    ],
+    // MOVE_SOLID's solidity test is ctx.tileSurface(tile) !== 0 — the exact
+    // same generic mechanism tileSurfaceOverrides already provides (born as
+    // a bug fix for the racer's startline, see DESIGN.md §15.1), reused
+    // here for an entirely different purpose: only AIR needs remapping,
+    // to surface 0 (non-solid); GROUND/DIRT/BRICK default to identity
+    // (nonzero = solid) with no override needed.
+    tileSurfaceOverrides: {[PLATFORM_AIR]: 0},
+    platform,
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = PLATFORM_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), PLATFORM_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+/* ============================================================
    10. Build carts, encode, round-trip check
    ============================================================ */
 const CARTS = {};
@@ -2047,6 +2601,7 @@ function cssColorToHex(col){
 registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
 registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
 registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
+registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
 
 /* ============================================================
    11. UI wiring — menu, game loop, HUD, input
@@ -2383,9 +2938,27 @@ function ilerpAngle(e, idx, alpha){
   return p + delta * alpha;
 }
 
+// Camera: a fourth composable concept alongside backdrop/HUD/input-layout
+// (DESIGN.md §15) — which entity a cart wants the view to follow (by global
+// handle, 255 = none), clamped to declared bounds. Computed once per render
+// from the interpolated (not raw-tick) followed position, so panning is as
+// smooth as entity motion itself. Carts with no camera (followGlobal===255,
+// the default) get cameraX/Y stuck at 0 — identical to pre-camera behavior.
+function updateCamera(alpha){
+  const cart = world.cart, cam = cart.camera;
+  if(!cam || cam.followGlobal === 255){ world.cameraX = 0; world.cameraY = 0; return; }
+  const id = world.globals[cam.followGlobal];
+  const e = world.entities.find(en => en.id === id);
+  if(!e){ world.cameraX = 0; world.cameraY = 0; return; }
+  const x = ilerp(e, 0, alpha) - canvas.width/2;
+  const y = ilerp(e, 1, alpha) - canvas.height/2;
+  world.cameraX = Math.max(cam.clampMinX, Math.min(cam.clampMaxX, x));
+  world.cameraY = Math.max(cam.clampMinY, Math.min(cam.clampMaxY, y));
+}
+
 function drawEntityCanvas(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
-  const x = ilerp(e, 0, alpha), y = ilerp(e, 1, alpha);
+  const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
   if(type.renderKind === 1){ // tile column — position interpolates, extent/cap don't (discrete, only change at spawn)
     const extent = Math.max(0, Math.floor(e.props[8]));
     const capAtTop = e.props[10] === 0;
@@ -2421,6 +2994,7 @@ function drawEntityCanvas(e, alpha){
 // differs — see initGL() below for why WebGL is preferred when available
 // and exactly what Canvas2D can't do that motivated it.
 function render(alpha){
+  updateCamera(alpha);
   if(USE_GL) renderSceneGL(alpha); else renderSceneCanvas(alpha);
   renderHUD();
 }
@@ -2428,7 +3002,10 @@ function render(alpha){
 function renderSceneCanvas(alpha){
   const cart = world.cart;
   if(world.map){
-    ctx2d.drawImage(world.mapCanvas, 0, 0); // pre-rendered once at load, see World constructor
+    // Drawn at native size, offset by -camera: for cameraless carts (0,0)
+    // this is pixel-identical to the old fixed (0,0) draw; for a level
+    // wider than the viewport, Canvas2D clips to the canvas bounds for free.
+    ctx2d.drawImage(world.mapCanvas, -world.cameraX, -world.cameraY);
   } else {
     ctx2d.fillStyle = world.palette[cart.backdropFillIndex] || '#222';
     ctx2d.fillRect(0, 0, canvas.width, canvas.height);
@@ -2447,8 +3024,12 @@ function renderSceneGL(alpha){
   if(world.map){
     gl.clear(gl.COLOR_BUFFER_BIT);
     // pre-rendered once at load (see World constructor) — one draw call for
-    // the whole map instead of one per tile, every frame
-    glDrawTexturedQuad(world.glMapTexture, 0, 0, canvas.width, canvas.height, 0);
+    // the whole map instead of one per tile, every frame. Drawn at the
+    // map's own native pixel size (not stretched to canvas.width/height,
+    // which only happened to be correct before because cameraless maps are
+    // always exactly canvas-sized), offset by -camera; the GPU clips
+    // anything outside the viewport automatically, same as Canvas2D.
+    glDrawTexturedQuad(world.glMapTexture, -world.cameraX, -world.cameraY, world.mapCanvas.width, world.mapCanvas.height, 0);
   } else {
     const [br,bg,bb] = cssColorToRGB(world.palette[cart.backdropFillIndex] || '#222');
     gl.clearColor(br/255, bg/255, bb/255, 1);
@@ -2463,7 +3044,7 @@ function renderSceneGL(alpha){
 
 function drawEntityGL(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
-  const x = ilerp(e, 0, alpha), y = ilerp(e, 1, alpha);
+  const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
   if(type.renderKind === 1){ // tile column
     const extent = Math.max(0, Math.floor(e.props[8]));
     const capAtTop = e.props[10] === 0;

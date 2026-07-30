@@ -1,13 +1,14 @@
 # V0 — a real, working Urlcade
 
 `urlcade.html` is a single self-contained page: the runtime (VM,
-assembler, palette generator, track-grammar + cellular-automata-cave map
-generators, renderer) and three dogfood carts (`../examples/flappy-bird.md`,
-`../examples/race-car.md`, and a roguelike built directly from
-`../examples/three-more-carts.md` §1) built and playable in one file.
-Open it directly in a browser — no build step, no server.
+assembler, palette generator, three map generators — track-grammar,
+cellular-automata caves, and a heightmap turtle-grammar — a camera, and a
+renderer) and four dogfood carts (`../examples/flappy-bird.md`,
+`../examples/race-car.md`, and a roguelike and a platformer both built
+directly from `../examples/three-more-carts.md` §1/§2) built and playable
+in one file. Open it directly in a browser — no build step, no server.
 
-All three carts are authored once, assembled to real bytecode, **encoded
+All four carts are authored once, assembled to real bytecode, **encoded
 to bytes, base64url'd into the URL fragment, and then the runtime decodes
 that exact fragment back into the cart it actually runs** — the
 in-memory authoring object is never used to play the game, only the
@@ -105,6 +106,49 @@ and it's exercised on every play, not just asserted.
   a second, same-species bug (`describeControls()` hardcoding "steer" for
   any cart using both left/right bits) found the same way, by building a
   cart that exercises the same "generic" code path differently.
+- **A third map-generator archetype and the VM's first real physics
+  opcode**, backing the fourth cart, Run & Jump. `MOVE_SOLID`
+  (`map_generator = 3`'s heightmap grid + this one opcode) resolves an
+  entity's movement against the tilemap one axis at a time, snapping
+  position and zeroing velocity on the blocked axis — confirmed against
+  floor-landing, wall-blocking, and ceiling-bonking, plus that terminal
+  velocity clamped by `CLAMP_ABS` (already in the opcode table for the
+  racer's AI steering) never let a fast fall tunnel through a tile.
+  Solidity itself reuses `tileSurfaceOverrides` (born as a racer bug fix
+  above) for an unplanned second purpose: nonzero surface = solid, so the
+  platformer's whole tile bank needs exactly one override (`{AIR: 0}`).
+- **A camera — the fourth composable concept**, alongside backdrop/HUD/
+  input-layout/map-generator (`DESIGN.md` §14): a cart declares which
+  entity to follow (by global handle) and clamp bounds; the renderer
+  recomputes camera position every frame from the *interpolated* followed
+  entity and offsets both the pre-rendered tilemap and every entity draw
+  by it, in both backends. Unlike `MOVE_SOLID`/`SETTILE`, nothing in cart
+  bytecode ever touches the camera directly — it's pure declared data
+  read generically by the runtime, the same shape as the other three
+  generators, not the opcode family. Verified with a bot that holds
+  right and jumps periodically: it crosses the full ~1000px, 125-tile
+  level (4x the 256px viewport) with the camera visibly panning and
+  clamping correctly at both ends, screenshotted identically in both
+  the WebGL and Canvas2D backends.
+- **A real authoring bug caught by the test suite, not eyeballing**:
+  the platformer's level tokens mix marker tokens (`COIN`, `ENEMY` — no
+  operand) with width-carrying tokens (`FLAT`, `GAP`, ...), and a naive
+  `tokens.filter(t => t === COIN)` to count coins for the HUD/spawn-loop
+  constant is wrong — a `GAP` or `BLOCK` width byte can numerically equal
+  `COIN`'s or `ENEMY`'s token id. Caught because the test suite's spawned
+  entity count didn't match the generator's own checkpoint count; fixed
+  by reading `numCoins`/`numEnemies` off the generator's real,
+  position-aware token walk instead of re-deriving them naively.
+- **The open "is `map_generator` 1 and a proposed 3 actually one
+  generator" question from the design-level dogfood, resolved by
+  building #3 instead of debating it further**: kept separate. Both walk
+  an authored token list into a tile grid + checkpoints (same category),
+  but the racer stamps a fixed-width path *perpendicular* to travel at
+  every step while the platformer walks *columns* maintaining a running
+  ground height with tokens that only make sense for a heightmap — a
+  shared "topology flag" would have to switch between two different
+  stamping algorithms internally, which isn't really unification. See
+  `DESIGN.md` §15.2 for the full writeup.
 - **Edge-to-edge game screens.** The canvas is `position:absolute;
   inset:0` with `object-fit:contain` — no bezel, border, or padding box
   around it; it fills the viewport (letterboxed only as much as the
@@ -256,7 +300,7 @@ Each one is a reasonable next step, not a design admission of defeat:
 - **Two entity types per cart.** Enough to exercise the per-type
   extension-field mechanism, not an exhaustive catalog.
 
-## Three more dogfoods — one now real, two still design-level
+## Three more dogfoods — two now real, one still design-level
 
 `../examples/three-more-carts.md` sketches a roguelike, a platformer, and
 an arena shooter — chosen to pressure-test the composable-generator model
@@ -264,19 +308,20 @@ an arena shooter — chosen to pressure-test the composable-generator model
 (cellular-automata caves) and to check whether "generator" needed to keep
 growing new primitives or whether the existing ones already generalized.
 
-The roguelike (**Cave Crawler**) has since been built as a real, playable
-third cart in `urlcade.html` — cave generation, `SETTILE`-based gold
-pickup, edge-triggered grid movement, and deferred-kill monster combat
-all run as actual bytecode, not just design prose (see the bullets
-above and `DESIGN.md` §15.1). The platformer and arena shooter remain
-design-level only — a deliberate scope cut (implementing all three at
-once, on top of the WebGL renderer and layout change, was too much for
-one pass), not an oversight. Findings from the original design-level
-pass on all three (two real primitive gaps — `SETTILE`, `MOVE_SOLID` —
-one real new composable concept — camera/viewport — and three
-confirmations that existing machinery already covered enough ground) are
-folded into `DESIGN.md` §15; findings specific to actually *building*
-the roguelike are in the new §15.1.
+The roguelike (**Cave Crawler**) and the platformer (**Run & Jump**) have
+since been built as real, playable carts in `urlcade.html` — cave
+generation, `SETTILE`-based gold pickup, edge-triggered grid movement,
+and deferred-kill monster combat for the roguelike; a heightmap turtle-
+grammar generator, `MOVE_SOLID` tile collision, and a camera for the
+platformer — all running as actual bytecode and real engine code, not
+just design prose (see the bullets above, and `DESIGN.md` §15.1/§15.2).
+The arena shooter remains design-level only — a deliberate scope cut,
+not an oversight. Findings from the original design-level pass on all
+three (two real primitive gaps — `SETTILE`, `MOVE_SOLID` — one real new
+composable concept — camera/viewport — and three confirmations that
+existing machinery already covered enough ground) are folded into
+`DESIGN.md` §15; findings specific to actually *building* the roguelike
+and the platformer are in §15.1 and §15.2.
 
 ## Playing it
 
