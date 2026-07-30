@@ -308,9 +308,10 @@ function runHook(bytecode, ctx){
    4. Palette generation — DESIGN.md §6
    ============================================================ */
 const CURATED_BANK = [
-  // 0: "sky/grass" — flappy bird
+  // 0: "sky/grass" — outline, body, beak, pipe edge/fill/highlight, white,
+  //    then a sky blue and a ground green for the backdrop generator (§16)
   ['#000000','#3b2a20','#f4d35e','#ee8b2b','#1b6b2e','#3a9d4f','#a8e6b5','#ffffff',
-   '#000000','#000000','#000000','#000000','#000000','#000000','#000000','#000000'],
+   '#8ecae6','#4a7c3a','#000000','#000000','#000000','#000000','#000000','#000000'],
 ];
 function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
 function generatePalette(cart){
@@ -369,10 +370,22 @@ class ByteReader {
 
 const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
 
+// Button bit convention, fixed and universal (not genre- or cart-specific):
+// 1=left 2=right 4=up/primary 8=down/secondary 16=action. A cart declares
+// which of these it actually reads (inputActiveButtons) and which touch
+// *shape* fits it (inputTouchTemplate) — see DESIGN.md §15.
+const TOUCH_TEMPLATE_NONE=0, TOUCH_TEMPLATE_SINGLE=1, TOUCH_TEMPLATE_STEER_ACTION=2, TOUCH_TEMPLATE_DPAD_ACTION=3;
+const BUTTON_BITS = [1,2,4,8,16];
+
+// ASCII-only, one byte per character (V0 scope cut, see README) — a
+// non-ASCII char here silently truncates to charCode & 0xFF on encode.
+function writeString(w, s){ w.u8(s.length); for(let i=0;i<s.length;i++) w.u8(s.charCodeAt(i)); }
+function readString(r){ const n = r.u8(); let s=''; for(let i=0;i<n;i++) s += String.fromCharCode(r.u8()); return s; }
+
 function encodeCart(cart){
   const w = new ByteWriter();
   w.u8(cart.formatVersion);
-  w.u8(cart.cartType);
+  w.u8(cart.cartType); // advisory/display metadata only — never a runtime dispatch key, see DESIGN.md §15
   w.u8(cart.paletteMode);
   w.u8(cart.rngSeed);
   w.u8(cart.modeFlags);
@@ -380,6 +393,36 @@ function encodeCart(cart){
   w.u16(cart.screenH);
   const pp = cart.paletteParams.slice(0,8); while(pp.length<8) pp.push(0);
   w.bytesRaw(pp);
+
+  // backdrop generator: universal, present on every cart regardless of
+  // whether a map generator also runs (the map, if any, simply draws over it)
+  w.u8(cart.backdropFillIndex);
+  w.u8(cart.backdropGroundHeight);
+  w.u8(cart.backdropGroundIndex);
+
+  // input layout: which of the 5 fixed button bits this cart reads, which
+  // generic touch-control shape fits, and a short label per active button
+  w.u8(cart.inputActiveButtons);
+  w.u8(cart.inputTouchTemplate);
+  for(const bit of BUTTON_BITS){
+    if(cart.inputActiveButtons & bit) writeString(w, cart.inputButtonLabels[bit] || '');
+  }
+
+  // HUD generator: an ordered list of declared readouts, each either a raw
+  // numeric value (with an optional +delta and an optional "/ constant"
+  // suffix) or a flag line shown only while its source is non-zero
+  w.u8(cart.hudSpec.length);
+  for(const line of cart.hudSpec){
+    w.u8(line.kind);        // 0 = numeric, 1 = flag, 2 = numeric-if-non-zero
+    w.u8(line.sourceKind);  // 0 = global, 1 = entity prop via a global handle
+    w.u8(line.srcA);
+    w.u8(line.srcB);
+    w.u8(line.delta || 0);
+    w.u8(line.suffixConstIdx === undefined ? 255 : line.suffixConstIdx);
+    w.u8(line.clamp ? 1 : 0); // clamp the displayed value to the suffix constant
+    writeString(w, line.label || '');
+  }
+
   w.u8(cart.constants.length);
   for(const c of cart.constants) w.f32(c);
   w.u8(cart.entityTypes.length);
@@ -391,7 +434,12 @@ function encodeCart(cart){
   for(const s of cart.sprites){ w.u8(s.w); w.u8(s.h); w.bytesRaw(s.pixels); }
   w.u8(cart.tiles.length);
   for(const t of cart.tiles){ w.u8(t.w); w.u8(t.h); w.bytesRaw(t.pixels); }
-  if(cart.cartType === 2){
+
+  // map generator: an id selecting which (if any) of the runtime's small
+  // library of level generators populates the tilemap, decoupled from
+  // cart_type — see DESIGN.md §15. 0 = none (backdrop alone covers the frame).
+  w.u8(cart.mapGenerator);
+  if(cart.mapGenerator === 1){
     const track = cart.track;
     w.u8(track.tokens.length);
     w.bytesRaw(track.tokens);
@@ -400,6 +448,7 @@ function encodeCart(cart){
     w.u8(track.startGX); w.u8(track.startGY); w.u8(track.startDir);
     w.u8(track.gridW); w.u8(track.gridH);
   }
+
   for(const name of HOOK_NAMES){
     const bc = cart.hooks[name] || new Uint8Array(0);
     w.u16(bc.length);
@@ -419,6 +468,27 @@ function decodeCart(bytes){
   cart.screenW = r.u16();
   cart.screenH = r.u16();
   cart.paletteParams = Array.from(r.bytesN(8));
+
+  cart.backdropFillIndex = r.u8();
+  cart.backdropGroundHeight = r.u8();
+  cart.backdropGroundIndex = r.u8();
+
+  cart.inputActiveButtons = r.u8();
+  cart.inputTouchTemplate = r.u8();
+  cart.inputButtonLabels = {};
+  for(const bit of BUTTON_BITS){
+    if(cart.inputActiveButtons & bit) cart.inputButtonLabels[bit] = readString(r);
+  }
+
+  const hudCount = r.u8();
+  cart.hudSpec = [];
+  for(let i=0;i<hudCount;i++){
+    cart.hudSpec.push({
+      kind: r.u8(), sourceKind: r.u8(), srcA: r.u8(), srcB: r.u8(),
+      delta: r.u8(), suffixConstIdx: r.u8(), clamp: r.u8(), label: readString(r),
+    });
+  }
+
   const constCount = r.u8();
   cart.constants = [];
   for(let i=0;i<constCount;i++) cart.constants.push(r.f32());
@@ -442,7 +512,9 @@ function decodeCart(bytes){
     const w_ = r.u8(), h_ = r.u8();
     cart.tiles.push({w:w_, h:h_, pixels: Array.from(r.bytesN(w_*h_))});
   }
-  if(cart.cartType === 2){
+
+  cart.mapGenerator = r.u8();
+  if(cart.mapGenerator === 1){
     const tokenCount = r.u8();
     const tokens = Array.from(r.bytesN(tokenCount));
     const trackWidth = r.u8(), segLen = r.u8();
@@ -450,6 +522,7 @@ function decodeCart(bytes){
     const gridW = r.u8(), gridH = r.u8();
     cart.track = {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH};
   }
+
   cart.hooks = {};
   for(const name of HOOK_NAMES){
     const len = r.u16();
@@ -526,7 +599,7 @@ class World {
     this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, this.palette, true));
     this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, this.palette, false));
     this.track = null;
-    if(cart.cartType === 2){
+    if(cart.mapGenerator === 1){
       this.track = buildTrack(cart.track);
     }
     const self_ = this;
@@ -835,13 +908,24 @@ function buildFlappyCart(){
   ]);
   const cart = {
     formatVersion: 1,
-    cartType: 63,
+    cartType: 63, // advisory label only — see DESIGN.md §15
     paletteMode: 0,
     paletteParams: [0,0,0,0,0,0,0,0],
     rngSeed: 42,
     modeFlags: 0,
     screenW: 160,
     screenH: 220,
+    mapGenerator: 0, // no tilemap — the backdrop generator covers the frame
+    backdropFillIndex: 8,   // sky blue (curated bank #0)
+    backdropGroundHeight: 16,
+    backdropGroundIndex: 9, // ground green
+    inputActiveButtons: 16, // action bit only
+    inputTouchTemplate: TOUCH_TEMPLATE_SINGLE,
+    inputButtonLabels: {16: 'Flap'},
+    hudSpec: [
+      {kind:0, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_score, srcB:0, delta:0, suffixConstIdx:255, label:'Score'},
+      {kind:1, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'Crashed - refresh link to retry'},
+    ],
     constants: [0.35, -3.2, 2.0, 34, 16, 130, 70, 220, 160, 40, 90, 16],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0},
@@ -942,6 +1026,15 @@ const RACER_HOOKS_SRC = {
     HALT
   `,
   on_frame: `
+    LOADE g_car_player 11
+    JZ done
+    LOADE g_car_ai1 11
+    JZ done
+    LOADE g_car_ai2 11
+    JZ done
+    PUSHI 1
+    STOREG g_race_over
+    done:
     HALT
   `,
   on_tick: `
@@ -1154,13 +1247,25 @@ function buildRacerCart(){
 
   const cart = {
     formatVersion: 1,
-    cartType: 2,
+    cartType: 2, // advisory label only — see DESIGN.md §15
     paletteMode: 1,
     paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],
     rngSeed: 17,
     modeFlags: 0,
     screenW: gridW*8,
     screenH: gridH*8,
+    mapGenerator: 1, // track-grammar generator (§16) — the same one any other
+                     // genre could invoke for a loop-shaped level, not a
+                     // "racer" special case
+    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
+    inputActiveButtons: 1|2|4,
+    inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
+    inputButtonLabels: {1:'Left', 2:'Right', 4:'Gas'},
+    hudSpec: [
+      {kind:0, sourceKind:1, srcA:RACER_GLOBAL_NAMES.g_car_player, srcB:10, delta:1, suffixConstIdx:RACER_CONST_NAMES.TOTAL_LAPS, clamp:1, label:'Lap'},
+      {kind:2, sourceKind:1, srcA:RACER_GLOBAL_NAMES.g_car_player, srcB:11, delta:0, suffixConstIdx:255, clamp:0, label:'Finished #'},
+      {kind:1, sourceKind:0, srcA:RACER_GLOBAL_NAMES.g_race_over, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Race over!'},
+    ],
     constants: [0.15, 4, 0.03, 0.08, 0.2, 14, 3, 0.6, 10, 2, startX, startY, 0.3],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:6, collisionH:6, extFieldCount:4},
@@ -1185,21 +1290,37 @@ function buildRacerCart(){
    10. Build carts, encode, round-trip check
    ============================================================ */
 const CARTS = {};
-function registerCart(key, title, controlsText, genre, accentIdx, builder){
+// Keyboard-hint text is derived from the cart's own declared input layout —
+// not hand-written per cart — so a new cart gets a correct hint for free.
+function describeControls(cart){
+  const parts = [];
+  if((cart.inputActiveButtons & 1) && (cart.inputActiveButtons & 2)){
+    parts.push('←/→ = steer');
+  } else {
+    if(cart.inputActiveButtons & 1) parts.push('← = ' + (cart.inputButtonLabels[1] || 'left'));
+    if(cart.inputActiveButtons & 2) parts.push('→ = ' + (cart.inputButtonLabels[2] || 'right'));
+  }
+  if(cart.inputActiveButtons & 4) parts.push('↑ = ' + (cart.inputButtonLabels[4] || 'up'));
+  if(cart.inputActiveButtons & 8) parts.push('↓ = ' + (cart.inputButtonLabels[8] || 'down'));
+  if(cart.inputActiveButtons & 16) parts.push('space = ' + (cart.inputButtonLabels[16] || 'action'));
+  return parts.join(', ');
+}
+function registerCart(key, title, genre, accentIdx, builder){
   const authored = builder();
   const encoded = encodeCart(authored);
   const payload = b64urlEncode(encoded);
   const decoded = decodeCart(encoded);
   const palette = generatePalette(decoded);
   const accent = palette[accentIdx] ? cssColorToHex(palette[accentIdx]) : '#e0a030';
+  const controlsText = describeControls(decoded);
   CARTS[key] = { title, controlsText, genre, accent, payload, byteLen: encoded.length, charLen: payload.length, decoded };
 }
 function cssColorToHex(col){
   const [r,g,b] = cssColorToRGB(col);
   return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
-registerCart('flappy', 'Flappy Bird', 'Space / Up = flap', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
-registerCart('racer', 'Race Car', 'Left/Right = steer, Up = accelerate', 'cart_type 2 · racer/golf', 13, buildRacerCart);
+registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
+registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
 
 /* ============================================================
    11. UI wiring — menu, game loop, HUD, input
@@ -1220,26 +1341,39 @@ function buttonMaskFromKeys(){
   return m;
 }
 
-/* Touch controls — one on-screen layout per cart, held-button semantics
-   (matches the keyboard: TESTBIT is read every frame, not edge-triggered,
-   so holding a button is exactly like holding a key). */
-const TOUCH_LAYOUTS = {
-  flappy: () => `
-    <div class="side"></div>
-    <div class="side">
-      <button type="button" class="touch-btn wide" data-bit="16" aria-label="Flap">&#9650; FLAP</button>
-    </div>
-  `,
-  racer: () => `
-    <div class="side">
+/* Touch controls — a small, fixed library of generic *shapes*, selected and
+   labeled by what the cart declares (inputTouchTemplate / inputActiveButtons
+   / inputButtonLabels), never looked up by cart identity. Held-button
+   semantics throughout (TESTBIT reads every frame, not edge-triggered, so
+   holding a touch button is exactly like holding a key) — see DESIGN.md §15. */
+function buildTouchControlsHTML(cart){
+  const label = bit => (cart.inputButtonLabels[bit] || '').toUpperCase();
+  if(cart.inputTouchTemplate === TOUCH_TEMPLATE_SINGLE){
+    const bit = BUTTON_BITS.find(b => cart.inputActiveButtons & b) ?? 16;
+    return `<div class="side"></div><div class="side">
+      <button type="button" class="touch-btn wide" data-bit="${bit}">&#9650; ${label(bit)}</button>
+    </div>`;
+  }
+  if(cart.inputTouchTemplate === TOUCH_TEMPLATE_STEER_ACTION){
+    return `<div class="side">
       <button type="button" class="touch-btn" data-bit="1" aria-label="Steer left">&#9664;</button>
       <button type="button" class="touch-btn" data-bit="2" aria-label="Steer right">&#9654;</button>
-    </div>
-    <div class="side">
-      <button type="button" class="touch-btn" data-bit="4" aria-label="Accelerate">&#9650;</button>
-    </div>
-  `,
-};
+    </div><div class="side">
+      <button type="button" class="touch-btn" data-bit="4">&#9650; ${label(4)}</button>
+    </div>`;
+  }
+  if(cart.inputTouchTemplate === TOUCH_TEMPLATE_DPAD_ACTION){
+    return `<div class="side">
+      <button type="button" class="touch-btn" data-bit="1" aria-label="Left">&#9664;</button>
+      <button type="button" class="touch-btn" data-bit="2" aria-label="Right">&#9654;</button>
+      <button type="button" class="touch-btn" data-bit="4" aria-label="Up">&#9650;</button>
+      <button type="button" class="touch-btn" data-bit="8" aria-label="Down">&#9660;</button>
+    </div><div class="side">
+      <button type="button" class="touch-btn" data-bit="16">${label(16)}</button>
+    </div>`;
+  }
+  return ''; // TOUCH_TEMPLATE_NONE
+}
 function setTouchBit(bit, on, el){
   if(on) touchBits.add(bit); else touchBits.delete(bit);
   if(el) el.classList.toggle('active', on);
@@ -1254,19 +1388,24 @@ function wireHoldButton(el){
   el.addEventListener('pointerleave', release);
   el.addEventListener('contextmenu', e => e.preventDefault());
 }
-function setupTouchControls(key){
+let canvasTapBit = null; // set by setupTouchControls(); non-null only under the single-action template
+function setupTouchControls(cart){
   touchBits = new Set();
   const el = document.getElementById('touchControls');
-  const layout = TOUCH_LAYOUTS[key];
-  el.innerHTML = layout ? layout() : '';
-  el.classList.toggle('active', !!layout);
+  const html = buildTouchControlsHTML(cart);
+  el.innerHTML = html;
+  el.classList.toggle('active', !!html);
   el.querySelectorAll('.touch-btn').forEach(wireHoldButton);
+  canvasTapBit = (cart.inputTouchTemplate === TOUCH_TEMPLATE_SINGLE)
+    ? (BUTTON_BITS.find(b => cart.inputActiveButtons & b) ?? null)
+    : null;
 }
-// tap-and-hold anywhere on the canvas also flaps (bit 16) — harmless for
-// carts that don't read that bit, and the natural mobile gesture for flappy.
-(function wireCanvasFlap(){
-  const press = e => { e.preventDefault(); touchBits.add(16); };
-  const release = () => touchBits.delete(16);
+// Tap-and-hold anywhere on the canvas also presses whatever the single-action
+// template's button is — a generic convention for that template's shape, not
+// a Flappy-Bird-specific gesture; carts using other templates get nothing here.
+(function wireCanvasTap(){
+  const press = e => { if(canvasTapBit !== null){ e.preventDefault(); touchBits.add(canvasTapBit); } };
+  const release = () => { if(canvasTapBit !== null) touchBits.delete(canvasTapBit); };
   canvas.addEventListener('pointerdown', press);
   canvas.addEventListener('pointerup', release);
   canvas.addEventListener('pointercancel', release);
@@ -1331,10 +1470,10 @@ function startGame(key){
   // (mobile portrait, tablet, wide desktop — all alike) actually gives it.
   canvas.width = cartInfo.decoded.screenW;
   canvas.height = cartInfo.decoded.screenH;
-  setupTouchControls(key);
   // decode a FRESH copy straight from the URL bytes so the running game
   // is provably reconstructed from the fragment, not the authoring object.
   world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
+  setupTouchControls(world.cart);
   running = true;
   fitCanvas();
 }
@@ -1375,9 +1514,14 @@ function drawEntity(e){
   }
 }
 
+// Backdrop generator (universal — used whenever there's no map-generated
+// tilemap; if there is one, it simply covers the whole frame instead) and
+// the HUD generator (a declared list of readouts) are both interpreted
+// generically here. Nothing in this function branches on cart identity,
+// cart_type, or which genre a cart happens to look like — see DESIGN.md §15.
 function render(){
   const cart = world.cart;
-  if(cart.cartType === 2){
+  if(world.track){
     for(let y=0;y<world.track.grid.length;y++){
       for(let x=0;x<world.track.grid[0].length;x++){
         const tid = world.track.grid[y][x];
@@ -1385,24 +1529,33 @@ function render(){
       }
     }
   } else {
-    ctx2d.fillStyle = '#8ecae6';
-    ctx2d.fillRect(0,0,canvas.width,canvas.height);
-    ctx2d.fillStyle = '#4a7c3a';
-    ctx2d.fillRect(0, canvas.height-16, canvas.width, 16);
+    ctx2d.fillStyle = world.palette[cart.backdropFillIndex] || '#222';
+    ctx2d.fillRect(0, 0, canvas.width, canvas.height);
+    if(cart.backdropGroundHeight > 0){
+      ctx2d.fillStyle = world.palette[cart.backdropGroundIndex] || '#222';
+      ctx2d.fillRect(0, canvas.height - cart.backdropGroundHeight, canvas.width, cart.backdropGroundHeight);
+    }
   }
   for(const e of world.entities) drawEntity(e);
 
-  const hud = document.getElementById('hud');
-  if(cart.cartType === 63){
-    hud.textContent = 'Score: ' + world.globals[FLAPPY_GLOBAL_NAMES.g_score] +
-      (world.globals[FLAPPY_GLOBAL_NAMES.g_dead] ? '  — crashed! (refresh link to retry)' : '');
-  } else if(cart.cartType === 2){
-    const player = world.entities.find(e=>e.id===world.globals[RACER_GLOBAL_NAMES.g_car_player]);
-    const lap = player ? Math.min(player.props[10]+1, 3) : 1;
-    const done = world.globals[RACER_GLOBAL_NAMES.g_race_over];
-    hud.textContent = 'Lap ' + lap + ' / 3' + (player && player.props[11] ? ('  — finished #' + player.props[11]) : '') +
-      (done ? '  — race over!' : '');
+  const parts = [];
+  for(const line of cart.hudSpec){
+    let raw;
+    if(line.sourceKind === 0){ raw = world.globals[line.srcA] ?? 0; }
+    else { const e = world.entities.find(en => en.id === world.globals[line.srcA]); raw = e ? e.props[line.srcB] : 0; }
+    if(line.kind === 0){ // numeric readout, always shown
+      let val = raw + (line.delta || 0);
+      if(line.clamp && line.suffixConstIdx !== 255) val = Math.min(val, Math.round(cart.constants[line.suffixConstIdx]));
+      let text = line.label + ': ' + val;
+      if(line.suffixConstIdx !== 255) text += ' / ' + Math.round(cart.constants[line.suffixConstIdx]);
+      parts.push(text);
+    } else if(line.kind === 2){ // numeric, shown only while its source is non-zero
+      if(raw) parts.push(line.label + (raw + (line.delta || 0)));
+    } else if(raw){ // flag line: label only, shown only while its source is non-zero
+      parts.push(line.label);
+    }
   }
+  document.getElementById('hud').textContent = parts.join('   ');
   document.getElementById('faultBanner').style.display = world.cartFault ? 'block' : 'none';
 }
 

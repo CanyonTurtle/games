@@ -96,6 +96,15 @@ human without a decoder.
 
 ## 5. Cart types (genre templates)
 
+> **Superseded by §15.** This section is kept for historical framing —
+> it's the original guess, and the "what body schema does `cart_type`
+> unlock" idea drove real design work. But a runtime dogfood (§15) found
+> the guess encouraged exactly the wrong instinct (branch behavior on
+> `cart_type`) and replaced it: `cart_type` is now advisory metadata only,
+> and what used to be "the racer template's body" is a composable **map
+> generator** selected independently of any genre label. Read this
+> section as motivation, not as the current mechanism.
+
 A single universal schema is either too narrow (one genre) or too
 expensive (bytecode-only, general enough to express everything but
 costing a lot of bits per unit of gameplay). Instead, `cart_type` selects
@@ -432,7 +441,84 @@ New open questions this run raised, beyond what Flappy already left:
   256-entry sin/cos/atan2 set start to matter next to everything else
   the runtime has to ship?
 
-## 14. Open questions
+## 15. Runtime dogfood: from genre-switch to composable generators
+
+The V0 runtime (`v0/urlcade.html`) itself became a dogfood subject once it
+existed. Playing both carts side by side turned up a real regression: the
+implementation had quietly drifted into exactly the anti-pattern this spec
+argues against everywhere else. Worth stating plainly rather than papering
+over, since it's a sharper version of a mistake the spec should make
+structurally hard to repeat.
+
+**What went wrong.** Three places in the runtime branched on cart identity
+or `cart_type` to decide how to present a cart, instead of reading that
+from the cart itself:
+
+- The on-screen touch-control layout was a lookup table **keyed by the
+  cart's literal name** (`flappy` → a flap button, `racer` → a steering
+  pad) — not even genre-level, tied to specific titles.
+- The HUD text was branched on `cart_type`, and then read specific global
+  indices (`g_score`, `g_car_player`) that were authoring-time constants
+  for *those two particular carts*. A third cart with a different global
+  layout would either render garbage or need a third hardcoded branch.
+- The backdrop (sky-blue fill + green ground strip) was hardcoded for
+  *any* `cart_type = 63` cart — the one type that's explicitly supposed to
+  carry zero genre assumptions ended up with Flappy Bird's look baked into
+  the "no assumptions" escape hatch.
+
+**The fix, generalized.** `cart_type` is demoted to advisory/display
+metadata — a label a menu can show, nothing a runtime may switch on.
+Presentation and control surfaces that used to be genre-branches in host
+code become **generators**: small, independent, cart-declared slots the
+runtime interprets the same way for every cart, regardless of genre or
+identity. This is the same move the entity type table already made for
+rendering (`render_kind` is a cart-assigned enum, not a host special case)
+— applied everywhere else the implementation had quietly skipped it.
+
+| Generator | Selected by | Runtime does |
+|---|---|---|
+| **Palette** (§6) | `palette_mode` + params | generates the color ramp, already fully generic |
+| **Backdrop** | fill color index + optional ground-strip height/color, both palette indices | fills the frame solid whenever no map generator has produced a tilemap; a universal default, not genre-specific at all |
+| **HUD** | an ordered list of declared readout lines, each a `(label, value-source, ±delta, optional "/ constant" suffix, clamp)` tuple, or a flag line shown only while its source is non-zero | renders "label: value" (or the flag text) for each line — the same interpreter for a reflex game's score or a racer's lap counter |
+| **Input layout** | a bitmask of which of the 5 fixed button bits (`left/right/up/down/action`) the cart actually reads, plus a touch-*shape* id (none / single-button / steer+action / full d-pad+action) and a short label per active button | builds the on-screen touch controls and the keyboard-hint text from the same declaration — a UI *shape*, not a per-title layout |
+| **Map** | a `map_generator` id (`0` = none, `1` = track-piece grammar, future ids reserved) + that generator's own parameter block | populates the shared tilemap the generic renderer and `GETTILE` already know how to read |
+| **Entity types** (§7.1) | per-type `render_kind` + declared extension fields | unchanged, already generic |
+
+**The principle this settles**, answering the standing "genre modality"
+question directly: genre-specific complexity is legitimate **only inside a
+generator's own algorithm** — a track-grammar interpreter, a future WFC
+dungeon generator, each encoding real domain knowledge that's expensive to
+re-derive per cart. It is never legitimate in code that decides how to
+*display, control, or narrate* a cart based on its type or identity. A
+racer isn't "`cart_type = 2`"; it's a cart that happens to compose the
+track-grammar map generator with a `CAR` entity type and steer+action
+input — and nothing stops a different genre from reusing the same map
+generator for its own loop-shaped level, or a cart from combining
+generators no existing "genre" has used together yet.
+
+New open questions this raised, folded into §16 below:
+
+- Does the backdrop's "no tilemap → solid fill" rule need a richer
+  fallback once a map generator's grid doesn't fill the whole frame (e.g.
+  margins around a non-rectangular level)?
+- The HUD line format (numeric + delta + clamp + suffix, or flag-if-
+  nonzero) covered both dogfood carts. Does a genuinely different genre
+  (a countdown timer, a percentage, a multi-entity leaderboard) need a
+  richer declared format, or a small expression mechanism instead of
+  fixed fields?
+- Input layout is still a fixed bitmask over 5 digital bits. Does a
+  future generator ever need a declared analog axis, and would that be a
+  sixth "input generator," or a variant of this one?
+- Should map generators be able to **compose** (e.g., a WFC dungeon
+  generator producing rooms, then a corridor generator connecting them),
+  and if so, does that argue for a generator *pipeline* rather than a
+  single selected id?
+- `cart_type` still exists purely as a label. Is that worth keeping at
+  all, or does it invite exactly the regression this section just
+  documented — a future implementation "just checking cart_type" once,
+  for something that feels harmless?
+
+## 16. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat

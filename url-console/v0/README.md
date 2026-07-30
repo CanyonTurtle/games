@@ -27,6 +27,15 @@ and it's exercised on every play, not just asserted.
 - The track-piece grammar turtle-interpreting a token sequence into a
   tile grid + checkpoint table at load time.
 - Per-type declared entity fields (not a fixed generic scratch count).
+- **Composable generators, not a genre switch** (`DESIGN.md` §15): the
+  backdrop, HUD, and touch-control layout are each declared by the cart
+  and interpreted generically by the runtime — nothing in `render()` or
+  the touch-control builder branches on which cart, or even which
+  `cart_type`, is loaded. `cart_type` is advisory display metadata only.
+  This replaced a real regression a first pass introduced (a touch-layout
+  lookup table keyed by the cart's literal name, and HUD/backdrop code
+  branching on `cart_type` then reaching into cart-specific global
+  indices) — see §15 for the postmortem.
 
 ## What V0 cuts, on purpose, relative to `DESIGN.md`
 
@@ -38,9 +47,15 @@ Each one is a reasonable next step, not a design admission of defeat:
   opcodes, 4-bit track tokens, 2bpp sprites) would cut these carts
   roughly in half again, but byte alignment removes an entire class of
   off-by-one bit-math bugs for a first working version. Concretely:
-  Flappy Bird is 587 raw bytes here vs. the ~167-byte estimate in
-  `examples/flappy-bird.md`; the race car is 970 vs. ~305. Both still
-  fit inside the "full" (≤2000 char) size class uncompressed.
+  Flappy Bird is ~650 raw bytes here vs. the ~167-byte estimate in
+  `examples/flappy-bird.md`; the race car is ~1060 vs. ~305 (both grew a
+  bit further once backdrop/HUD/input became declared cart data instead
+  of runtime code — that's the cost of genericity, paid once per cart).
+  Both still fit inside the "full" (≤2000 char) size class uncompressed.
+- **HUD/button label strings are ASCII, one byte per character.** A
+  non-ASCII character (an em dash, in an earlier draft of the crash
+  message) silently truncates on encode. Full Unicode support would need
+  a real text encoding in the string format, not a bigger scope cut.
 - **No compression.** The preset-dictionary compressor from §3 isn't
   implemented — every cart ships as `u1r` (raw) in spec terms. Adding
   it would shrink both further without changing anything else here.
