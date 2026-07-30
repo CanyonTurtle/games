@@ -1,0 +1,1329 @@
+<title>The Urlcade — V0</title>
+<style>
+  :root{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060;
+    --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+      --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+      --accent:#a8571a; --focus:#8a4614;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060;
+  }
+  :root[data-theme="light"]{
+    --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+    --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+    --accent:#a8571a; --focus:#8a4614;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);}
+  a{color:inherit;}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+  @media (prefers-reduced-motion: no-preference){
+    .cart, .playbtn{transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;}
+  }
+
+  #menu{max-width:760px;margin:0 auto;padding:44px 20px 80px;}
+  .faceplate{border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:22px;}
+  .faceplate .model{font-size:11px;letter-spacing:.18em;color:var(--ink-dim);
+    text-transform:uppercase;margin:0 0 6px;}
+  #menu h1{font-size:clamp(28px,5vw,40px);margin:0 0 10px;letter-spacing:.02em;
+    font-weight:800;text-wrap:balance;}
+  #menu h1 .dim{color:var(--ink-dim);font-weight:500;}
+  #menu > p{max-width:62ch;color:var(--ink-dim);line-height:1.6;font-size:14.5px;}
+  #menu code{color:var(--accent);}
+  #menu p a{color:var(--accent);text-decoration-color:var(--rule);}
+
+  #cartList{display:grid;gap:20px;grid-template-columns:1fr;margin-top:28px;}
+  @media (min-width:620px){ #cartList{grid-template-columns:1fr 1fr;} }
+  .cart{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
+    overflow:hidden;position:relative;}
+  .cart:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.25);
+    border-color:var(--cart-accent, var(--accent));}
+  .cart-stripe{height:6px;background:linear-gradient(90deg,var(--cart-accent,var(--accent)),
+    transparent 140%);}
+  .cart-body{padding:18px 18px 16px;}
+  .eyebrow{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim);
+    margin:0 0 8px;}
+  .eyebrow b{color:var(--cart-accent,var(--accent));}
+  .cart h2{margin:0 0 14px;font-size:20px;letter-spacing:.01em;}
+  a.playbtn{display:inline-flex;align-items:center;gap:8px;background:var(--cart-accent,var(--accent));
+    color:#141110;text-decoration:none;padding:9px 16px;border-radius:2px;font-weight:700;
+    font-size:13px;letter-spacing:.04em;border:1px solid rgba(0,0,0,.2);}
+  a.playbtn:hover{transform:translateX(2px);}
+  .spec{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:16px 0 0;
+    font-size:12px;color:var(--ink-dim);font-variant-numeric:tabular-nums;}
+  .spec dt{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px;
+    color:var(--ink-dim);opacity:.75;align-self:center;}
+  .spec dd{margin:0;color:var(--ink);}
+  details.payload{margin-top:14px;border-top:1px dashed var(--rule);padding-top:10px;}
+  details.payload summary{cursor:pointer;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-dim);}
+  details.payload summary:hover{color:var(--ink);}
+  details.payload code{display:block;margin-top:8px;color:var(--cart-accent,var(--accent));
+    word-break:break-all;font-size:10.5px;line-height:1.5;max-height:6.5em;overflow-y:auto;}
+  #menu > footer{margin-top:40px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
+    padding-top:16px;}
+
+  #gameWrap{display:none;min-height:100%;text-align:center;padding:18px 12px 60px;
+    background:
+      repeating-linear-gradient(180deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.06) 2px 4px),
+      var(--bg);}
+  .bezel{display:inline-block;padding:10px;background:var(--bg-elevated);
+    border:1px solid var(--rule);border-radius:6px;margin-top:6px;}
+  #gameWrap canvas{background:#222;image-rendering:pixelated;display:block;border-radius:2px;}
+  #hud{color:var(--ink-dim);font-size:13px;letter-spacing:.03em;margin:0 0 4px;
+    font-variant-numeric:tabular-nums;text-transform:uppercase;}
+  #backBtn{position:fixed;top:14px;left:14px;background:var(--bg-elevated);color:var(--ink);
+    border:1px solid var(--rule);padding:7px 12px;border-radius:3px;cursor:pointer;
+    font-family:var(--mono);font-size:12px;letter-spacing:.03em;z-index:2;}
+  #backBtn:hover{border-color:var(--accent);color:var(--accent);}
+  #faultBanner{display:none;color:#e05a4e;font-weight:700;margin-top:10px;font-size:13px;
+    letter-spacing:.03em;}
+  .controls{color:var(--ink-dim);font-size:11.5px;letter-spacing:.03em;margin-top:10px;
+    text-transform:uppercase;}
+</style>
+
+<div id="menu">
+  <div class="faceplate">
+    <p class="model">Model V0 &middot; static runtime, no server</p>
+    <h1>The Urlcade <span class="dim">// cartridge shelf</span></h1>
+  </div>
+  <p>Every cart below is fully described by the URL fragment on its link — the
+  runtime on this page is the only thing that isn't in the URL. Copy a link,
+  the recipient gets the exact game, no install, no account.
+  See <code>DESIGN.md</code> for the spec these carts stress-tested.</p>
+  <div id="cartList"></div>
+  <footer>Raw, uncompressed encoding (V0 scope cut — see README). Byte-packed
+  encoding and the preset-dictionary compressor from the spec are future work.</footer>
+</div>
+
+<div id="gameWrap">
+  <button id="backBtn">&larr; shelf</button>
+  <div id="hud"></div>
+  <div class="bezel"><canvas id="screen"></canvas></div>
+  <div class="controls" id="controlsText"></div>
+  <div id="faultBanner">CART FAULT — step budget exceeded</div>
+</div>
+
+<script>
+"use strict";
+
+/* ============================================================
+   1. Opcode table (shared by assembler + VM) — see DESIGN.md §7
+   ============================================================ */
+const OPS = [
+  ['NOP',[]],['PUSHI',['i16']],['PUSHC',['u8']],['DUP',[]],['POP',[]],['SWAP',[]],
+  ['ADD',[]],['SUB',[]],['MUL',[]],['DIV',[]],['MOD',[]],['NEG',[]],
+  ['CMPEQ',[]],['CMPNE',[]],['CMPLT',[]],['CMPLE',[]],['CMPGT',[]],['CMPGE',[]],
+  ['AND',[]],['OR',[]],['NOT',[]],
+  ['JMP',['addr']],['JZ',['addr']],['JNZ',['addr']],
+  ['LOAD_SELF',['u8']],['STORE_SELF',['u8']],
+  ['LOAD_A',['u8']],['LOAD_B',['u8']],['STORE_A',['u8']],['STORE_B',['u8']],
+  ['LOADG',['u8']],['STOREG',['u8']],
+  ['LOADE',['u8','u8']],['STOREE',['u8','u8']],
+  ['RAND_RANGE',[]],['SIN',[]],['COS',[]],['ATAN2',[]],
+  ['SPAWN',['u8']],['KILL_SELF',[]],
+  ['GETTILE',[]],['TILE_SURFACE',[]],['GET_CHECKPOINT',[]],
+  ['DIST',[]],['CLAMP_ABS',[]],['LERP',[]],['NORM_ANGLE',[]],
+  ['TESTBIT',['u8']],['LOAD_INPUT',[]],['PLAYSOUND',['u8']],['HALT',[]],
+];
+const OPINDEX = {};
+OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
+
+/* ============================================================
+   2. Assembler — mnemonic source -> Uint8Array bytecode
+   ============================================================ */
+function assemble(lines, sym){
+  sym = sym || {constants:{}, globals:{}};
+  const cleaned = lines.map(l=>l.split(';')[0].trim()).filter(l=>l.length>0);
+  const labelOffsets = {};
+  const parsed = [];
+  let offset = 0;
+  function operandBytes(spec){ let n=0; for(const t of spec) n += (t==='u8')?1:2; return n; }
+  for(const line of cleaned){
+    if(line.endsWith(':')){ labelOffsets[line.slice(0,-1)] = offset; continue; }
+    const parts = line.split(/\s+/);
+    const mnem = parts[0];
+    const args = parts.slice(1);
+    if(!(mnem in OPINDEX)) throw new Error('assemble: unknown opcode "'+mnem+'" in line: '+line);
+    const spec = OPS[OPINDEX[mnem]][1];
+    parsed.push({mnem,args,spec,offset,line});
+    offset += 1 + operandBytes(spec);
+  }
+  const buf = [];
+  for(const instr of parsed){
+    const opIdx = OPINDEX[instr.mnem];
+    buf.push(opIdx);
+    const spec = instr.spec;
+    for(let i=0;i<spec.length;i++){
+      const type = spec[i];
+      const tok = instr.args[i];
+      if(tok === undefined) throw new Error('assemble: missing operand for '+instr.mnem+' in line: '+instr.line);
+      let val;
+      if(type === 'addr'){
+        if(!(tok in labelOffsets)) throw new Error('assemble: unknown label "'+tok+'" in line: '+instr.line);
+        val = labelOffsets[tok];
+      } else if(instr.mnem === 'PUSHC' && tok in sym.constants){
+        val = sym.constants[tok];
+      } else if((instr.mnem==='LOADG'||instr.mnem==='STOREG') && tok in sym.globals){
+        val = sym.globals[tok];
+      } else if((instr.mnem==='LOADE'||instr.mnem==='STOREE') && i===0 && tok in sym.globals){
+        val = sym.globals[tok];
+      } else {
+        val = Number(tok);
+        if(Number.isNaN(val)) throw new Error('assemble: bad operand "'+tok+'" for '+instr.mnem+' in line: '+instr.line);
+      }
+      if(type === 'u8'){ buf.push(val & 0xFF); }
+      else { let v = val; if(v<0) v = 0x10000+v; buf.push(v & 0xFF, (v>>8)&0xFF); }
+    }
+  }
+  return new Uint8Array(buf);
+}
+
+/* ============================================================
+   3. The lifecycle-hook VM — stack machine, see DESIGN.md §7
+   ============================================================ */
+const MAX_STEPS = 20000;
+function runHook(bytecode, ctx){
+  if(!bytecode || bytecode.length===0) return true;
+  const stack = [];
+  let ip = 0, steps = 0;
+  function u8(){ return bytecode[ip++]; }
+  function i16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; let v=lo|(hi<<8); if(v & 0x8000) v -= 0x10000; return v; }
+  function u16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; return lo|(hi<<8); }
+  while(ip < bytecode.length){
+    if(++steps > MAX_STEPS){ ctx.world.cartFault = true; return false; }
+    const op = bytecode[ip++];
+    switch(op){
+      case 0: break; // NOP
+      case 1: stack.push(i16()); break; // PUSHI
+      case 2: stack.push(ctx.constants[u8()] ?? 0); break; // PUSHC
+      case 3: stack.push(stack[stack.length-1]); break; // DUP
+      case 4: stack.pop(); break; // POP
+      case 5: { const b=stack.pop(), a=stack.pop(); stack.push(b); stack.push(a); break; } // SWAP
+      case 6: { const b=stack.pop(), a=stack.pop(); stack.push(a+b); break; }
+      case 7: { const b=stack.pop(), a=stack.pop(); stack.push(a-b); break; }
+      case 8: { const b=stack.pop(), a=stack.pop(); stack.push(a*b); break; }
+      case 9: { const b=stack.pop(), a=stack.pop(); stack.push(b!==0 ? a/b : 0); break; }
+      case 10:{ const b=stack.pop(), a=stack.pop(); stack.push(b!==0 ? a-Math.floor(a/b)*b : 0); break; }
+      case 11:{ const a=stack.pop(); stack.push(-a); break; }
+      case 12:{ const b=stack.pop(), a=stack.pop(); stack.push(a===b?1:0); break; }
+      case 13:{ const b=stack.pop(), a=stack.pop(); stack.push(a!==b?1:0); break; }
+      case 14:{ const b=stack.pop(), a=stack.pop(); stack.push(a<b?1:0); break; }
+      case 15:{ const b=stack.pop(), a=stack.pop(); stack.push(a<=b?1:0); break; }
+      case 16:{ const b=stack.pop(), a=stack.pop(); stack.push(a>b?1:0); break; }
+      case 17:{ const b=stack.pop(), a=stack.pop(); stack.push(a>=b?1:0); break; }
+      case 18:{ const b=stack.pop(), a=stack.pop(); stack.push((a&&b)?1:0); break; }
+      case 19:{ const b=stack.pop(), a=stack.pop(); stack.push((a||b)?1:0); break; }
+      case 20:{ const a=stack.pop(); stack.push(a?0:1); break; }
+      case 21: ip = u16(); break; // JMP
+      case 22: { const t=u16(); const v=stack.pop(); if(v===0) ip=t; break; } // JZ
+      case 23: { const t=u16(); const v=stack.pop(); if(v!==0) ip=t; break; } // JNZ
+      case 24: { const idx=u8(); stack.push(ctx.self ? ctx.self.props[idx] : 0); break; }
+      case 25: { const idx=u8(); const v=stack.pop(); if(ctx.self) ctx.self.props[idx]=v; break; }
+      case 26: { const idx=u8(); stack.push(ctx.a ? ctx.a.props[idx] : 0); break; }
+      case 27: { const idx=u8(); stack.push(ctx.b ? ctx.b.props[idx] : 0); break; }
+      case 28: { const idx=u8(); const v=stack.pop(); if(ctx.a) ctx.a.props[idx]=v; break; }
+      case 29: { const idx=u8(); const v=stack.pop(); if(ctx.b) ctx.b.props[idx]=v; break; }
+      case 30: { const idx=u8(); stack.push(ctx.globals[idx] ?? 0); break; }
+      case 31: { const idx=u8(); const v=stack.pop(); ctx.globals[idx]=v; break; }
+      case 32: { const hg=u8(), prop=u8(); const id=ctx.globals[hg]; const e=ctx.findEntity(id); stack.push(e?e.props[prop]:0); break; }
+      case 33: { const hg=u8(), prop=u8(); const v=stack.pop(); const id=ctx.globals[hg]; const e=ctx.findEntity(id); if(e) e.props[prop]=v; break; }
+      case 34: { const b=stack.pop(), a=stack.pop(); stack.push(a+Math.floor(ctx.rng()*(b-a))); break; } // RAND_RANGE
+      case 35: { const a=stack.pop(); stack.push(Math.sin(a*Math.PI/180)); break; }
+      case 36: { const a=stack.pop(); stack.push(Math.cos(a*Math.PI/180)); break; }
+      case 37: { const b=stack.pop(), a=stack.pop(); stack.push(Math.atan2(b,a)*180/Math.PI); break; } // a=dx,b=dy
+      case 38: { const t=u8(); const e=ctx.spawn(t); stack.push(e.id); break; }
+      case 39: { if(ctx.self) ctx.self.active=false; break; }
+      case 40: { const y=stack.pop(), x=stack.pop(); stack.push(ctx.getTile(x,y)); break; }
+      case 41: { const t=stack.pop(); stack.push(ctx.tileSurface(t)); break; }
+      case 42: { const idx=stack.pop(); const cp=ctx.getCheckpoint(idx); stack.push(cp.x); stack.push(cp.y); break; }
+      case 43: { const y2=stack.pop(), x2=stack.pop(), y1=stack.pop(), x1=stack.pop(); stack.push(Math.hypot(x2-x1,y2-y1)); break; }
+      case 44: { const limit=stack.pop(), v=stack.pop(); stack.push(Math.max(-limit,Math.min(limit,v))); break; }
+      case 45: { const t=stack.pop(), b=stack.pop(), a=stack.pop(); stack.push(a+(b-a)*t); break; }
+      case 46: { const a=stack.pop(); stack.push(((a+180)%360+360)%360-180); break; }
+      case 47: { const bit=u8(); const mask=stack.pop(); stack.push((mask>>bit)&1); break; }
+      case 48: { stack.push(ctx.input||0); break; }
+      case 49: { const id=u8(); if(ctx.playSound) ctx.playSound(id); break; }
+      case 50: return true; // HALT
+      default: console.warn('unknown opcode', op); return false;
+    }
+  }
+  return true;
+}
+
+/* ============================================================
+   4. Palette generation — DESIGN.md §6
+   ============================================================ */
+const CURATED_BANK = [
+  // 0: "sky/grass" — flappy bird
+  ['#000000','#3b2a20','#f4d35e','#ee8b2b','#1b6b2e','#3a9d4f','#a8e6b5','#ffffff',
+   '#000000','#000000','#000000','#000000','#000000','#000000','#000000','#000000'],
+];
+function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
+function generatePalette(cart){
+  if(cart.paletteMode === 0){
+    return CURATED_BANK[cart.paletteParams[0]] || CURATED_BANK[0];
+  }
+  // procedural harmony mode
+  const [baseHue,,satMin,satMax,lightMin,lightMax,accentOffset] = cart.paletteParams;
+  const pal = new Array(16);
+  for(let i=0;i<8;i++){
+    const t = i/7;
+    pal[i] = hsl(baseHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
+  }
+  const accentHue = baseHue + accentOffset;
+  for(let i=0;i<8;i++){
+    const t = i/7;
+    pal[8+i] = hsl(accentHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
+  }
+  return pal;
+}
+
+/* ============================================================
+   5. Cart binary format (byte-aligned V0 simplification of
+      DESIGN.md §4 — see url-console/v0/README.md for what this
+      cuts relative to the full nibble-packed spec)
+   ============================================================ */
+function b64urlEncode(bytes){
+  let bin = '';
+  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+}
+function b64urlDecode(str){
+  str = str.replace(/-/g,'+').replace(/_/g,'/');
+  while(str.length % 4) str += '=';
+  const bin = atob(str);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+class ByteWriter {
+  constructor(){ this.bytes = []; }
+  u8(v){ this.bytes.push(v & 0xFF); }
+  u16(v){ this.bytes.push(v & 0xFF, (v>>8) & 0xFF); }
+  f32(v){ const b = new Uint8Array(4); new DataView(b.buffer).setFloat32(0, v, true); this.bytes.push(...b); }
+  bytesRaw(arr){ for(const x of arr) this.bytes.push(x & 0xFF); }
+  toUint8Array(){ return new Uint8Array(this.bytes); }
+}
+class ByteReader {
+  constructor(bytes){ this.bytes = bytes; this.p = 0; }
+  u8(){ return this.bytes[this.p++]; }
+  u16(){ const lo=this.bytes[this.p++], hi=this.bytes[this.p++]; return lo|(hi<<8); }
+  f32(){ const b = this.bytes.slice(this.p, this.p+4); this.p += 4; return new DataView(b.buffer).getFloat32(0, true); }
+  bytesN(n){ const r = this.bytes.slice(this.p, this.p+n); this.p += n; return r; }
+}
+
+const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
+
+function encodeCart(cart){
+  const w = new ByteWriter();
+  w.u8(cart.formatVersion);
+  w.u8(cart.cartType);
+  w.u8(cart.paletteMode);
+  w.u8(cart.rngSeed);
+  w.u8(cart.modeFlags);
+  w.u16(cart.screenW);
+  w.u16(cart.screenH);
+  const pp = cart.paletteParams.slice(0,8); while(pp.length<8) pp.push(0);
+  w.bytesRaw(pp);
+  w.u8(cart.constants.length);
+  for(const c of cart.constants) w.f32(c);
+  w.u8(cart.entityTypes.length);
+  for(const t of cart.entityTypes){
+    w.u8(t.renderKind); w.u8(t.assetIndex); w.u8(t.rotateFlag);
+    w.u8(t.collisionW); w.u8(t.collisionH); w.u8(t.extFieldCount);
+  }
+  w.u8(cart.sprites.length);
+  for(const s of cart.sprites){ w.u8(s.w); w.u8(s.h); w.bytesRaw(s.pixels); }
+  w.u8(cart.tiles.length);
+  for(const t of cart.tiles){ w.u8(t.w); w.u8(t.h); w.bytesRaw(t.pixels); }
+  if(cart.cartType === 2){
+    const track = cart.track;
+    w.u8(track.tokens.length);
+    w.bytesRaw(track.tokens);
+    w.u8(track.trackWidth);
+    w.u8(track.segLen);
+    w.u8(track.startGX); w.u8(track.startGY); w.u8(track.startDir);
+    w.u8(track.gridW); w.u8(track.gridH);
+  }
+  for(const name of HOOK_NAMES){
+    const bc = cart.hooks[name] || new Uint8Array(0);
+    w.u16(bc.length);
+    w.bytesRaw(bc);
+  }
+  return w.toUint8Array();
+}
+
+function decodeCart(bytes){
+  const r = new ByteReader(bytes);
+  const cart = {};
+  cart.formatVersion = r.u8();
+  cart.cartType = r.u8();
+  cart.paletteMode = r.u8();
+  cart.rngSeed = r.u8();
+  cart.modeFlags = r.u8();
+  cart.screenW = r.u16();
+  cart.screenH = r.u16();
+  cart.paletteParams = Array.from(r.bytesN(8));
+  const constCount = r.u8();
+  cart.constants = [];
+  for(let i=0;i<constCount;i++) cart.constants.push(r.f32());
+  const typeCount = r.u8();
+  cart.entityTypes = [];
+  for(let i=0;i<typeCount;i++){
+    cart.entityTypes.push({
+      renderKind: r.u8(), assetIndex: r.u8(), rotateFlag: r.u8(),
+      collisionW: r.u8(), collisionH: r.u8(), extFieldCount: r.u8(),
+    });
+  }
+  const spriteCount = r.u8();
+  cart.sprites = [];
+  for(let i=0;i<spriteCount;i++){
+    const w_ = r.u8(), h_ = r.u8();
+    cart.sprites.push({w:w_, h:h_, pixels: Array.from(r.bytesN(w_*h_))});
+  }
+  const tileCount = r.u8();
+  cart.tiles = [];
+  for(let i=0;i<tileCount;i++){
+    const w_ = r.u8(), h_ = r.u8();
+    cart.tiles.push({w:w_, h:h_, pixels: Array.from(r.bytesN(w_*h_))});
+  }
+  if(cart.cartType === 2){
+    const tokenCount = r.u8();
+    const tokens = Array.from(r.bytesN(tokenCount));
+    const trackWidth = r.u8(), segLen = r.u8();
+    const startGX = r.u8(), startGY = r.u8(), startDir = r.u8();
+    const gridW = r.u8(), gridH = r.u8();
+    cart.track = {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH};
+  }
+  cart.hooks = {};
+  for(const name of HOOK_NAMES){
+    const len = r.u16();
+    cart.hooks[name] = r.bytesN(len);
+  }
+  return cart;
+}
+
+/* ============================================================
+   6. Track-piece grammar interpreter — DESIGN.md §12 (racer)
+      V0 supports cardinal-only pieces (no 45°/chicane, noted as
+      a scoping cut in the README).
+   ============================================================ */
+const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4 };
+const TILE_GRASS=1, TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
+function buildTrack(track){
+  const grid = [];
+  for(let y=0;y<track.gridH;y++) grid.push(new Array(track.gridW).fill(TILE_GRASS));
+  const DIRV = [[1,0],[0,1],[-1,0],[0,-1]];
+  let gx = track.startGX, gy = track.startGY, dir = track.startDir;
+  const checkpoints = [];
+  function setTile(x,y,v){ if(x>=0&&y>=0&&x<track.gridW&&y<track.gridH) grid[y][x]=v; }
+  function stampPerp(cx,cy,dir,width,marker){
+    const perp = DIRV[(dir+1)%4];
+    const half = Math.floor(width/2);
+    for(let o=-half;o<=half;o++){
+      const px = cx+perp[0]*o, py = cy+perp[1]*o;
+      const isEdge = (o===-half || o===half);
+      setTile(px,py, marker || (isEdge?TILE_RUMBLE:TILE_ROAD));
+    }
+  }
+  for(const tok of track.tokens){
+    if(tok === TRACK_TOKENS.STRAIGHT){
+      for(let s=0;s<track.segLen;s++){
+        stampPerp(gx,gy,dir,track.trackWidth);
+        gx += DIRV[dir][0]; gy += DIRV[dir][1];
+      }
+    } else if(tok === TRACK_TOKENS.CURVE_R90 || tok === TRACK_TOKENS.CURVE_L90){
+      const half = Math.floor(track.trackWidth/2);
+      for(let dx=-half;dx<=half;dx++) for(let dy=-half;dy<=half;dy++) setTile(gx+dx,gy+dy,TILE_ROAD);
+      dir = (dir + (tok===TRACK_TOKENS.CURVE_R90?1:3)) % 4;
+      gx += DIRV[dir][0]; gy += DIRV[dir][1];
+    } else if(tok === TRACK_TOKENS.START_FINISH || tok === TRACK_TOKENS.CHECKPOINT){
+      stampPerp(gx,gy,dir,track.trackWidth, TILE_STARTLINE);
+      checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
+    }
+  }
+  return {grid, checkpoints, startGX:track.startGX, startGY:track.startGY, startDir:track.startDir};
+}
+
+/* ============================================================
+   7. World runtime — entities, hooks, collisions, game loop
+   ============================================================ */
+function mulberry32(seed){
+  let a = seed >>> 0;
+  return function(){
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+class World {
+  constructor(cart){
+    this.cart = cart;
+    this.entities = [];
+    this.nextId = 1;
+    this.globals = new Array(16).fill(0);
+    this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
+    this.input = 0;
+    this.cartFault = false;
+    this.palette = generatePalette(cart);
+    this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, this.palette, true));
+    this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, this.palette, false));
+    this.track = null;
+    if(cart.cartType === 2){
+      this.track = buildTrack(cart.track);
+    }
+    const self_ = this;
+    this.ctxBase = {
+      constants: cart.constants,
+      globals: this.globals,
+      world: this,
+      findEntity: id => self_.entities.find(e => e.id===id && e.active),
+      spawn: t => self_.spawnEntity(t),
+      getTile: (x,y) => self_.getTileAt(x,y),
+      tileSurface: t => (t===TILE_STARTLINE ? TILE_ROAD : t),
+      getCheckpoint: i => (self_.track && self_.track.checkpoints[i]) || {x:0,y:0},
+      rng: () => self_.rng(),
+      playSound: id => self_.playSound(id),
+    };
+    this.runGlobalHook('on_init', {});
+  }
+  buildBitmap(asset, palette, transparent){
+    const off = document.createElement('canvas');
+    off.width = asset.w; off.height = asset.h;
+    const c = off.getContext('2d');
+    const img = c.createImageData(asset.w, asset.h);
+    for(let i=0;i<asset.w*asset.h;i++){
+      const idx = asset.pixels[i];
+      if(transparent && idx===0){ img.data[i*4+3]=0; continue; }
+      const col = palette[idx] || '#ff00ff';
+      const [r,g,b] = cssColorToRGB(col);
+      img.data[i*4]=r; img.data[i*4+1]=g; img.data[i*4+2]=b; img.data[i*4+3]=255;
+    }
+    c.putImageData(img,0,0);
+    return off;
+  }
+  spawnEntity(typeId){
+    const type = this.cart.entityTypes[typeId];
+    const propCount = 8 + type.extFieldCount;
+    const e = { id:this.nextId++, active:true, typeId, props:new Array(propCount).fill(0) };
+    e.props[4] = typeId;
+    e.props[7] = e.id;
+    this.entities.push(e);
+    return e;
+  }
+  runGlobalHook(name, extra){
+    const bc = this.cart.hooks[name];
+    const ctx = Object.assign({}, this.ctxBase, {self:null,a:null,b:null,input:this.input}, extra);
+    return runHook(bc, ctx);
+  }
+  runEntityHook(name, entity){
+    const bc = this.cart.hooks[name];
+    const ctx = Object.assign({}, this.ctxBase, {self:entity,a:null,b:null,input:this.input});
+    return runHook(bc, ctx);
+  }
+  runCollideHook(a,b){
+    const bc = this.cart.hooks['on_collide'];
+    const ctx = Object.assign({}, this.ctxBase, {self:null,a,b,input:this.input});
+    return runHook(bc, ctx);
+  }
+  getTileAt(x,y){
+    if(!this.track) return -1;
+    const tx = Math.floor(x/8), ty = Math.floor(y/8);
+    if(ty<0||ty>=this.track.grid.length||tx<0||tx>=this.track.grid[0].length) return TILE_GRASS;
+    return this.track.grid[ty][tx];
+  }
+  getBox(e){
+    const type = this.cart.entityTypes[e.typeId];
+    if(type.renderKind === 1){ // tile column
+      const extent = Math.max(0, Math.floor(e.props[8]));
+      return {x0:e.props[0], y0:e.props[1], x1:e.props[0]+8, y1:e.props[1]+extent*8};
+    }
+    const w = type.collisionW, h = type.collisionH;
+    return {x0:e.props[0]-w/2, y0:e.props[1]-h/2, x1:e.props[0]+w/2, y1:e.props[1]+h/2};
+  }
+  overlap(a,b){
+    const A=this.getBox(a), B=this.getBox(b);
+    return A.x0<B.x1 && A.x1>B.x0 && A.y0<B.y1 && A.y1>B.y0;
+  }
+  playSound(id){
+    try{
+      if(!this._actx) this._actx = new (window.AudioContext||window.webkitAudioContext)();
+      const ctx = this._actx;
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 220 + id*90;
+      o.type = 'square';
+      g.gain.value = 0.05;
+      o.connect(g); g.connect(ctx.destination);
+      o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
+      o.stop(ctx.currentTime+0.15);
+    }catch(e){}
+  }
+  step(){
+    if(this.cartFault) return;
+    this.runGlobalHook('on_input', {});
+    this.runGlobalHook('on_frame', {});
+    for(const e of this.entities.slice()){ if(e.active) this.runEntityHook('on_tick', e); }
+    this.entities = this.entities.filter(e=>e.active);
+    for(let i=0;i<this.entities.length;i++){
+      for(let j=i+1;j<this.entities.length;j++){
+        if(this.overlap(this.entities[i], this.entities[j])){
+          this.runCollideHook(this.entities[i], this.entities[j]);
+        }
+      }
+    }
+    this.entities = this.entities.filter(e=>e.active);
+  }
+}
+function cssColorToRGB(col){
+  if(col.startsWith('#')){
+    const n = parseInt(col.slice(1),16);
+    return [(n>>16)&255,(n>>8)&255,n&255];
+  }
+  // hsl(h,s%,l%) -> use canvas to resolve
+  const el = document.createElement('canvas').getContext('2d');
+  el.fillStyle = col;
+  const resolved = el.fillStyle; // becomes #rrggbb
+  const n = parseInt(resolved.slice(1),16);
+  return [(n>>16)&255,(n>>8)&255,n&255];
+}
+
+/* ============================================================
+   8. Cart authoring — Flappy Bird (see url-console/examples/flappy-bird.md)
+   ============================================================ */
+const FLAPPY_CONST_NAMES = {
+  GRAVITY:0, FLAP_IMPULSE:1, SCROLL_SPEED:2, GAP_SIZE:3, GAP_MIN_Y:4, GAP_MAX_Y:5,
+  SPAWN_PERIOD:6, SCREEN_H:7, SCREEN_W:8, BIRD_START_X:9, BIRD_START_Y:10, GROUND_MARGIN:11,
+};
+const FLAPPY_GLOBAL_NAMES = { g_player:0, g_dead:1, g_score:2, g_scratch:3, g_spawn_timer:4, g_gap:5 };
+const FLAPPY_SYM = {constants:FLAPPY_CONST_NAMES, globals:FLAPPY_GLOBAL_NAMES};
+
+const FLAPPY_HOOKS_SRC = {
+  on_init: `
+    SPAWN 0
+    STOREG g_player
+    PUSHC BIRD_START_X
+    STOREE g_player 0
+    PUSHC BIRD_START_Y
+    STOREE g_player 1
+    PUSHI 0
+    STOREG g_dead
+    PUSHI 0
+    STOREG g_score
+    PUSHC SPAWN_PERIOD
+    STOREG g_spawn_timer
+    HALT
+  `,
+  on_input: `
+    LOADG g_dead
+    JNZ done
+    LOAD_INPUT
+    TESTBIT 4
+    JZ done
+    PUSHC FLAP_IMPULSE
+    STOREE g_player 3
+    done:
+    HALT
+  `,
+  on_frame: `
+    LOADG g_dead
+    JNZ done
+    LOADG g_spawn_timer
+    PUSHI 1
+    SUB
+    DUP
+    STOREG g_spawn_timer
+    JNZ done
+    PUSHC SPAWN_PERIOD
+    STOREG g_spawn_timer
+    PUSHC GAP_MIN_Y
+    PUSHC GAP_MAX_Y
+    RAND_RANGE
+    STOREG g_gap
+    SPAWN 1
+    STOREG g_scratch
+    PUSHC SCREEN_W
+    STOREE g_scratch 0
+    PUSHI 0
+    STOREE g_scratch 1
+    LOADG g_gap
+    PUSHI 8
+    DIV
+    STOREE g_scratch 8
+    PUSHI 0
+    STOREE g_scratch 9
+    PUSHI 1
+    STOREE g_scratch 10
+    SPAWN 1
+    STOREG g_scratch
+    PUSHC SCREEN_W
+    STOREE g_scratch 0
+    LOADG g_gap
+    PUSHC GAP_SIZE
+    ADD
+    STOREE g_scratch 1
+    PUSHC SCREEN_H
+    LOADG g_gap
+    PUSHC GAP_SIZE
+    ADD
+    SUB
+    PUSHI 8
+    DIV
+    STOREE g_scratch 8
+    PUSHI 0
+    STOREE g_scratch 9
+    PUSHI 0
+    STOREE g_scratch 10
+    done:
+    HALT
+  `,
+  on_tick: `
+    LOAD_SELF 4
+    PUSHI 1
+    CMPEQ
+    JNZ tick_pipe
+    LOAD_SELF 3
+    PUSHC GRAVITY
+    ADD
+    STORE_SELF 3
+    LOAD_SELF 1
+    LOAD_SELF 3
+    ADD
+    STORE_SELF 1
+    LOAD_SELF 1
+    PUSHI 0
+    CMPLT
+    LOAD_SELF 1
+    PUSHC SCREEN_H
+    PUSHC GROUND_MARGIN
+    SUB
+    CMPGT
+    OR
+    JZ tick_end
+    PUSHI 1
+    STOREG g_dead
+    JMP tick_end
+    tick_pipe:
+    LOADG g_dead
+    JNZ tick_end
+    LOAD_SELF 0
+    PUSHC SCROLL_SPEED
+    SUB
+    STORE_SELF 0
+    LOAD_SELF 0
+    PUSHI -16
+    CMPLT
+    JZ check_score
+    KILL_SELF
+    JMP tick_end
+    check_score:
+    LOAD_SELF 9
+    JNZ tick_end
+    LOAD_SELF 0
+    LOADE g_player 0
+    CMPLT
+    JZ tick_end
+    PUSHI 1
+    STORE_SELF 9
+    LOADG g_score
+    PUSHI 1
+    ADD
+    STOREG g_score
+    tick_end:
+    HALT
+  `,
+  on_collide: `
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    AND
+    JNZ crash
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ crash
+    JMP done
+    crash:
+    PUSHI 1
+    STOREG g_dead
+    done:
+    HALT
+  `,
+};
+
+function hexRowsToPixels(rows){
+  const px = [];
+  for(const row of rows) for(const ch of row) px.push(parseInt(ch,16));
+  return px;
+}
+
+function buildFlappyCart(){
+  const birdPixels = hexRowsToPixels([
+    '00000000','00111000','01222110','12222211',
+    '12222211','01222213','00111100','00000000',
+  ]);
+  const pipeBody = hexRowsToPixels([
+    '44444444','45555554','45555554','45566554',
+    '45555554','45555554','45555554','44444444',
+  ]);
+  const pipeCap = hexRowsToPixels([
+    '44444444','46666664','46666664','45555554',
+    '45555554','45555554','45555554','44444444',
+  ]);
+  const cart = {
+    formatVersion: 1,
+    cartType: 63,
+    paletteMode: 0,
+    paletteParams: [0,0,0,0,0,0,0,0],
+    rngSeed: 42,
+    modeFlags: 0,
+    screenW: 160,
+    screenH: 220,
+    constants: [0.35, -3.2, 2.0, 34, 16, 130, 70, 220, 160, 40, 90, 16],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0},
+      {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
+    ],
+    sprites: [ {w:8,h:8,pixels:birdPixels} ],
+    tiles: [ {w:8,h:8,pixels:pipeBody}, {w:8,h:8,pixels:pipeCap} ],
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = FLAPPY_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), FLAPPY_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+/* ============================================================
+   9. Cart authoring — Race Car (see url-console/examples/race-car.md)
+   ============================================================ */
+const RACER_CONST_NAMES = {
+  ACCEL:0, TURN_RATE:1, FRICTION_ROAD:2, FRICTION_RUMBLE:3, FRICTION_GRASS:4,
+  CHECKPOINT_RADIUS:5, TOTAL_LAPS:6, AI_TURN_GAIN:7, PARTICLE_TTL:8, NUM_CHECKPOINTS:9,
+  START_X:10, START_Y:11, BUMP_MIX:12,
+};
+const RACER_GLOBAL_NAMES = {
+  g_car_player:0, g_car_ai1:1, g_car_ai2:2, g_scratch:3, g_finish_counter:4,
+  g_race_over:5, g_cpx:6, g_cpy:7, g_friction:8, g_scratch2:9,
+};
+const RACER_SYM = {constants:RACER_CONST_NAMES, globals:RACER_GLOBAL_NAMES};
+
+function racerInitCarBlock(handleName, xExpr, yExpr){
+  return `
+    SPAWN 0
+    STOREG ${handleName}
+    ${xExpr}
+    STOREE ${handleName} 0
+    ${yExpr}
+    STOREE ${handleName} 1
+    PUSHI 0
+    STOREE ${handleName} 8
+    PUSHI 0
+    STOREE ${handleName} 9
+    PUSHI 0
+    STOREE ${handleName} 10
+    PUSHI 0
+    STOREE ${handleName} 11
+  `;
+}
+
+const RACER_HOOKS_SRC = {
+  on_init: `
+    ${racerInitCarBlock('g_car_player', 'PUSHC START_X', 'PUSHC START_Y')}
+    ${racerInitCarBlock('g_car_ai1', 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -10\nADD')}
+    ${racerInitCarBlock('g_car_ai2', 'PUSHC START_X', 'PUSHC START_Y\nPUSHI 10\nADD')}
+    PUSHI 0
+    STOREG g_finish_counter
+    PUSHI 0
+    STOREG g_race_over
+    HALT
+  `,
+  on_input: `
+    LOADG g_race_over
+    JNZ done
+    LOAD_INPUT
+    TESTBIT 0
+    JZ chkright
+    LOADE g_car_player 8
+    PUSHC TURN_RATE
+    SUB
+    STOREE g_car_player 8
+    chkright:
+    LOAD_INPUT
+    TESTBIT 1
+    JZ chkaccel
+    LOADE g_car_player 8
+    PUSHC TURN_RATE
+    ADD
+    STOREE g_car_player 8
+    chkaccel:
+    LOAD_INPUT
+    TESTBIT 2
+    JZ done
+    LOADE g_car_player 8
+    COS
+    PUSHC ACCEL
+    MUL
+    LOADE g_car_player 2
+    ADD
+    STOREE g_car_player 2
+    LOADE g_car_player 8
+    SIN
+    PUSHC ACCEL
+    MUL
+    LOADE g_car_player 3
+    ADD
+    STOREE g_car_player 3
+    done:
+    HALT
+  `,
+  on_frame: `
+    HALT
+  `,
+  on_tick: `
+    LOAD_SELF 4
+    PUSHI 1
+    CMPEQ
+    JNZ tick_particle
+    LOAD_SELF 7
+    LOADG g_car_player
+    CMPEQ
+    JNZ skip_ai
+    LOAD_SELF 9
+    GET_CHECKPOINT
+    STOREG g_cpy
+    STOREG g_cpx
+    LOADG g_cpx
+    LOAD_SELF 0
+    SUB
+    LOADG g_cpy
+    LOAD_SELF 1
+    SUB
+    ATAN2
+    LOAD_SELF 8
+    SUB
+    NORM_ANGLE
+    PUSHC TURN_RATE
+    PUSHC AI_TURN_GAIN
+    MUL
+    CLAMP_ABS
+    LOAD_SELF 8
+    ADD
+    STORE_SELF 8
+    LOAD_SELF 8
+    COS
+    PUSHC ACCEL
+    MUL
+    LOAD_SELF 2
+    ADD
+    STORE_SELF 2
+    LOAD_SELF 8
+    SIN
+    PUSHC ACCEL
+    MUL
+    LOAD_SELF 3
+    ADD
+    STORE_SELF 3
+    skip_ai:
+    LOAD_SELF 0
+    LOAD_SELF 2
+    ADD
+    STORE_SELF 0
+    LOAD_SELF 1
+    LOAD_SELF 3
+    ADD
+    STORE_SELF 1
+    LOAD_SELF 0
+    LOAD_SELF 1
+    GETTILE
+    TILE_SURFACE
+    STOREG g_scratch
+    LOADG g_scratch
+    PUSHI 2
+    CMPEQ
+    JZ chk_rumble2
+    PUSHC FRICTION_ROAD
+    STOREG g_friction
+    JMP fric_done2
+    chk_rumble2:
+    LOADG g_scratch
+    PUSHI 3
+    CMPEQ
+    JZ is_grass2
+    PUSHC FRICTION_RUMBLE
+    STOREG g_friction
+    JMP fric_done2
+    is_grass2:
+    PUSHC FRICTION_GRASS
+    STOREG g_friction
+    fric_done2:
+    LOAD_SELF 2
+    LOAD_SELF 2
+    LOADG g_friction
+    MUL
+    SUB
+    STORE_SELF 2
+    LOAD_SELF 3
+    LOAD_SELF 3
+    LOADG g_friction
+    MUL
+    SUB
+    STORE_SELF 3
+    LOAD_SELF 9
+    GET_CHECKPOINT
+    STOREG g_cpy
+    STOREG g_cpx
+    LOAD_SELF 0
+    LOAD_SELF 1
+    LOADG g_cpx
+    LOADG g_cpy
+    DIST
+    PUSHC CHECKPOINT_RADIUS
+    CMPLT
+    JZ tick_end2
+    LOAD_SELF 9
+    PUSHI 1
+    ADD
+    PUSHC NUM_CHECKPOINTS
+    MOD
+    STORE_SELF 9
+    LOAD_SELF 9
+    JNZ tick_end2
+    LOAD_SELF 10
+    PUSHI 1
+    ADD
+    STORE_SELF 10
+    LOAD_SELF 10
+    PUSHC TOTAL_LAPS
+    CMPLT
+    JNZ tick_end2
+    LOAD_SELF 11
+    JNZ tick_end2
+    LOADG g_finish_counter
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_finish_counter
+    STORE_SELF 11
+    JMP tick_end2
+    tick_particle:
+    LOAD_SELF 8
+    PUSHI 1
+    SUB
+    DUP
+    STORE_SELF 8
+    JNZ tick_end2
+    KILL_SELF
+    tick_end2:
+    HALT
+  `,
+  on_collide: `
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JZ done3
+    LOAD_A 2
+    LOAD_B 2
+    PUSHC BUMP_MIX
+    LERP
+    STOREG g_scratch
+    LOAD_B 2
+    LOAD_A 2
+    PUSHC BUMP_MIX
+    LERP
+    STOREG g_scratch2
+    LOADG g_scratch
+    STORE_A 2
+    LOADG g_scratch2
+    STORE_B 2
+    SPAWN 1
+    STOREG g_scratch
+    LOAD_A 0
+    STOREE g_scratch 0
+    LOAD_A 1
+    STOREE g_scratch 1
+    PUSHC PARTICLE_TTL
+    STOREE g_scratch 8
+    done3:
+    HALT
+  `,
+};
+
+function buildRacerCart(){
+  const carPixels = hexRowsToPixels([
+    '00888800','08dddd80','8dddddd8','8dd88dd8',
+    '8dddddd8','8dddddd8','08dddd80','00888800',
+  ]);
+  const particlePixels = hexRowsToPixels(['0110','1111','1111','0110']);
+  const grassPixels = hexRowsToPixels(new Array(8).fill('11111111'));
+  const roadPixels = hexRowsToPixels([
+    '33333333','32222223','32222223','32222223',
+    '32222223','32222223','32222223','33333333',
+  ]);
+  const rumblePixels = hexRowsToPixels([
+    '44444444','44444444','55555555','55555555',
+    '44444444','44444444','55555555','55555555',
+  ]);
+  const startPixels = hexRowsToPixels([
+    '67676767','76767676','67676767','76767676',
+    '67676767','76767676','67676767','76767676',
+  ]);
+
+  const trackWidth = 5, segLen = 5, startGX = 8, startGY = 10, startDir = 0, gridW = 40, gridH = 28;
+  const tokens = [
+    TRACK_TOKENS.START_FINISH,
+    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90,
+    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90,
+    TRACK_TOKENS.CHECKPOINT,
+    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90,
+    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90,
+  ];
+  const startX = (startGX+0.5)*8, startY = (startGY+0.5)*8;
+
+  const cart = {
+    formatVersion: 1,
+    cartType: 2,
+    paletteMode: 1,
+    paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],
+    rngSeed: 17,
+    modeFlags: 0,
+    screenW: gridW*8,
+    screenH: gridH*8,
+    constants: [0.15, 4, 0.03, 0.08, 0.2, 14, 3, 0.6, 10, 2, startX, startY, 0.3],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:6, collisionH:6, extFieldCount:4},
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:3, collisionH:3, extFieldCount:1},
+    ],
+    sprites: [ {w:8,h:8,pixels:carPixels}, {w:4,h:4,pixels:particlePixels} ],
+    tiles: [
+      {w:8,h:8,pixels:grassPixels}, {w:8,h:8,pixels:roadPixels},
+      {w:8,h:8,pixels:rumblePixels}, {w:8,h:8,pixels:startPixels},
+    ],
+    track: {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH},
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = RACER_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), RACER_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+/* ============================================================
+   10. Build carts, encode, round-trip check
+   ============================================================ */
+const CARTS = {};
+function registerCart(key, title, controlsText, genre, accentIdx, builder){
+  const authored = builder();
+  const encoded = encodeCart(authored);
+  const payload = b64urlEncode(encoded);
+  const decoded = decodeCart(encoded);
+  const palette = generatePalette(decoded);
+  const accent = palette[accentIdx] ? cssColorToHex(palette[accentIdx]) : '#e0a030';
+  CARTS[key] = { title, controlsText, genre, accent, payload, byteLen: encoded.length, charLen: payload.length, decoded };
+}
+function cssColorToHex(col){
+  const [r,g,b] = cssColorToRGB(col);
+  return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
+}
+registerCart('flappy', 'Flappy Bird', 'Space / Up = flap', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
+registerCart('racer', 'Race Car', 'Left/Right = steer, Up = accelerate', 'cart_type 2 · racer/golf', 13, buildRacerCart);
+
+/* ============================================================
+   11. UI wiring — menu, game loop, HUD, input
+   ============================================================ */
+const canvas = document.getElementById('screen');
+const ctx2d = canvas.getContext('2d');
+let world = null, currentKey = null, running = false, keysDown = new Set();
+const SCALE = 3;
+
+function buttonMaskFromKeys(){
+  let m = 0;
+  if(keysDown.has('ArrowLeft')) m |= 1;
+  if(keysDown.has('ArrowRight')) m |= 2;
+  if(keysDown.has('ArrowUp')) m |= 4;
+  if(keysDown.has('ArrowDown')) m |= 8;
+  if(keysDown.has(' ')) m |= 16;
+  return m;
+}
+
+function renderMenu(){
+  const list = document.getElementById('cartList');
+  list.innerHTML = '';
+  for(const key of Object.keys(CARTS)){
+    const c = CARTS[key];
+    const div = document.createElement('div');
+    div.className = 'cart';
+    div.style.setProperty('--cart-accent', c.accent);
+    div.innerHTML = `<div class="cart-stripe"></div>
+      <div class="cart-body">
+        <p class="eyebrow"><b>${c.genre}</b></p>
+        <h2>${c.title}</h2>
+        <a class="playbtn" href="#${c.payload}">&#9654; PLAY</a>
+        <dl class="spec">
+          <dt>raw size</dt><dd>${c.byteLen} bytes</dd>
+          <dt>fragment</dt><dd>${c.charLen} chars, uncompressed</dd>
+        </dl>
+        <details class="payload">
+          <summary>fragment payload</summary>
+          <code>#${c.payload}</code>
+        </details>
+      </div>`;
+    list.appendChild(div);
+  }
+}
+
+function findCartByHash(hash){
+  for(const key of Object.keys(CARTS)) if(CARTS[key].payload === hash) return key;
+  return null;
+}
+
+function startGame(key){
+  currentKey = key;
+  const cartInfo = CARTS[key];
+  document.getElementById('menu').style.display = 'none';
+  document.getElementById('gameWrap').style.display = 'block';
+  document.getElementById('controlsText').textContent = cartInfo.controlsText;
+  document.getElementById('faultBanner').style.display = 'none';
+  canvas.width = cartInfo.decoded.screenW;
+  canvas.height = cartInfo.decoded.screenH;
+  canvas.style.width = (cartInfo.decoded.screenW*SCALE)+'px';
+  canvas.style.height = (cartInfo.decoded.screenH*SCALE)+'px';
+  // decode a FRESH copy straight from the URL bytes so the running game
+  // is provably reconstructed from the fragment, not the authoring object.
+  world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
+  running = true;
+}
+
+function backToMenu(){
+  running = false;
+  world = null;
+  currentKey = null;
+  document.getElementById('gameWrap').style.display = 'none';
+  document.getElementById('menu').style.display = 'block';
+  history.replaceState(null, '', location.pathname + location.search);
+}
+
+function drawEntity(e){
+  const type = world.cart.entityTypes[e.typeId];
+  if(type.renderKind === 1){ // tile column
+    const extent = Math.max(0, Math.floor(e.props[8]));
+    const capAtTop = e.props[10] === 0;
+    const bodyCanvas = world.tileCanvases[type.assetIndex];
+    const capCanvas = world.tileCanvases[type.assetIndex+1];
+    for(let row=0; row<extent; row++){
+      const isCapRow = capAtTop ? row===0 : row===extent-1;
+      ctx2d.drawImage(isCapRow?capCanvas:bodyCanvas, e.props[0], e.props[1]+row*8);
+    }
+  } else {
+    const spr = world.spriteCanvases[type.assetIndex];
+    if(type.rotateFlag){
+      ctx2d.save();
+      ctx2d.translate(e.props[0], e.props[1]);
+      ctx2d.rotate(e.props[8]*Math.PI/180);
+      ctx2d.drawImage(spr, -spr.width/2, -spr.height/2);
+      ctx2d.restore();
+    } else {
+      ctx2d.drawImage(spr, e.props[0]-spr.width/2, e.props[1]-spr.height/2);
+    }
+  }
+}
+
+function render(){
+  const cart = world.cart;
+  if(cart.cartType === 2){
+    for(let y=0;y<world.track.grid.length;y++){
+      for(let x=0;x<world.track.grid[0].length;x++){
+        const tid = world.track.grid[y][x];
+        ctx2d.drawImage(world.tileCanvases[tid-1], x*8, y*8);
+      }
+    }
+  } else {
+    ctx2d.fillStyle = '#8ecae6';
+    ctx2d.fillRect(0,0,canvas.width,canvas.height);
+    ctx2d.fillStyle = '#4a7c3a';
+    ctx2d.fillRect(0, canvas.height-16, canvas.width, 16);
+  }
+  for(const e of world.entities) drawEntity(e);
+
+  const hud = document.getElementById('hud');
+  if(cart.cartType === 63){
+    hud.textContent = 'Score: ' + world.globals[FLAPPY_GLOBAL_NAMES.g_score] +
+      (world.globals[FLAPPY_GLOBAL_NAMES.g_dead] ? '  — crashed! (refresh link to retry)' : '');
+  } else if(cart.cartType === 2){
+    const player = world.entities.find(e=>e.id===world.globals[RACER_GLOBAL_NAMES.g_car_player]);
+    const lap = player ? Math.min(player.props[10]+1, 3) : 1;
+    const done = world.globals[RACER_GLOBAL_NAMES.g_race_over];
+    hud.textContent = 'Lap ' + lap + ' / 3' + (player && player.props[11] ? ('  — finished #' + player.props[11]) : '') +
+      (done ? '  — race over!' : '');
+  }
+  document.getElementById('faultBanner').style.display = world.cartFault ? 'block' : 'none';
+}
+
+let lastStep = 0;
+const STEP_MS = 1000/30;
+function loop(ts){
+  if(running && world){
+    world.input = buttonMaskFromKeys();
+    if(ts - lastStep >= STEP_MS){
+      lastStep = ts;
+      world.step();
+    }
+    render();
+  }
+  requestAnimationFrame(loop);
+}
+
+window.addEventListener('keydown', e=>{
+  if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown',' '].includes(e.key)) e.preventDefault();
+  keysDown.add(e.key);
+});
+window.addEventListener('keyup', e=>{ keysDown.delete(e.key); });
+document.getElementById('backBtn').addEventListener('click', backToMenu);
+window.addEventListener('hashchange', boot);
+
+function boot(){
+  const hash = location.hash.replace(/^#/, '');
+  if(hash){
+    const key = findCartByHash(hash);
+    if(key){ startGame(key); return; }
+  }
+  backToMenu();
+}
+
+renderMenu();
+boot();
+requestAnimationFrame(loop);
+
+window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world };
+</script>
