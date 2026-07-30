@@ -96,9 +96,9 @@ human without a decoder.
 
 ## 5. Cart types (genre templates)
 
-> **Superseded by §15.** This section is kept for historical framing —
+> **Superseded by §14.** This section is kept for historical framing —
 > it's the original guess, and the "what body schema does `cart_type`
-> unlock" idea drove real design work. But a runtime dogfood (§15) found
+> unlock" idea drove real design work. But a runtime dogfood (§14) found
 > the guess encouraged exactly the wrong instinct (branch behavior on
 > `cart_type`) and replaced it: `cart_type` is now advisory metadata only,
 > and what used to be "the racer template's body" is a composable **map
@@ -232,6 +232,18 @@ VM shape:
   a series expansion in a tiny fixed-point VM is a bad time. The table
   lives once in the runtime, so it's free per-cart no matter how many
   carts use it.
+- `SETTILE(x, y, tile_id)` — the write counterpart `GETTILE` never got.
+  An honest gap, not a deliberate omission: nothing needed runtime tile
+  mutation until the roguelike dogfood's gold pickups (§15) did.
+- `MOVE_SOLID` — given `self`'s pos/vel/collision box, resolves movement
+  against the tilemap one axis at a time using `TILE_SURFACE`'s
+  solid/non-solid distinction, snapping position and zeroing blocked
+  velocity components. The racer's tiles are *soft* (surface only
+  changes a friction constant); a platformer's are *hard* (must actually
+  block movement), and hand-rolling axis-separated swept-AABB-vs-tile
+  collision per cart is exactly the "expensive to re-derive, cheap to
+  ship once" case that justified `SIN`/`COS`/`ATAN2` as opcodes instead
+  of bytecode — see the platformer dogfood, §15.
 - A small **constant pool**: a handful (e.g. 8) of named fixed-point
   values declared in the header and referenced from bytecode by index
   (`PUSHC n`) instead of re-encoding literals inline. Cheaper once a
@@ -458,7 +470,7 @@ New open questions this run raised, beyond what Flappy already left:
   256-entry sin/cos/atan2 set start to matter next to everything else
   the runtime has to ship?
 
-## 15. Runtime dogfood: from genre-switch to composable generators
+## 14. Runtime dogfood: from genre-switch to composable generators
 
 The V0 runtime (`v0/urlcade.html`) itself became a dogfood subject once it
 existed. Playing both carts side by side turned up a real regression: the
@@ -498,7 +510,8 @@ rendering (`render_kind` is a cart-assigned enum, not a host special case)
 | **Backdrop** | fill color index + optional ground-strip height/color, both palette indices | fills the frame solid whenever no map generator has produced a tilemap; a universal default, not genre-specific at all |
 | **HUD** | an ordered list of declared readout lines, each a `(label, value-source, ±delta, optional "/ constant" suffix, clamp)` tuple, or a flag line shown only while its source is non-zero | renders "label: value" (or the flag text) for each line — the same interpreter for a reflex game's score or a racer's lap counter |
 | **Input layout** | a bitmask of which of the 5 fixed button bits (`left/right/up/down/action`) the cart actually reads, plus a touch-*shape* id (none / single-button / steer+action / full d-pad+action) and a short label per active button | builds the on-screen touch controls and the keyboard-hint text from the same declaration — a UI *shape*, not a per-title layout |
-| **Map** | a `map_generator` id (`0` = none, `1` = track-piece grammar, future ids reserved) + that generator's own parameter block | populates the shared tilemap the generic renderer and `GETTILE` already know how to read |
+| **Map** | a `map_generator` id (`0` = none, `1` = track-piece grammar, `2` = cellular-automata caves, `3` = linear platform grammar — see §15 — future ids reserved) + that generator's own parameter block | populates the shared tilemap the generic renderer and `GETTILE`/`SETTILE` already know how to read |
+| **Camera** | a global handle for the entity to follow + clamp bounds | offsets all tile/entity drawing by the computed camera position — added by the platformer dogfood, §15; the first genuinely *new* engine surface this table has needed since the pivot, versus a data-driven version of something already built |
 | **Entity types** (§7.1) | per-type `render_kind` + declared extension fields | unchanged, already generic |
 
 **The principle this settles**, answering the standing "genre modality"
@@ -534,6 +547,74 @@ New open questions this raised, folded into §16 below:
   all, or does it invite exactly the regression this section just
   documented — a future implementation "just checking cart_type" once,
   for something that feels harmless?
+
+## 15. Three more dogfoods: roguelike, platformer, arena shooter
+
+Full write-up at `examples/three-more-carts.md`. Design-level only —
+none of the three are wired up as playable carts in `v0/urlcade.html`
+(unlike Flappy Bird and the race car); that's a deliberate scope cut,
+not an oversight. The three were picked specifically to pressure-test
+what §14's composable-generator pivot left thin: a genuinely different
+**map generator** archetype, whether "generator" needs to keep growing
+new primitives or whether the existing ones already generalize, and one
+concrete new presentation concept.
+
+- **Roguelike (cave crawler)** validated a second map-generator
+  archetype — cellular-automata cave generation (`map_generator = 2`),
+  stochastic rather than the track grammar's deterministic
+  turtle-interpreted tokens — and found that grid-locked, move-one-tile-
+  per-press input needs **no new opcode**, just an edge-detection
+  authoring idiom (store last frame's `LOAD_INPUT` in a global, compare).
+  It did find one honest gap: nothing could mutate the tilemap at
+  runtime, so `SETTILE` (§7) fills in `GETTILE`'s missing write half.
+- **Platformer (run and jump)** found the first real gap since the
+  composable-generator pivot that isn't just "make existing behavior
+  data-driven": solid tiles that actually block movement (unlike the
+  racer's friction-only "soft" tiles) are expensive enough to hand-roll
+  per cart to justify a dedicated opcode, `MOVE_SOLID` (§7). It also
+  needed a **camera** — a level wider than one screen has no other way
+  to render — added as a fourth composable concept in §14's table,
+  genuinely new engine surface rather than a data-driven version of
+  something already built. Its map needs (open path, elevation changes)
+  don't fit the track grammar's closed-loop assumption, so a third map
+  generator id is proposed (`map_generator = 3`) — while flagging
+  plainly that #1 and #3 are structurally similar enough that they might
+  want to be one generator with a declared topology flag instead of two
+  near-duplicates; left open rather than guessed at from two data points.
+- **Arena shooter (wave survival)** found the opposite of a gap twice
+  over: wave-based enemy spawning is just Flappy's pipe-spawn countdown
+  idiom (§12) with two more globals, and projectiles are structurally
+  identical to the racer's collision particles. No "wave generator" or
+  "projectile" primitive earns its keep — confirmation, not a finding
+  that demanded a fix.
+
+**The ratio matters more than any single line item.** Three very
+different genres surfaced exactly two real primitive gaps
+(`SETTILE`, `MOVE_SOLID`), one real new composable concept (camera), and
+three separate confirmations that already-generic machinery (edge
+detection via existing opcodes, the countdown-spawn idiom, the entity
+system's genericity for projectiles, universal `hp` for damage) covered
+more ground than expected going in. That's evidence the composable-
+generator model (§14) is closer to done than to half-built — most of
+what a new genre needs turns out to already be there.
+
+New open questions this raised:
+
+- Are `map_generator` ids 1 (loop) and 3 (linear path, proposed) actually
+  one generator with a topology flag, not two? Two data points (racer,
+  platformer) isn't enough to decide confidently.
+- Fog of war (roguelike) has no answer yet — a per-tile visibility state,
+  and either a runtime-computed radius or cart-maintained visibility
+  bytecode. Deferred deliberately rather than resolved in haste.
+- `MOVE_SOLID` bundles a lot into one opcode (both axes, both directions,
+  position snap *and* velocity zeroing). Is that the right grain, or
+  should it decompose into smaller primitives a cart composes itself —
+  the same tension `GETTILE`+`TILE_SURFACE` resolved one way and this
+  resolves the other?
+- Camera is the first genuinely new composable concept added after the
+  §14 pivot. Is it the last one a 2D console needs, or should more
+  genres be dogfooded before assuming backdrop/HUD/input/map/camera is
+  a complete set?
 
 ## 16. Open questions
 

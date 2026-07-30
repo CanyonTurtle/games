@@ -39,7 +39,7 @@ and it's exercised on every play, not just asserted.
   (gravity, accel, friction, turn rate, spawn/particle timers) were
   rescaled to match, so gameplay pacing is the same as before — only the
   smoothness changed, not the speed.
-- **Composable generators, not a genre switch** (`DESIGN.md` §15): the
+- **Composable generators, not a genre switch** (`DESIGN.md` §14): the
   backdrop, HUD, and touch-control layout are each declared by the cart
   and interpreted generically by the runtime — nothing in `render()` or
   the touch-control builder branches on which cart, or even which
@@ -47,7 +47,29 @@ and it's exercised on every play, not just asserted.
   This replaced a real regression a first pass introduced (a touch-layout
   lookup table keyed by the cart's literal name, and HUD/backdrop code
   branching on `cart_type` then reaching into cart-specific global
-  indices) — see §15 for the postmortem.
+  indices) — see §14 for the postmortem.
+- **A WebGL renderer, with the original Canvas2D renderer kept as the
+  fallback.** Both backends draw from the exact same source: the
+  palette-built sprite/tile bitmaps (`buildBitmap`) are either blitted
+  directly (Canvas2D) or uploaded once as GL textures (WebGL) — no
+  duplicated pixel-building logic. The GL path samples with `NEAREST`
+  filtering and cuts out transparency via alpha-discard in the fragment
+  shader, so rotated sprites (the car) stay crisp at any heading —
+  `ctx.rotate()` + `drawImage()` in Canvas2D always anti-aliases a
+  rotated sprite's edges; there's no way to ask it not to. WebGL is
+  attempted first (`canvas.getContext('webgl2')`, falling back to
+  `'webgl'`); Canvas2D is used only if both fail, verified by forcing
+  that failure in a test rather than assuming the fallback path works.
+  A lost GL context is *not* recovered (would need swapping in a fresh
+  canvas element, since a canvas can't change context type once one's
+  been requested) — logged loudly rather than silently left blank.
+- **Edge-to-edge game screens.** The canvas is `position:absolute;
+  inset:0` with `object-fit:contain` — no bezel, border, or padding box
+  around it; it fills the viewport (letterboxed only as much as the
+  cart's own aspect ratio genuinely requires). The back button, HUD,
+  controls hint, and touch controls all became floating overlays with a
+  gradient scrim instead of occupying their own layout rows that used to
+  shrink the canvas to make room.
 
 ## What V0 cuts, on purpose, relative to `DESIGN.md`
 
@@ -92,6 +114,22 @@ Each one is a reasonable next step, not a design admission of defeat:
   track at once. Both sidestep needing a camera system.
 - **Two entity types per cart.** Enough to exercise the per-type
   extension-field mechanism, not an exhaustive catalog.
+
+## Three more dogfoods, design-level only
+
+`../examples/three-more-carts.md` sketches a roguelike, a platformer, and
+an arena shooter — chosen to pressure-test the composable-generator model
+(`DESIGN.md` §14) with a genuinely different map-generator archetype
+(cellular-automata caves) and to check whether "generator" needed to keep
+growing new primitives or whether the existing ones already generalized.
+None of the three are wired up as playable carts here, unlike Flappy Bird
+and the race car — a deliberate scope cut given the size of this pass
+(three new games plus the WebGL renderer plus the layout change was too
+much to also implement reliably in one go), not an oversight. Findings
+(two real primitive gaps — `SETTILE`, `MOVE_SOLID` — one real new
+composable concept — camera/viewport — and three confirmations that
+existing machinery already covered enough ground) are folded into
+`DESIGN.md` §15.
 
 ## Playing it
 

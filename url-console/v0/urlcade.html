@@ -85,37 +85,46 @@
   #menu > footer{margin-top:40px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
     padding-top:16px;}
 
+  /* Edge-to-edge: the canvas is the whole viewport (no frame/box/bezel
+     around it); everything else is a floating overlay with just enough
+     scrim to stay legible on top of whatever the cart is rendering. */
   #gameWrap{
-    display:none; flex-direction:column;
+    display:none;
     position:fixed; inset:0; overflow:hidden;
-    background:
-      repeating-linear-gradient(180deg, rgba(0,0,0,0) 0 2px, rgba(0,0,0,.06) 2px 4px),
-      var(--bg);
-    padding:calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) calc(10px + var(--safe-b)) calc(10px + var(--safe-l));
+    background:var(--bg);
   }
-  #gameWrap.active{display:flex;}
-  .topbar{flex:0 0 auto;display:flex;align-items:center;gap:10px;min-height:38px;}
-  #hud{flex:1;color:var(--ink-dim);font-size:12.5px;letter-spacing:.03em;text-align:center;
-    font-variant-numeric:tabular-nums;text-transform:uppercase;padding-right:74px;}
-  #backBtn{flex:0 0 auto;background:var(--bg-elevated);color:var(--ink);
-    border:1px solid var(--rule);padding:7px 12px;border-radius:3px;cursor:pointer;
-    font-family:var(--mono);font-size:12px;letter-spacing:.03em;z-index:2;
+  #gameWrap.active{display:block;}
+  #screen{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:contain; /* letterboxed on a mismatched aspect, never cropped or boxed */
+    image-rendering:pixelated; background:#0c0c0c;
+    touch-action:none; -webkit-user-select:none; user-select:none;
+  }
+
+  .topbar{position:absolute; top:0; left:0; right:0; z-index:3;
+    display:flex; align-items:center; gap:10px;
+    padding:calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) 20px calc(10px + var(--safe-l));
+    background:linear-gradient(to bottom, rgba(0,0,0,.5), transparent);
+    pointer-events:none;}
+  #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
+    text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;padding-right:74px;}
+  #backBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.6);color:#fff;
+    border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
+    font-family:var(--mono);font-size:12px;letter-spacing:.03em;backdrop-filter:blur(3px);
     touch-action:manipulation;}
   #backBtn:hover{border-color:var(--accent);color:var(--accent);}
 
-  .canvas-area{flex:1 1 auto;min-height:0;min-width:0;width:100%;max-width:640px;max-height:640px;
-    margin:6px auto;display:flex;align-items:center;justify-content:center;
-    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:6px;padding:8px;}
-  #screen{image-rendering:pixelated;background:#222;border-radius:2px;
-    touch-action:none;-webkit-user-select:none;user-select:none;}
+  #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
+    z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
+    text-shadow:0 1px 3px rgba(0,0,0,.7);}
+  .controls{position:absolute;left:0;right:0;bottom:calc(104px + var(--safe-b));z-index:2;
+    color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:11px;letter-spacing:.03em;
+    text-transform:uppercase;text-align:center;pointer-events:none;}
 
-  #faultBanner{display:none;color:#e05a4e;font-weight:700;font-size:12.5px;
-    letter-spacing:.03em;text-align:center;flex:0 0 auto;}
-  .controls{color:var(--ink-dim);font-size:11px;letter-spacing:.03em;margin:6px 0 2px;
-    text-transform:uppercase;text-align:center;flex:0 0 auto;}
-
-  .touch-controls{flex:0 0 auto;display:none;align-items:flex-end;justify-content:space-between;
-    gap:16px;padding:6px 4px calc(4px + var(--safe-b));min-height:88px;}
+  .touch-controls{position:absolute;left:0;right:0;bottom:0;z-index:3;
+    display:none;align-items:flex-end;justify-content:space-between;
+    gap:16px;padding:6px 4px calc(4px + var(--safe-b));min-height:88px;
+    background:linear-gradient(to top, rgba(0,0,0,.45), transparent);}
   .touch-controls.active{display:flex;}
   .touch-controls .side{display:flex;gap:10px;}
   .touch-btn{
@@ -373,7 +382,7 @@ const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
 // Button bit convention, fixed and universal (not genre- or cart-specific):
 // 1=left 2=right 4=up/primary 8=down/secondary 16=action. A cart declares
 // which of these it actually reads (inputActiveButtons) and which touch
-// *shape* fits it (inputTouchTemplate) — see DESIGN.md §15.
+// *shape* fits it (inputTouchTemplate) — see DESIGN.md §14.
 const TOUCH_TEMPLATE_NONE=0, TOUCH_TEMPLATE_SINGLE=1, TOUCH_TEMPLATE_STEER_ACTION=2, TOUCH_TEMPLATE_DPAD_ACTION=3;
 const BUTTON_BITS = [1,2,4,8,16];
 
@@ -385,7 +394,7 @@ function readString(r){ const n = r.u8(); let s=''; for(let i=0;i<n;i++) s += St
 function encodeCart(cart){
   const w = new ByteWriter();
   w.u8(cart.formatVersion);
-  w.u8(cart.cartType); // advisory/display metadata only — never a runtime dispatch key, see DESIGN.md §15
+  w.u8(cart.cartType); // advisory/display metadata only — never a runtime dispatch key, see DESIGN.md §14
   w.u8(cart.paletteMode);
   w.u8(cart.rngSeed);
   w.u8(cart.modeFlags);
@@ -437,7 +446,7 @@ function encodeCart(cart){
 
   // map generator: an id selecting which (if any) of the runtime's small
   // library of level generators populates the tilemap, decoupled from
-  // cart_type — see DESIGN.md §15. 0 = none (backdrop alone covers the frame).
+  // cart_type — see DESIGN.md §14. 0 = none (backdrop alone covers the frame).
   w.u8(cart.mapGenerator);
   if(cart.mapGenerator === 1){
     const track = cart.track;
@@ -598,6 +607,13 @@ class World {
     this.palette = generatePalette(cart);
     this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, this.palette, true));
     this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, this.palette, false));
+    // Same source canvases feed either renderer: Canvas2D blits them
+    // directly, WebGL uploads them as textures once here. No duplicated
+    // pixel-building logic between the two backends.
+    if(USE_GL){
+      this.glSpriteTextures = this.spriteCanvases.map(c => buildGLTexture(c));
+      this.glTileTextures = this.tileCanvases.map(c => buildGLTexture(c));
+    }
     this.track = null;
     if(cart.mapGenerator === 1){
       this.track = buildTrack(cart.track);
@@ -915,7 +931,7 @@ function buildFlappyCart(){
   ]);
   const cart = {
     formatVersion: 1,
-    cartType: 63, // advisory label only — see DESIGN.md §15
+    cartType: 63, // advisory label only — see DESIGN.md §14
     paletteMode: 0,
     paletteParams: [0,0,0,0,0,0,0,0],
     rngSeed: 42,
@@ -1258,7 +1274,7 @@ function buildRacerCart(){
 
   const cart = {
     formatVersion: 1,
-    cartType: 2, // advisory label only — see DESIGN.md §15
+    cartType: 2, // advisory label only — see DESIGN.md §14
     paletteMode: 1,
     paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],
     rngSeed: 17,
@@ -1340,7 +1356,157 @@ registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCar
    11. UI wiring — menu, game loop, HUD, input
    ============================================================ */
 const canvas = document.getElementById('screen');
-const ctx2d = canvas.getContext('2d');
+
+/* ============================================================
+   11a. GPU renderer (WebGL) — crisp pixel art, including under
+   rotation. Canvas2D's ctx.rotate() always anti-aliases a rotated
+   sprite's edges (the car); a fragment shader can sample its texture
+   with NEAREST filtering at any angle, so pixel art stays crisp no
+   matter the heading. Canvas2D remains the fallback renderer for any
+   browser/context WebGL isn't available in — unchanged from before,
+   see renderSceneCanvas/drawEntityCanvas below.
+   ============================================================ */
+let gl = null, ctx2d = null, USE_GL = false;
+let glProgram = null, glUniforms = {}, glQuadBuffer = null;
+
+function compileShader(type, src){
+  const sh = gl.createShader(type);
+  gl.shaderSource(sh, src);
+  gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh, gl.COMPILE_STATUS)){
+    console.warn('urlcade: GL shader compile failed', gl.getShaderInfoLog(sh));
+    gl.deleteShader(sh);
+    return null;
+  }
+  return sh;
+}
+
+function initGL(){
+  let g;
+  try{
+    g = canvas.getContext('webgl2', {antialias:false, alpha:false}) ||
+        canvas.getContext('webgl', {antialias:false, alpha:false});
+  }catch(e){ g = null; }
+  if(!g) return false;
+  gl = g;
+
+  const vs = compileShader(gl.VERTEX_SHADER, `
+    attribute vec2 aUnit;      // unit quad corner, (0,0)..(1,1)
+    uniform vec2 uScreenSize;  // cart's native pixel resolution
+    uniform vec4 uDst;         // x, y, w, h — top-left + size, pixel space
+    uniform float uRotation;   // radians, about the quad's own center
+    varying vec2 vUV;
+    void main(){
+      vec2 local = (aUnit - 0.5) * uDst.zw;
+      float c = cos(uRotation), s = sin(uRotation);
+      vec2 rotated = vec2(local.x*c - local.y*s, local.x*s + local.y*c);
+      vec2 center = uDst.xy + uDst.zw * 0.5;
+      vec2 pixelPos = center + rotated;
+      // pixel space is top-left origin, y-down (matches entity props);
+      // clip space is center origin, y-up — flip here, once, for everyone.
+      vec2 clip = vec2(
+        pixelPos.x / uScreenSize.x * 2.0 - 1.0,
+        1.0 - pixelPos.y / uScreenSize.y * 2.0
+      );
+      gl_Position = vec4(clip, 0.0, 1.0);
+      vUV = aUnit;
+    }
+  `);
+  const fs = compileShader(gl.FRAGMENT_SHADER, `
+    precision mediump float;
+    varying vec2 vUV;
+    uniform sampler2D uTex;
+    uniform vec4 uColor;
+    uniform float uUseTex; // 1 = sample uTex (sprites/tiles), 0 = flat uColor (backdrop fills)
+    void main(){
+      if(uUseTex > 0.5){
+        vec4 texel = texture2D(uTex, vUV);
+        if(texel.a < 0.02) discard; // sprite transparency, see buildBitmap()
+        gl_FragColor = texel;
+      } else {
+        gl_FragColor = uColor;
+      }
+    }
+  `);
+  if(!vs || !fs) return false;
+  const prog = gl.createProgram();
+  gl.attachShader(prog, vs);
+  gl.attachShader(prog, fs);
+  gl.linkProgram(prog);
+  if(!gl.getProgramParameter(prog, gl.LINK_STATUS)){
+    console.warn('urlcade: GL program link failed', gl.getProgramInfoLog(prog));
+    return false;
+  }
+  gl.useProgram(prog);
+  glProgram = prog;
+
+  glQuadBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, glQuadBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0,0, 1,0, 0,1, 1,1]), gl.STATIC_DRAW);
+  const aUnit = gl.getAttribLocation(prog, 'aUnit');
+  gl.enableVertexAttribArray(aUnit);
+  gl.vertexAttribPointer(aUnit, 2, gl.FLOAT, false, 0, 0);
+
+  glUniforms = {
+    screenSize: gl.getUniformLocation(prog, 'uScreenSize'),
+    dst: gl.getUniformLocation(prog, 'uDst'),
+    rotation: gl.getUniformLocation(prog, 'uRotation'),
+    color: gl.getUniformLocation(prog, 'uColor'),
+    useTex: gl.getUniformLocation(prog, 'uUseTex'),
+    tex: gl.getUniformLocation(prog, 'uTex'),
+  };
+
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+  gl.disable(gl.DEPTH_TEST);
+
+  // V0 scope cut, noted in the README: a lost GL context is not recovered
+  // (that needs swapping in a fresh canvas element, since a canvas can't
+  // switch context type once one's been requested). It's flagged loudly
+  // rather than silently left blank.
+  canvas.addEventListener('webglcontextlost', e => {
+    e.preventDefault();
+    console.warn('urlcade: WebGL context lost — this session will not recover it (V0 scope cut, see README); reload to resume.');
+  });
+
+  return true;
+}
+
+function buildGLTexture(sourceCanvas){
+  const tex = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, sourceCanvas);
+  return tex;
+}
+function glDrawTexturedQuad(tex, x, y, w, h, rotationRad){
+  gl.uniform4f(glUniforms.dst, x, y, w, h);
+  gl.uniform1f(glUniforms.rotation, rotationRad || 0);
+  gl.uniform1f(glUniforms.useTex, 1);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, tex);
+  gl.uniform1i(glUniforms.tex, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function glDrawColorQuad(x, y, w, h, r, g, b, a){
+  gl.uniform4f(glUniforms.dst, x, y, w, h);
+  gl.uniform1f(glUniforms.rotation, 0);
+  gl.uniform1f(glUniforms.useTex, 0);
+  gl.uniform4f(glUniforms.color, r, g, b, a===undefined?1:a);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+}
+function disposeGLTextures(w){
+  if(!w || !gl) return;
+  for(const t of w.glSpriteTextures || []) gl.deleteTexture(t);
+  for(const t of w.glTileTextures || []) gl.deleteTexture(t);
+}
+
+USE_GL = initGL();
+if(!USE_GL){ ctx2d = canvas.getContext('2d'); }
+
 let world = null, currentKey = null, running = false, keysDown = new Set();
 let touchBits = new Set();
 
@@ -1359,7 +1525,7 @@ function buttonMaskFromKeys(){
    labeled by what the cart declares (inputTouchTemplate / inputActiveButtons
    / inputButtonLabels), never looked up by cart identity. Held-button
    semantics throughout (TESTBIT reads every frame, not edge-triggered, so
-   holding a touch button is exactly like holding a key) — see DESIGN.md §15. */
+   holding a touch button is exactly like holding a key) — see DESIGN.md §14. */
 function buildTouchControlsHTML(cart){
   const label = bit => (cart.inputButtonLabels[bit] || '').toUpperCase();
   if(cart.inputTouchTemplate === TOUCH_TEMPLATE_SINGLE){
@@ -1453,18 +1619,9 @@ function renderMenu(){
   }
 }
 
-const canvasArea = document.querySelector('.canvas-area');
-function fitCanvas(){
-  if(!world) return;
-  const pad = 16; // .canvas-area's own padding, 8px each side
-  const availW = canvasArea.clientWidth - pad;
-  const availH = canvasArea.clientHeight - pad;
-  const scale = Math.max(0.25, Math.min(availW / world.cart.screenW, availH / world.cart.screenH));
-  canvas.style.width = Math.floor(world.cart.screenW * scale) + 'px';
-  canvas.style.height = Math.floor(world.cart.screenH * scale) + 'px';
-}
-window.addEventListener('resize', fitCanvas);
-window.addEventListener('orientationchange', () => setTimeout(fitCanvas, 50));
+// Sizing is pure CSS now (#screen { position:absolute; inset:0; object-fit:
+// contain }) — the canvas fills the whole viewport edge-to-edge and the
+// browser handles aspect-ratio fit on resize/orientation change for free.
 
 function findCartByHash(hash){
   for(const key of Object.keys(CARTS)) if(CARTS[key].payload === hash) return key;
@@ -1479,11 +1636,11 @@ function startGame(key){
   gw.classList.remove('active'); void gw.offsetWidth; gw.classList.add('active'); // restart the view-in animation
   document.getElementById('controlsText').textContent = cartInfo.controlsText;
   document.getElementById('faultBanner').style.display = 'none';
-  // canvas pixel buffer stays at native cart resolution; fitCanvas() below
-  // computes the CSS display size to best-fit whatever box the flex layout
-  // (mobile portrait, tablet, wide desktop — all alike) actually gives it.
+  // canvas pixel buffer stays at native cart resolution; CSS (object-fit,
+  // edge-to-edge sizing) does all the responsive scaling for free.
   canvas.width = cartInfo.decoded.screenW;
   canvas.height = cartInfo.decoded.screenH;
+  disposeGLTextures(world); // free the previous cart's GPU textures, if any
   // decode a FRESH copy straight from the URL bytes so the running game
   // is provably reconstructed from the fragment, not the authoring object.
   world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
@@ -1491,11 +1648,11 @@ function startGame(key){
   running = true;
   lastTime = null;
   accumulator = 0;
-  fitCanvas();
 }
 
 function backToMenu(){
   running = false;
+  disposeGLTextures(world);
   world = null;
   currentKey = null;
   touchBits = new Set();
@@ -1521,7 +1678,7 @@ function ilerpAngle(e, idx, alpha){
   return p + delta * alpha;
 }
 
-function drawEntity(e, alpha){
+function drawEntityCanvas(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
   const x = ilerp(e, 0, alpha), y = ilerp(e, 1, alpha);
   if(type.renderKind === 1){ // tile column — position interpolates, extent/cap don't (discrete, only change at spawn)
@@ -1551,8 +1708,19 @@ function drawEntity(e, alpha){
 // tilemap; if there is one, it simply covers the whole frame instead) and
 // the HUD generator (a declared list of readouts) are both interpreted
 // generically here. Nothing in this function branches on cart identity,
-// cart_type, or which genre a cart happens to look like — see DESIGN.md §15.
+// cart_type, or which genre a cart happens to look like — see DESIGN.md §14.
+// Two renderer backends share everything except the actual draw calls:
+// the fixed-timestep loop, interpolation math (ilerp/ilerpAngle), and the
+// HUD/backdrop/map *data* (declared by the cart, read generically) are
+// backend-agnostic. Only "how do I put a textured rectangle on screen"
+// differs — see initGL() below for why WebGL is preferred when available
+// and exactly what Canvas2D can't do that motivated it.
 function render(alpha){
+  if(USE_GL) renderSceneGL(alpha); else renderSceneCanvas(alpha);
+  renderHUD();
+}
+
+function renderSceneCanvas(alpha){
   const cart = world.cart;
   if(world.track){
     for(let y=0;y<world.track.grid.length;y++){
@@ -1569,8 +1737,55 @@ function render(alpha){
       ctx2d.fillRect(0, canvas.height - cart.backdropGroundHeight, canvas.width, cart.backdropGroundHeight);
     }
   }
-  for(const e of world.entities) drawEntity(e, alpha);
+  for(const e of world.entities) drawEntityCanvas(e, alpha);
+}
 
+function renderSceneGL(alpha){
+  const cart = world.cart;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(glUniforms.screenSize, canvas.width, canvas.height);
+  if(world.track){
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    for(let y=0;y<world.track.grid.length;y++){
+      for(let x=0;x<world.track.grid[0].length;x++){
+        const tid = world.track.grid[y][x];
+        glDrawTexturedQuad(world.glTileTextures[tid-1], x*8, y*8, 8, 8, 0);
+      }
+    }
+  } else {
+    const [br,bg,bb] = cssColorToRGB(world.palette[cart.backdropFillIndex] || '#222');
+    gl.clearColor(br/255, bg/255, bb/255, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    if(cart.backdropGroundHeight > 0){
+      const [gr,gg,gb] = cssColorToRGB(world.palette[cart.backdropGroundIndex] || '#222');
+      glDrawColorQuad(0, canvas.height - cart.backdropGroundHeight, canvas.width, cart.backdropGroundHeight, gr/255, gg/255, gb/255, 1);
+    }
+  }
+  for(const e of world.entities) drawEntityGL(e, alpha);
+}
+
+function drawEntityGL(e, alpha){
+  const type = world.cart.entityTypes[e.typeId];
+  const x = ilerp(e, 0, alpha), y = ilerp(e, 1, alpha);
+  if(type.renderKind === 1){ // tile column
+    const extent = Math.max(0, Math.floor(e.props[8]));
+    const capAtTop = e.props[10] === 0;
+    const bodyTex = world.glTileTextures[type.assetIndex];
+    const capTex = world.glTileTextures[type.assetIndex+1];
+    for(let row=0; row<extent; row++){
+      const isCapRow = capAtTop ? row===0 : row===extent-1;
+      glDrawTexturedQuad(isCapRow?capTex:bodyTex, x, y+row*8, 8, 8, 0);
+    }
+  } else {
+    const tex = world.glSpriteTextures[type.assetIndex];
+    const src = world.spriteCanvases[type.assetIndex]; // dimensions only — same source as Canvas2D
+    const rot = type.rotateFlag ? ilerpAngle(e, 8, alpha) * Math.PI/180 : 0;
+    glDrawTexturedQuad(tex, x - src.width/2, y - src.height/2, src.width, src.height, rot);
+  }
+}
+
+function renderHUD(){
+  const cart = world.cart;
   const parts = [];
   for(const line of cart.hudSpec){
     let raw;
@@ -1645,5 +1860,5 @@ renderMenu();
 boot();
 requestAnimationFrame(loop);
 
-window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world };
+window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world, isUsingGL:()=>USE_GL };
 </script>
