@@ -200,6 +200,7 @@ const OPS = [
   ['GETTILE',[]],['TILE_SURFACE',[]],['GET_CHECKPOINT',[]],
   ['DIST',[]],['CLAMP_ABS',[]],['LERP',[]],['NORM_ANGLE',[]],
   ['TESTBIT',['u8']],['LOAD_INPUT',[]],['PLAYSOUND',['u8']],['HALT',[]],
+  ['SETTILE',[]],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -325,6 +326,7 @@ function runHook(bytecode, ctx){
       case 48: { stack.push(ctx.input||0); break; }
       case 49: { const id=u8(); if(ctx.playSound) ctx.playSound(id); break; }
       case 50: return true; // HALT
+      case 51: { const tileId=stack.pop(), y=stack.pop(), x=stack.pop(); ctx.setTile(x,y,tileId); break; } // SETTILE
       default: console.warn('unknown opcode', op); return false;
     }
   }
@@ -401,7 +403,7 @@ const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
 // 1=left 2=right 4=up/primary 8=down/secondary 16=action. A cart declares
 // which of these it actually reads (inputActiveButtons) and which touch
 // *shape* fits it (inputTouchTemplate) — see DESIGN.md §14.
-const TOUCH_TEMPLATE_NONE=0, TOUCH_TEMPLATE_SINGLE=1, TOUCH_TEMPLATE_STEER_ACTION=2, TOUCH_TEMPLATE_DPAD_ACTION=3;
+const TOUCH_TEMPLATE_NONE=0, TOUCH_TEMPLATE_SINGLE=1, TOUCH_TEMPLATE_STEER_ACTION=2, TOUCH_TEMPLATE_DPAD_ACTION=3, TOUCH_TEMPLATE_DPAD_ONLY=4;
 const BUTTON_BITS = [1,2,4,8,16];
 
 // ASCII-only, one byte per character (V0 scope cut, see README) — a
@@ -426,6 +428,13 @@ function encodeCart(cart){
   w.u8(cart.backdropFillIndex);
   w.u8(cart.backdropGroundHeight);
   w.u8(cart.backdropGroundIndex);
+
+  // tile-surface overrides: a sparse tile-id -> surface-id remap, cart-declared
+  // rather than hardcoded in the runtime — see DESIGN.md §16 (each cart's own
+  // tile art can mean something different by the same numeric tile id)
+  const tso = cart.tileSurfaceOverrides ? Object.entries(cart.tileSurfaceOverrides) : [];
+  w.u8(tso.length);
+  for(const [k,v] of tso){ w.u8(+k); w.u8(+v); }
 
   // input layout: which of the 5 fixed button bits this cart reads, which
   // generic touch-control shape fits, and a short label per active button
@@ -474,6 +483,11 @@ function encodeCart(cart){
     w.u8(track.segLen);
     w.u8(track.startGX); w.u8(track.startGY); w.u8(track.startDir);
     w.u8(track.gridW); w.u8(track.gridH);
+  } else if(cart.mapGenerator === 2){
+    const cave = cart.cave;
+    w.u8(cave.gridW); w.u8(cave.gridH);
+    w.u8(cave.fillProb); w.u8(cave.iterations); w.u8(cave.wallThreshold);
+    w.u8(cave.goldCount);
   }
 
   for(const name of HOOK_NAMES){
@@ -499,6 +513,10 @@ function decodeCart(bytes){
   cart.backdropFillIndex = r.u8();
   cart.backdropGroundHeight = r.u8();
   cart.backdropGroundIndex = r.u8();
+
+  const tsoCount = r.u8();
+  cart.tileSurfaceOverrides = {};
+  for(let i=0;i<tsoCount;i++){ const k=r.u8(); const v=r.u8(); cart.tileSurfaceOverrides[k]=v; }
 
   cart.inputActiveButtons = r.u8();
   cart.inputTouchTemplate = r.u8();
@@ -548,6 +566,11 @@ function decodeCart(bytes){
     const startGX = r.u8(), startGY = r.u8(), startDir = r.u8();
     const gridW = r.u8(), gridH = r.u8();
     cart.track = {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH};
+  } else if(cart.mapGenerator === 2){
+    const gridW = r.u8(), gridH = r.u8();
+    const fillProb = r.u8(), iterations = r.u8(), wallThreshold = r.u8();
+    const goldCount = r.u8();
+    cart.cave = {gridW, gridH, fillProb, iterations, wallThreshold, goldCount};
   }
 
   cart.hooks = {};
@@ -564,10 +587,16 @@ function decodeCart(bytes){
       a scoping cut in the README).
    ============================================================ */
 const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4 };
-const TILE_GRASS=1, TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
+const TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
+// Convention, not a hardcoded special case: tile id 1 is whatever a
+// generator considers its "solid/boundary" tile, returned for any
+// off-grid query. Every map generator so far happens to put that tile
+// first in its own bank (racer's grass, the cave's rock wall) — this is
+// generic on purpose, unlike tileSurface used to be (see its own comment).
+const MAP_EDGE_TILE = 1;
 function buildTrack(track){
   const grid = [];
-  for(let y=0;y<track.gridH;y++) grid.push(new Array(track.gridW).fill(TILE_GRASS));
+  for(let y=0;y<track.gridH;y++) grid.push(new Array(track.gridW).fill(MAP_EDGE_TILE));
   const DIRV = [[1,0],[0,1],[-1,0],[0,-1]];
   let gx = track.startGX, gy = track.startGY, dir = track.startDir;
   const checkpoints = [];
@@ -598,6 +627,102 @@ function buildTrack(track){
     }
   }
   return {grid, checkpoints, startGX:track.startGX, startGY:track.startGY, startDir:track.startDir};
+}
+
+/* ============================================================
+   6b. Cellular-automata cave generator — DESIGN.md §16 (roguelike)
+       A genuinely different map_generator archetype from the track
+       grammar above: stochastic + smoothed rather than turtle-walked,
+       validating map_generator as a small selector id over *any*
+       algorithm rather than a family of turtle-grammar variants.
+   ============================================================ */
+const CAVE_WALL=1, CAVE_FLOOR=2, CAVE_STAIRS=3, CAVE_GOLD=4;
+function buildCave(cave, rng){
+  const {gridW, gridH, fillProb, iterations, wallThreshold} = cave;
+  let grid = [];
+  for(let y=0;y<gridH;y++){
+    const row = [];
+    for(let x=0;x<gridW;x++){
+      // border forced solid: a practical V0 simplification of the "4-5 rule"
+      // algorithm that avoids boundary leaks without changing the generator's
+      // character — every cave this produces is naturally walled in.
+      const border = (x===0||y===0||x===gridW-1||y===gridH-1);
+      row.push(border ? CAVE_WALL : (rng() < fillProb/255 ? CAVE_WALL : CAVE_FLOOR));
+    }
+    grid.push(row);
+  }
+  function countWallNeighbors(g,x,y){
+    let c=0;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+      if(dx===0&&dy===0) continue;
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||ny<0||nx>=gridW||ny>=gridH||g[ny][nx]===CAVE_WALL) c++;
+    }
+    return c;
+  }
+  for(let it=0; it<iterations; it++){
+    const next = grid.map(row=>row.slice());
+    for(let y=1;y<gridH-1;y++) for(let x=1;x<gridW-1;x++){
+      next[y][x] = countWallNeighbors(grid,x,y) >= wallThreshold ? CAVE_WALL : CAVE_FLOOR;
+    }
+    grid = next;
+  }
+
+  // Flood-fill from an arbitrary floor cell (also the player's spawn) —
+  // guarantees the whole reachable map is one connected region by
+  // construction, and doubles as the BFS distance field used to place
+  // the stairs at the farthest reachable point.
+  let startX=-1, startY=-1;
+  outer: for(let y=1;y<gridH-1;y++) for(let x=1;x<gridW-1;x++){
+    if(grid[y][x]===CAVE_FLOOR){ startX=x; startY=y; break outer; }
+  }
+  if(startX<0){
+    // degenerate all-wall roll — carve a small room so the cart is always playable
+    startX = Math.floor(gridW/2); startY = Math.floor(gridH/2);
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) grid[startY+dy][startX+dx]=CAVE_FLOOR;
+  }
+  const dist = Array.from({length:gridH}, () => new Array(gridW).fill(-1));
+  dist[startY][startX] = 0;
+  const queue = [[startX,startY]];
+  let qi = 0, farX = startX, farY = startY, farDist = 0;
+  const N4 = [[1,0],[-1,0],[0,1],[0,-1]];
+  while(qi < queue.length){
+    const [x,y] = queue[qi++];
+    const d = dist[y][x];
+    if(d > farDist){ farDist = d; farX = x; farY = y; }
+    for(const [dx,dy] of N4){
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||ny<0||nx>=gridW||ny>=gridH) continue;
+      if(grid[ny][nx]===CAVE_WALL) continue;
+      if(dist[ny][nx]!==-1) continue;
+      dist[ny][nx] = d+1;
+      queue.push([nx,ny]);
+    }
+  }
+  const reached = [];
+  for(let y=0;y<gridH;y++) for(let x=0;x<gridW;x++){
+    if(grid[y][x]!==CAVE_WALL){
+      if(dist[y][x]===-1) grid[y][x]=CAVE_WALL; // unreachable pocket — seal it
+      else reached.push({x,y});
+    }
+  }
+  grid[farY][farX] = CAVE_STAIRS;
+
+  const goldCandidates = reached.filter(c => !(c.x===startX&&c.y===startY) && !(c.x===farX&&c.y===farY));
+  for(let i=goldCandidates.length-1;i>0;i--){
+    const j = Math.floor(rng()*(i+1));
+    [goldCandidates[i],goldCandidates[j]] = [goldCandidates[j],goldCandidates[i]];
+  }
+  const goldCount = Math.min(cave.goldCount, goldCandidates.length);
+  for(let i=0;i<goldCount;i++) grid[goldCandidates[i].y][goldCandidates[i].x] = CAVE_GOLD;
+
+  return {
+    grid,
+    checkpoints: [
+      {x:(startX+0.5)*8, y:(startY+0.5)*8}, // [0] = player start
+      {x:(farX+0.5)*8, y:(farY+0.5)*8},     // [1] = stairs down
+    ],
+  };
 }
 
 /* ============================================================
@@ -633,15 +758,17 @@ class World {
       this.glSpriteTextures = this.spriteCanvases.map(c => buildGLTexture(c));
       this.glTileTextures = this.tileCanvases.map(c => buildGLTexture(c));
     }
-    this.track = null;
-    if(cart.mapGenerator === 1){
-      this.track = buildTrack(cart.track);
+    this.map = null;
+    if(cart.mapGenerator === 1) this.map = buildTrack(cart.track);
+    else if(cart.mapGenerator === 2) this.map = buildCave(cart.cave, () => this.rng());
+    if(this.map){
       // Pre-render the static tilemap once at load instead of redrawing every
       // tile every frame. A CPU profile under random input (see README) found
       // this was issuing ~1120 GL draw calls/frame for the racer's map alone
-      // (~67,000/sec at 60fps) for a grid that never changes after buildTrack()
-      // runs — one draw call for the whole map, from here on, in both renderers.
-      const grid = this.track.grid;
+      // (~67,000/sec at 60fps) for a grid that never changes after the
+      // generator runs — one draw call for the whole map, from here on, in
+      // both renderers, regardless of which generator produced it.
+      const grid = this.map.grid;
       const mapCanvas = document.createElement('canvas');
       mapCanvas.width = grid[0].length * 8;
       mapCanvas.height = grid.length * 8;
@@ -662,8 +789,15 @@ class World {
       findEntity: id => self_.entities.find(e => e.id===id && e.active),
       spawn: t => self_.spawnEntity(t),
       getTile: (x,y) => self_.getTileAt(x,y),
-      tileSurface: t => (t===TILE_STARTLINE ? TILE_ROAD : t),
-      getCheckpoint: i => (self_.track && self_.track.checkpoints[i]) || {x:0,y:0},
+      // Cart-declared, not a hardcoded special case: only the racer needs a
+      // visually-distinct tile (its start/finish line) to behave as a
+      // different one physically. Defaults to identity for every other cart
+      // (including the cave, whose own tile id 4 would otherwise have
+      // collided with the racer's hardcoded "id 4 behaves like id 2" rule
+      // that used to live here — found while adding a second map generator).
+      tileSurface: t => (cart.tileSurfaceOverrides && cart.tileSurfaceOverrides[t] !== undefined) ? cart.tileSurfaceOverrides[t] : t,
+      setTile: (x,y,tileId) => self_.setTileAt(x,y,tileId),
+      getCheckpoint: i => (self_.map && self_.map.checkpoints[i]) || {x:0,y:0},
       rng: () => self_.rng(),
       playSound: id => self_.playSound(id),
     };
@@ -718,10 +852,26 @@ class World {
     return runHook(bc, ctx);
   }
   getTileAt(x,y){
-    if(!this.track) return -1;
+    if(!this.map) return -1;
     const tx = Math.floor(x/8), ty = Math.floor(y/8);
-    if(ty<0||ty>=this.track.grid.length||tx<0||tx>=this.track.grid[0].length) return TILE_GRASS;
-    return this.track.grid[ty][tx];
+    if(ty<0||ty>=this.map.grid.length||tx<0||tx>=this.map.grid[0].length) return MAP_EDGE_TILE;
+    return this.map.grid[ty][tx];
+  }
+  // SETTILE's runtime half: mutates the generated grid and patches just the
+  // one changed tile into the pre-rendered map (both the CPU-side canvas
+  // and, if active, the GL texture) rather than undoing the single-draw-call
+  // optimization above for a mutation that only happens a few times a game.
+  setTileAt(x,y,tileId){
+    if(!this.map) return;
+    const tx = Math.floor(x/8), ty = Math.floor(y/8);
+    if(ty<0||ty>=this.map.grid.length||tx<0||tx>=this.map.grid[0].length) return;
+    this.map.grid[ty][tx] = tileId;
+    const mctx = this.mapCanvas.getContext('2d');
+    mctx.drawImage(this.tileCanvases[tileId-1], tx*8, ty*8);
+    if(USE_GL && this.glMapTexture){
+      gl.bindTexture(gl.TEXTURE_2D, this.glMapTexture);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.mapCanvas);
+    }
   }
   // Writes e's AABB into `out` instead of returning a fresh object. The
   // O(n²) pairwise collision scan below used to call the allocating
@@ -1358,6 +1508,9 @@ function buildRacerCart(){
                      // genre could invoke for a loop-shaped level, not a
                      // "racer" special case
     backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
+    tileSurfaceOverrides: {[TILE_STARTLINE]: TILE_ROAD}, // startline tile renders distinctly but
+                                                          // drives like road — cart-declared, not
+                                                          // a runtime special case (DESIGN.md §16)
     inputActiveButtons: 1|2|4,
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
     inputButtonLabels: {1:'Left', 2:'Right', 4:'Gas'},
@@ -1390,6 +1543,475 @@ function buildRacerCart(){
 }
 
 /* ============================================================
+   9b. Cart authoring — Roguelike / Cave Crawler
+   (see url-console/examples/three-more-carts.md §1 for the design-level
+   dogfood this implements: cellular-automata cave generator, edge-detected
+   grid movement, SETTILE-based gold pickup, deferred-kill combat via the
+   universal hp prop — all validated there as needing either a real gap
+   filled (SETTILE) or nothing new (movement, combat) beyond existing
+   opcodes composed by the cart author.)
+   ============================================================ */
+const ROGUELIKE_CONST_NAMES = {
+  PLAYER_START_HP:0, MONSTER_START_HP:1, PLAYER_ATK:2, MONSTER_ATK:3,
+  MOVE_INTERVAL:4, CHASE_RADIUS:5, SCREEN_W:6, SCREEN_H:7, NUM_MONSTERS:8,
+};
+const ROGUELIKE_GLOBAL_NAMES = {
+  g_player:0, g_dead:1, g_won:2, g_gold:3, g_prev_input:4, g_scratch:5,
+  g_target_x:6, g_target_y:7, g_dx:8, g_dy:9, g_mtx:10, g_mty:11, g_dir:12,
+  g_mx:13, g_my:14,
+};
+const ROGUELIKE_SYM = {constants:ROGUELIKE_CONST_NAMES, globals:ROGUELIKE_GLOBAL_NAMES};
+
+// Tile ids, matching CAVE_WALL/CAVE_FLOOR/CAVE_STAIRS/CAVE_GOLD (§6b) — used
+// here only as PUSHI literals, the same way the racer's hooks push TILE_ROAD
+// etc. as raw ids rather than named constants (they're runtime tile ids, not
+// cart-tunable values, so they don't belong in the constant pool).
+const ROGUELIKE_HOOKS_SRC = {
+  on_init: `
+    SPAWN 0
+    STOREG g_player
+    PUSHI 0
+    GET_CHECKPOINT
+    STOREG g_target_y
+    STOREG g_target_x
+    LOADG g_target_x
+    STOREE g_player 0
+    LOADG g_target_y
+    STOREE g_player 1
+    PUSHC PLAYER_START_HP
+    STOREE g_player 5
+    PUSHI 0
+    STOREG g_dead
+    PUSHI 0
+    STOREG g_won
+    PUSHI 0
+    STOREG g_gold
+    PUSHI 0
+    STOREG g_prev_input
+
+    PUSHI 0
+    STOREG g_dir
+    spawn_loop:
+    PUSHI 0
+    PUSHC SCREEN_W
+    RAND_RANGE
+    STOREG g_mx
+    PUSHI 0
+    PUSHC SCREEN_H
+    RAND_RANGE
+    STOREG g_my
+    LOADG g_mx
+    LOADG g_my
+    GETTILE
+    PUSHI 1
+    CMPEQ
+    JNZ spawn_loop
+    SPAWN 1
+    STOREG g_scratch
+    LOADG g_mx
+    STOREE g_scratch 0
+    LOADG g_my
+    STOREE g_scratch 1
+    PUSHC MONSTER_START_HP
+    STOREE g_scratch 5
+    PUSHI 0
+    STOREE g_scratch 8
+    LOADG g_dir
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_dir
+    PUSHC NUM_MONSTERS
+    CMPLT
+    JNZ spawn_loop
+    HALT
+  `,
+  on_input: `
+    LOADG g_dead
+    JNZ store_prev
+    LOADG g_won
+    JNZ store_prev
+
+    LOADE g_player 0
+    STOREG g_target_x
+    LOADE g_player 1
+    STOREG g_target_y
+
+    LOAD_INPUT
+    TESTBIT 0
+    JZ chk_right
+    LOADG g_prev_input
+    TESTBIT 0
+    JNZ chk_right
+    LOADG g_target_x
+    PUSHI 8
+    SUB
+    STOREG g_target_x
+    chk_right:
+    LOAD_INPUT
+    TESTBIT 1
+    JZ chk_up
+    LOADG g_prev_input
+    TESTBIT 1
+    JNZ chk_up
+    LOADG g_target_x
+    PUSHI 8
+    ADD
+    STOREG g_target_x
+    chk_up:
+    LOAD_INPUT
+    TESTBIT 2
+    JZ chk_down
+    LOADG g_prev_input
+    TESTBIT 2
+    JNZ chk_down
+    LOADG g_target_y
+    PUSHI 8
+    SUB
+    STOREG g_target_y
+    chk_down:
+    LOAD_INPUT
+    TESTBIT 3
+    JZ do_move
+    LOADG g_prev_input
+    TESTBIT 3
+    JNZ do_move
+    LOADG g_target_y
+    PUSHI 8
+    ADD
+    STOREG g_target_y
+
+    do_move:
+    LOADG g_target_x
+    LOADE g_player 0
+    CMPEQ
+    LOADG g_target_y
+    LOADE g_player 1
+    CMPEQ
+    AND
+    JNZ store_prev
+
+    LOADG g_target_x
+    LOADG g_target_y
+    GETTILE
+    STOREG g_scratch
+    LOADG g_scratch
+    PUSHI 1
+    CMPEQ
+    JNZ store_prev
+
+    LOADG g_scratch
+    PUSHI 4
+    CMPEQ
+    JZ chk_stairs
+    LOADG g_gold
+    PUSHI 1
+    ADD
+    STOREG g_gold
+    LOADG g_target_x
+    LOADG g_target_y
+    PUSHI 2
+    SETTILE
+
+    chk_stairs:
+    LOADG g_scratch
+    PUSHI 3
+    CMPEQ
+    JZ commit_move
+    PUSHI 1
+    STOREG g_won
+
+    commit_move:
+    LOADG g_target_x
+    STOREE g_player 0
+    LOADG g_target_y
+    STOREE g_player 1
+
+    store_prev:
+    LOAD_INPUT
+    STOREG g_prev_input
+    HALT
+  `,
+  on_frame: `
+    LOADG g_dead
+    JNZ done
+    LOADG g_won
+    JNZ done
+    LOADE g_player 5
+    PUSHI 0
+    CMPLE
+    JZ done
+    PUSHI 1
+    STOREG g_dead
+    done:
+    HALT
+  `,
+  on_tick: `
+    LOAD_SELF 4
+    PUSHI 1
+    CMPEQ
+    JZ tick_end
+
+    LOAD_SELF 5
+    PUSHI 0
+    CMPLE
+    JZ alive
+    KILL_SELF
+    JMP tick_end
+    alive:
+
+    LOAD_SELF 8
+    PUSHI 1
+    SUB
+    DUP
+    STORE_SELF 8
+    JNZ tick_end
+    PUSHC MOVE_INTERVAL
+    STORE_SELF 8
+
+    LOAD_SELF 0
+    LOAD_SELF 1
+    LOADE g_player 0
+    LOADE g_player 1
+    DIST
+    PUSHC CHASE_RADIUS
+    CMPLT
+    JZ wander
+
+    LOADE g_player 0
+    LOAD_SELF 0
+    SUB
+    STOREG g_dx
+    LOADE g_player 1
+    LOAD_SELF 1
+    SUB
+    STOREG g_dy
+    LOADG g_dx
+    PUSHI 0
+    CMPGT
+    JZ chase_dx_neg
+    LOAD_SELF 0
+    PUSHI 8
+    ADD
+    STOREG g_mtx
+    LOAD_SELF 1
+    STOREG g_mty
+    JMP wander_done
+    chase_dx_neg:
+    LOADG g_dx
+    PUSHI 0
+    CMPLT
+    JZ chase_use_y
+    LOAD_SELF 0
+    PUSHI 8
+    SUB
+    STOREG g_mtx
+    LOAD_SELF 1
+    STOREG g_mty
+    JMP wander_done
+    chase_use_y:
+    LOAD_SELF 0
+    STOREG g_mtx
+    LOADG g_dy
+    PUSHI 0
+    CMPGT
+    JZ chase_dy_neg
+    LOAD_SELF 1
+    PUSHI 8
+    ADD
+    STOREG g_mty
+    JMP wander_done
+    chase_dy_neg:
+    LOADG g_dy
+    PUSHI 0
+    CMPLT
+    JZ chase_no_move
+    LOAD_SELF 1
+    PUSHI 8
+    SUB
+    STOREG g_mty
+    JMP wander_done
+    chase_no_move:
+    LOAD_SELF 1
+    STOREG g_mty
+    JMP wander_done
+
+    wander:
+    PUSHI 0
+    PUSHI 4
+    RAND_RANGE
+    STOREG g_dir
+    LOADG g_dir
+    PUSHI 0
+    CMPEQ
+    JZ wchk1
+    LOAD_SELF 0
+    PUSHI 8
+    ADD
+    STOREG g_mtx
+    LOAD_SELF 1
+    STOREG g_mty
+    JMP wander_done
+    wchk1:
+    LOADG g_dir
+    PUSHI 1
+    CMPEQ
+    JZ wchk2
+    LOAD_SELF 0
+    PUSHI 8
+    SUB
+    STOREG g_mtx
+    LOAD_SELF 1
+    STOREG g_mty
+    JMP wander_done
+    wchk2:
+    LOADG g_dir
+    PUSHI 2
+    CMPEQ
+    JZ wchk3
+    LOAD_SELF 0
+    STOREG g_mtx
+    LOAD_SELF 1
+    PUSHI 8
+    ADD
+    STOREG g_mty
+    JMP wander_done
+    wchk3:
+    LOAD_SELF 0
+    STOREG g_mtx
+    LOAD_SELF 1
+    PUSHI 8
+    SUB
+    STOREG g_mty
+
+    wander_done:
+    LOADG g_mtx
+    LOADG g_mty
+    GETTILE
+    PUSHI 1
+    CMPEQ
+    JNZ tick_end
+    LOADG g_mtx
+    STORE_SELF 0
+    LOADG g_mty
+    STORE_SELF 1
+
+    tick_end:
+    HALT
+  `,
+  on_collide: `
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    AND
+    JNZ p_hits_m
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ m_hits_p
+    JMP done
+    p_hits_m:
+    LOAD_B 5
+    PUSHC PLAYER_ATK
+    SUB
+    STORE_B 5
+    LOAD_A 5
+    PUSHC MONSTER_ATK
+    SUB
+    STORE_A 5
+    JMP done
+    m_hits_p:
+    LOAD_A 5
+    PUSHC PLAYER_ATK
+    SUB
+    STORE_A 5
+    LOAD_B 5
+    PUSHC MONSTER_ATK
+    SUB
+    STORE_B 5
+    done:
+    HALT
+  `,
+};
+
+function buildRoguelikeCart(){
+  const wallPixels = hexRowsToPixels([
+    '11121111','11112121','12111112','11211111',
+    '11112111','21111211','11121112','11112111',
+  ]);
+  const floorPixels = hexRowsToPixels([
+    '44444444','44454444','44444444','45444440',
+    '44444444','44444544','44444444','44044444',
+  ]);
+  const stairsPixels = hexRowsToPixels([
+    '44444444','44444440','44444700','44470000',
+    '44700000','47000000','00000000','00000000',
+  ]);
+  const goldPixels = hexRowsToPixels([
+    '44444444','44044440','40ffff04','4fffffe4',
+    '4fffffe4','40ffff04','44044440','44444444',
+  ]);
+  const playerPixels = hexRowsToPixels([
+    '00099000','09aaaa90','09aaaa90','00a99a00',
+    '000aa000','00a99a00','0a9009a0','00000000',
+  ]);
+  const monsterPixels = hexRowsToPixels([
+    '00000000','03333330','03633630','03333330',
+    '03303030','00333300','03000030','00000000',
+  ]);
+
+  const gridW = 32, gridH = 20;
+
+  const cart = {
+    formatVersion: 1,
+    cartType: 3, // advisory label only — see DESIGN.md §14
+    paletteMode: 1,
+    paletteParams: [25, 0, 15, 35, 8, 45, 150, 0],
+    rngSeed: 7,
+    modeFlags: 0,
+    screenW: gridW*8,
+    screenH: gridH*8,
+    mapGenerator: 2, // cellular-automata cave generator (§16) — a genuinely
+                     // different archetype from the racer's turtle-grammar,
+                     // stochastic + smoothed rather than turtle-walked
+    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
+    inputActiveButtons: 1|2|4|8,
+    inputTouchTemplate: TOUCH_TEMPLATE_DPAD_ONLY,
+    inputButtonLabels: {1:'Left', 2:'Right', 4:'Up', 8:'Down'},
+    hudSpec: [
+      {kind:0, sourceKind:1, srcA:ROGUELIKE_GLOBAL_NAMES.g_player, srcB:5, delta:0, suffixConstIdx:255, label:'HP'},
+      {kind:0, sourceKind:0, srcA:ROGUELIKE_GLOBAL_NAMES.g_gold, srcB:0, delta:0, suffixConstIdx:255, label:'Gold'},
+      {kind:1, sourceKind:0, srcA:ROGUELIKE_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'You died - refresh link to retry'},
+      {kind:1, sourceKind:0, srcA:ROGUELIKE_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'You escaped! Refresh link to play again'},
+    ],
+    constants: [20, 6, 3, 2, 20, 64, gridW*8, gridH*8, 6],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // PLAYER
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // MONSTER (ext 8 = move_timer)
+    ],
+    sprites: [ {w:8,h:8,pixels:playerPixels}, {w:8,h:8,pixels:monsterPixels} ],
+    tiles: [
+      {w:8,h:8,pixels:wallPixels}, {w:8,h:8,pixels:floorPixels},
+      {w:8,h:8,pixels:stairsPixels}, {w:8,h:8,pixels:goldPixels},
+    ],
+    cave: {gridW, gridH, fillProb:115, iterations:4, wallThreshold:5, goldCount:8},
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = ROGUELIKE_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), ROGUELIKE_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+/* ============================================================
    10. Build carts, encode, round-trip check
    ============================================================ */
 const CARTS = {};
@@ -1397,12 +2019,12 @@ const CARTS = {};
 // not hand-written per cart — so a new cart gets a correct hint for free.
 function describeControls(cart){
   const parts = [];
-  if((cart.inputActiveButtons & 1) && (cart.inputActiveButtons & 2)){
-    parts.push('←/→ = steer');
-  } else {
-    if(cart.inputActiveButtons & 1) parts.push('← = ' + (cart.inputButtonLabels[1] || 'left'));
-    if(cart.inputActiveButtons & 2) parts.push('→ = ' + (cart.inputButtonLabels[2] || 'right'));
-  }
+  // No "both left+right means steering" special case: that was a racer-shaped
+  // assumption baked into supposedly generic UI text — wrong the moment a
+  // second cart used the same two bits for something else (the roguelike's
+  // cardinal movement). Always defer to the cart's own declared labels.
+  if(cart.inputActiveButtons & 1) parts.push('← = ' + (cart.inputButtonLabels[1] || 'left'));
+  if(cart.inputActiveButtons & 2) parts.push('→ = ' + (cart.inputButtonLabels[2] || 'right'));
   if(cart.inputActiveButtons & 4) parts.push('↑ = ' + (cart.inputButtonLabels[4] || 'up'));
   if(cart.inputActiveButtons & 8) parts.push('↓ = ' + (cart.inputButtonLabels[8] || 'down'));
   if(cart.inputActiveButtons & 16) parts.push('space = ' + (cart.inputButtonLabels[16] || 'action'));
@@ -1424,6 +2046,7 @@ function cssColorToHex(col){
 }
 registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
 registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
+registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
 
 /* ============================================================
    11. UI wiring — menu, game loop, HUD, input
@@ -1626,6 +2249,14 @@ function buildTouchControlsHTML(cart){
       <button type="button" class="touch-btn" data-bit="16">${label(16)}</button>
     </div>`;
   }
+  if(cart.inputTouchTemplate === TOUCH_TEMPLATE_DPAD_ONLY){
+    return `<div class="side">
+      <button type="button" class="touch-btn" data-bit="1" aria-label="Left">&#9664;</button>
+      <button type="button" class="touch-btn" data-bit="2" aria-label="Right">&#9654;</button>
+      <button type="button" class="touch-btn" data-bit="4" aria-label="Up">&#9650;</button>
+      <button type="button" class="touch-btn" data-bit="8" aria-label="Down">&#9660;</button>
+    </div><div class="side"></div>`;
+  }
   return ''; // TOUCH_TEMPLATE_NONE
 }
 function setTouchBit(bit, on, el){
@@ -1796,7 +2427,7 @@ function render(alpha){
 
 function renderSceneCanvas(alpha){
   const cart = world.cart;
-  if(world.track){
+  if(world.map){
     ctx2d.drawImage(world.mapCanvas, 0, 0); // pre-rendered once at load, see World constructor
   } else {
     ctx2d.fillStyle = world.palette[cart.backdropFillIndex] || '#222';
@@ -1813,7 +2444,7 @@ function renderSceneGL(alpha){
   const cart = world.cart;
   gl.viewport(0, 0, canvas.width, canvas.height);
   gl.uniform2f(glUniforms.screenSize, canvas.width, canvas.height);
-  if(world.track){
+  if(world.map){
     gl.clear(gl.COLOR_BUFFER_BIT);
     // pre-rendered once at load (see World constructor) — one draw call for
     // the whole map instead of one per tile, every frame

@@ -550,13 +550,15 @@ New open questions this raised, folded into §16 below:
 
 ## 15. Three more dogfoods: roguelike, platformer, arena shooter
 
-Full write-up at `examples/three-more-carts.md`. Design-level only —
-none of the three are wired up as playable carts in `v0/urlcade.html`
-(unlike Flappy Bird and the race car); that's a deliberate scope cut,
-not an oversight. The three were picked specifically to pressure-test
-what §14's composable-generator pivot left thin: a genuinely different
-**map generator** archetype, whether "generator" needs to keep growing
-new primitives or whether the existing ones already generalize, and one
+Full write-up at `examples/three-more-carts.md`. Design-level for all
+three at first pass, same as Flappy Bird and the race car started; the
+roguelike has since been promoted to a real, playable cart in
+`v0/urlcade.html` (see §15.1) — platformer and arena shooter remain
+design-level dogfoods, a deliberate scope cut rather than an oversight.
+The three were picked specifically to pressure-test what §14's
+composable-generator pivot left thin: a genuinely different **map
+generator** archetype, whether "generator" needs to keep growing new
+primitives or whether the existing ones already generalize, and one
 concrete new presentation concept.
 
 - **Roguelike (cave crawler)** validated a second map-generator
@@ -615,6 +617,83 @@ New open questions this raised:
   §14 pivot. Is it the last one a 2D console needs, or should more
   genres be dogfooded before assuming backdrop/HUD/input/map/camera is
   a complete set?
+
+### 15.1 From design doc to real cart: building Cave Crawler
+
+Turning the roguelike from a design-level dogfood into an actual
+playable cart (`registerCart('roguelike', ...)` in `v0/urlcade.html`)
+surfaced findings beyond what the paper design predicted:
+
+- **A latent runtime bug the roguelike would have tripped over.**
+  `tileSurface` (the function backing the `TILE_SURFACE` opcode) was
+  hardcoded in the runtime to special-case one specific tile id
+  (`TILE_STARTLINE → TILE_ROAD`) for the racer, unconditionally, for
+  *any* cart. The roguelike's own tile id 4 means GOLD, not "drives like
+  road" — the exact scenario §14's "no genre-specific logic in shared
+  runtime code" rule exists to prevent, and it had quietly regressed.
+  Fixed by making the remap cart-declared data
+  (`cart.tileSurfaceOverrides`, a sparse tile-id → surface-id map,
+  round-tripped through the binary format) with identity as the
+  default; the racer now declares its own `{4: 2}` override instead of
+  the runtime assuming it for every cart. Found and fixed *before* it
+  could corrupt anything, precisely because building a second
+  tile-based cart is what exposed the assumption.
+- **Deferred-kill combat, confirmed by driving it directly.** The design
+  doc predicted "`on_collide` can't `KILL_SELF` on `a`/`b`, so let each
+  monster's own `on_tick` check `hp ≤ 0` and kill itself" would work with
+  no new opcode. Testing it for real (force a monster to 1 hp, run one
+  `on_collide` pass, assert it's *still* in `world.entities`, run one
+  more `world.step()`, assert it's now gone) confirmed the timing
+  exactly as designed — a monster survives the tick its hp goes
+  non-positive and dies on its own next tick, never mid-collision-scan.
+- **Spawning a fixed batch of monsters at `on_init` needed nothing new
+  either.** Not called out in the design doc (which only anticipated
+  the per-frame countdown idiom from §12), a plain `JMP`-based counting
+  loop — increment a global, compare against a `NUM_MONSTERS` constant,
+  `JNZ` back to the loop head — spawns N entities at level-generation
+  time with the same opcodes already used for AI and movement. The same
+  loop-with-early-`JNZ` shape doubles as **rejection sampling**: pick a
+  random tile, `GETTILE`, retry on a wall, proceed on floor — placing
+  monsters only on generated floor tiles without any dedicated "find a
+  valid spawn point" primitive.
+- **`GET_CHECKPOINT` generalized to "generator waypoints," not just
+  racing checkpoints, exactly as hoped.** The cave generator's start and
+  stairs-down positions are stored as `checkpoints[0]`/`checkpoints[1]`
+  and read with the same opcode the racer uses for lap checkpoints — no
+  new "get spawn point" or "get level exit" primitive needed. The
+  generic name earns its keep.
+- **A second, unrelated hardcoded-wording bug found by looking at the
+  actual rendered page**, not by reasoning about the spec: the menu's
+  `describeControls()` hint text special-cased "both left and right
+  bits active" to always print "steer" — true for the racer, silently
+  wrong for the roguelike's cardinal-direction movement (which also uses
+  those two bits). Same class of bug as the `tileSurface` one — a
+  supposedly generic, data-driven piece of the runtime actually assuming
+  one genre — caught the same way: build a second cart that exercises
+  the same code path differently, and it stops being invisible. Fixed by
+  always deriving the hint from the cart's own declared button labels,
+  no merged special case.
+- **A new touch-control shape, but not a new opcode:**
+  `TOUCH_TEMPLATE_DPAD_ONLY` (four directional buttons, no action
+  button) joins the existing library alongside `SINGLE`,
+  `STEER_ACTION`, and `DPAD_ACTION` — confirming touch templates are a
+  small, growable *library* of shapes rather than something that needs
+  per-cart custom layout.
+- **Gold pickup validated `SETTILE` end-to-end**, including the part the
+  design doc could only predict: the runtime's pre-rendered tilemap
+  optimization (§14, one draw call instead of one per tile) had to
+  support single-tile patch-in-place mutation without falling back to
+  full re-render, and it does, in both the WebGL and Canvas2D backends.
+
+Net effect: building a real cart from a paper dogfood found two runtime
+bugs (both the same *species* — genre assumptions leaking into
+allegedly generic code, invisible until a second genre exercised the
+same path) and zero new opcodes beyond the one (`SETTILE`) the design
+doc already called out. That's a stronger validation of the
+composable-generator model than the paper dogfood alone could give:
+paper dogfooding checks whether a design *reads* as sufficient; actually
+building the cart checks whether the *existing implementation* really
+was as generic as it claimed.
 
 ## 16. Open questions
 

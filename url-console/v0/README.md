@@ -1,13 +1,14 @@
 # V0 — a real, working Urlcade
 
 `urlcade.html` is a single self-contained page: the runtime (VM,
-assembler, palette generator, track-grammar interpreter, renderer) and
-both dogfood carts (`../examples/flappy-bird.md`,
-`../examples/race-car.md`) built and playable in one file. Open it
-directly in a browser — no build step, no server.
+assembler, palette generator, track-grammar + cellular-automata-cave map
+generators, renderer) and three dogfood carts (`../examples/flappy-bird.md`,
+`../examples/race-car.md`, and a roguelike built directly from
+`../examples/three-more-carts.md` §1) built and playable in one file.
+Open it directly in a browser — no build step, no server.
 
-Both carts are authored once, assembled to real bytecode, **encoded to
-bytes, base64url'd into the URL fragment, and then the runtime decodes
+All three carts are authored once, assembled to real bytecode, **encoded
+to bytes, base64url'd into the URL fragment, and then the runtime decodes
 that exact fragment back into the cart it actually runs** — the
 in-memory authoring object is never used to play the game, only the
 round-tripped one. That's the load-bearing claim of the whole project
@@ -63,6 +64,47 @@ and it's exercised on every play, not just asserted.
   A lost GL context is *not* recovered (would need swapping in a fresh
   canvas element, since a canvas can't change context type once one's
   been requested) — logged loudly rather than silently left blank.
+- **A second map-generator archetype: cellular-automata caves**
+  (`map_generator = 2`), backing the third cart, Cave Crawler. Stochastic
+  and smoothed (seed → noise → CA smoothing passes → flood-fill
+  connectivity → BFS-farthest stairs placement) rather than the racer's
+  deterministic turtle-walked token grammar — confirms `map_generator` is
+  a small selector id over *any* algorithm, not a family of grammar
+  variants. Border cells are forced solid (a practical simplification of
+  the textbook "4-5 rule" algorithm) and the flood-fill guarantees every
+  reachable tile is connected to the player's own start point by
+  construction, not by chance — verified across 60 random seeds with an
+  independent BFS reachability check in the test suite, zero failures.
+- **`SETTILE`, the VM's first tilemap write opcode** — `GETTILE`'s
+  missing write half, identified as a real gap in the design-level
+  dogfood and now implemented and exercised for real (gold pickup: walk
+  onto a gold tile, it flips to floor, `g_gold` increments). It patches
+  just the one changed tile into the pre-rendered map canvas/GL texture
+  rather than undoing the single-draw-call tilemap optimization above.
+- **Edge-triggered grid movement, confirmed needing no new opcode**: the
+  roguelike stores last frame's input mask in a global and compares it
+  to the current one to detect a fresh press, moving exactly one tile
+  per press regardless of how long a direction is held — verified
+  directly (holding a direction across multiple ticks produces exactly
+  one move, not continuous movement).
+- **Deferred-kill combat, confirmed by driving it directly**: a monster
+  reduced to non-positive hp via `on_collide` stays in `world.entities`
+  through the rest of that tick (collision code never calls `KILL_SELF`
+  on `a`/`b` — only `self`) and is removed on its own very next `on_tick`,
+  which checks its own hp before running its AI. Both halves of that
+  timing are asserted in the test suite, not just assumed from the
+  design doc's reasoning.
+- **A cart-declared `tileSurfaceOverrides` map**, replacing a runtime bug
+  found while building the second tile-based cart: `TILE_SURFACE` used to
+  hardcode the racer's startline-drives-like-road special case globally,
+  which would have silently mis-treated the roguelike's own (unrelated)
+  tile id 4. Now every cart declares its own sparse tile-id → surface-id
+  remap (round-tripped through the binary format), defaulting to
+  identity; the racer declares `{4: 2}` itself instead of the runtime
+  assuming it. See `DESIGN.md` §15.1 for the full postmortem — including
+  a second, same-species bug (`describeControls()` hardcoding "steer" for
+  any cart using both left/right bits) found the same way, by building a
+  cart that exercises the same "generic" code path differently.
 - **Edge-to-edge game screens.** The canvas is `position:absolute;
   inset:0` with `object-fit:contain` — no bezel, border, or padding box
   around it; it fills the viewport (letterboxed only as much as the
@@ -214,21 +256,27 @@ Each one is a reasonable next step, not a design admission of defeat:
 - **Two entity types per cart.** Enough to exercise the per-type
   extension-field mechanism, not an exhaustive catalog.
 
-## Three more dogfoods, design-level only
+## Three more dogfoods — one now real, two still design-level
 
 `../examples/three-more-carts.md` sketches a roguelike, a platformer, and
 an arena shooter — chosen to pressure-test the composable-generator model
 (`DESIGN.md` §14) with a genuinely different map-generator archetype
 (cellular-automata caves) and to check whether "generator" needed to keep
 growing new primitives or whether the existing ones already generalized.
-None of the three are wired up as playable carts here, unlike Flappy Bird
-and the race car — a deliberate scope cut given the size of this pass
-(three new games plus the WebGL renderer plus the layout change was too
-much to also implement reliably in one go), not an oversight. Findings
-(two real primitive gaps — `SETTILE`, `MOVE_SOLID` — one real new
-composable concept — camera/viewport — and three confirmations that
-existing machinery already covered enough ground) are folded into
-`DESIGN.md` §15.
+
+The roguelike (**Cave Crawler**) has since been built as a real, playable
+third cart in `urlcade.html` — cave generation, `SETTILE`-based gold
+pickup, edge-triggered grid movement, and deferred-kill monster combat
+all run as actual bytecode, not just design prose (see the bullets
+above and `DESIGN.md` §15.1). The platformer and arena shooter remain
+design-level only — a deliberate scope cut (implementing all three at
+once, on top of the WebGL renderer and layout change, was too much for
+one pass), not an oversight. Findings from the original design-level
+pass on all three (two real primitive gaps — `SETTILE`, `MOVE_SOLID` —
+one real new composable concept — camera/viewport — and three
+confirmations that existing machinery already covered enough ground) are
+folded into `DESIGN.md` §15; findings specific to actually *building*
+the roguelike are in the new §15.1.
 
 ## Playing it
 
