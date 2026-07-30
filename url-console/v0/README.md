@@ -102,6 +102,23 @@ and it's exercised on every play, not just asserted.
   that's enough to resolve a stutter that only reproduces on a real
   touchscreen remains to be seen.
 
+  Third hypothesis, and this one found a real, concrete gap rather than
+  ruling something out: taps occasionally "refocusing" the HUD text at
+  the top of the screen, triggering native text selection (and its
+  magnifier-loupe / copy-callout UI) that burns real main-thread time —
+  a well-known mobile-web jank source when a tappable area overlaps
+  unprotected text. Checked, and confirmed: `user-select:none` was only
+  ever applied to the canvas and the touch buttons, never to the HUD,
+  controls hint, fault banner, or topbar text. `pointer-events:none` on
+  their containers *should* already keep taps from reaching them, but
+  that guarantee is inconsistently enforced across mobile browsers
+  specifically for native text-selection gestures — belt and suspenders,
+  not relying on pointer-events alone. Fixed by setting `user-select:
+  none` (plus `-webkit-touch-callout:none`) once on `#gameWrap`, which
+  every overlay text node inherits — verified via computed style that
+  all five (HUD, controls, topbar, back button, fault banner) actually
+  pick it up now.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

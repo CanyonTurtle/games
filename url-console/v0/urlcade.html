@@ -92,6 +92,15 @@
     display:none;
     position:fixed; inset:0; overflow:hidden;
     background:var(--bg);
+    /* Inherited by every overlay text node (HUD, controls hint, fault
+       banner, back button) — pointer-events:none on .topbar/.controls
+       *should* already keep taps from ever hitting this text, but that's
+       an inconsistently-enforced guarantee across mobile browsers for
+       native text-selection/callout gestures specifically. A stray
+       selection (with its magnifier loupe / copy-callout UI) landing on
+       "SCORE: 0" mid-tap would burn real main-thread time right when a
+       touch fires — belt and suspenders, not relying on pointer-events alone. */
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
   }
   #gameWrap.active{display:block;}
   #screen{
