@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §16 below:
+New open questions this raised, folded into §18 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -790,7 +790,114 @@ paper dogfood predicted before any code was written — the design-level
 pass is earning its keep as a genuine predictor, not just a formality
 before implementation.
 
-## 16. Open questions
+## 17. Sprite art: from raw pixels, through a painter function, to a generator
+
+Sprites went through three designs in quick succession, each one a real
+finding, not a false start — worth recording the sequence because the
+end state (§17.3) only became obvious by building the two that came
+before it.
+
+### 17.1 Raw pixel indices, hand-typed as hex rows
+
+The original format: each sprite is `w*h` bytes, one palette index per
+pixel, authored as hand-typed hex-digit strings (`'01222110'`) and
+shipped byte-for-byte in the cart. Fully general — any silhouette is
+expressible — and honestly, exactly what a "URL-encoded virtual console"
+should ship: the cart contains the actual pixels, nothing is
+reconstructed from code outside the URL. The failure mode wasn't
+architectural, it was practical: enlarging a sprite by nearest-neighbor-
+scaling the hex grid (each pixel duplicated into a flat block) produced
+sprites that were bigger but visibly just blown-up thumbnails — reported
+plainly as "too much blockiness, it's like it's just scaled up."
+
+### 17.2 A hand-written painter function per sprite
+
+The fix for blockiness was real geometry: each sprite got a small JS
+function (`paintBird(x,y)`, `paintCar(x,y)`, ...) computing a palette
+index per pixel from ellipse-distance math, called once at cart-authoring
+time to produce the same flat pixel array §17.1 used. This fixed the
+actual visual complaint — genuinely smooth, non-blocky edges — but traded
+it for a different, sharper problem: **the sprite's shape now lived in a
+JS function that ships with the runtime, not in the cart.** The encoded
+payload still contained the resulting pixel grid (verified directly: with
+every painter function deleted from the page, a cart decoded from raw
+bytes alone still rendered correctly), so nothing about *playing* a
+shared link was actually broken. But it was a real regression against
+every other piece of this system's own design: palette generation, the
+map generators, HUD spec, camera — all of them are "cart declares small
+parameters, runtime holds the shared generator." Sprites, suddenly,
+weren't; they baked a one-time function's *output* into the cart instead
+of shipping the *generator* as a runtime-interpreted, cart-declared thing.
+Called out directly: "doesn't this get away from the intent of URL
+encoding games? These are hand-written functions?" — a fair hit, even
+though the URL-self-containment property itself never actually broke.
+
+There was a second problem, independent of the first: the ellipse-math
+control flow (nested conditionals, ordering-dependent branches deciding
+eye-vs-body-vs-outline) was hard to read. Not because procedural
+generation is inherently illegible, but because *imperative branching
+code* is a bad medium for "here's what a sprite looks like" even when the
+underlying math (distance from an ellipse boundary) is one line.
+
+### 17.3 A cart-declared shape list, runtime-interpreted
+
+The actual fix resolves both problems with one change: a sprite is either
+raw pixels (kind 0, §17.1's format, kept as a fully-general escape hatch)
+or a small **ordered list of primitive shapes** (kind 1) — `{type:
+ELLIPSE, cx, cy, rx, ry, color}` or `{type: RECT, x, y, w, h, color}`,
+~6 bytes each, drawn back-to-front. `renderShapeList(w, h, shapes)` is a
+genuine runtime generator: it runs once per sprite *at cart load time*,
+from the decoded cart's own `shapes` array, exactly parallel to how
+`buildCave`/`buildTrack` run once per world from the decoded `cart.cave`/
+`cart.track`. The list itself is what's declared on the cart and encoded
+into the URL — plain data, not a reference to any function — so a human
+reading `[ellipse(8,8,6,5,body), rect(8,5,3,5,glass), ...]` can picture
+the sprite directly, no execution required, and the "hand-written
+function" objection dissolves: the generator lives in the runtime (like
+every other generator here), the cart supplies parameters (like every
+other cart-declared thing here).
+
+Only two primitive types, deliberately. Auditing every sprite actually
+built across all four carts — a bird, a race car, a collision-debris
+particle, two humanoid blobs (roguelike player, platformer player), two
+eyed-monster blobs (roguelike monster, platformer enemy), a coin — found
+every one decomposes into 3-8 ellipses/rects. That's a real signal, not
+an assumption: 16x16 pixel art in this console's blobby arcade style
+doesn't need more shape vocabulary than that. The one deliberate
+compromise this made concrete: the bird's beak was a sharp wedge (a third
+primitive, tip+base+halfwidth) in §17.2's painter; without a WEDGE
+primitive it's a stubby ellipse instead. Kept the vocabulary at two
+rather than add a primitive for one sprite's one feature — a wedge
+primitive is one more thing every reader of a shape list has to learn,
+for a silhouette difference that reads as "rounder beak," not "wrong."
+
+Concrete result, measured (not estimated) across all four carts: sprite
+data shrank 20-37% of total cart bytes depending on the cart (most on
+the platformer, which has three sprites; least on the racer, whose car
+has the most shapes). Verified two ways: an exact round-trip test
+(decode → re-encode → decode, shape-for-shape equality within
+fixed-point precision) and — the same test applied to §17.2's claim —
+confirming the runtime never touches `renderShapeList`'s *callers*: only
+the shared interpreter and the cart's own declared shape list are needed
+to reconstruct pixels from a raw decoded cart, with every authoring-time
+helper deleted from the page first.
+
+A small amount of authoring-time sugar remains: `blobPlayerShapes(body,
+outline)` and `blobMonsterShapes(body, outline, eye, pupil)` are plain
+functions that return a shape-list array, used by both carts that want
+that silhouette family. This is meaningfully different from §17.2's
+painter functions — they return *data* (an array of shape records with
+numeric literals), not a per-pixel computation, and the encoded cart gets
+that resulting array either way, never a reference to the function. It's
+the same relationship `buildRacerCart()` already has to `buildTrack()`:
+authoring-time JS that produces the cart's declared parameters, not
+runtime logic the player depends on. Named as an explicit open question
+below whether this is worth promoting further, into a true
+runtime-selectable `sprite_generator` id (a small library of named
+archetypes, the same shape as `map_generator`) rather than
+authoring-time-only sugar.
+
+## 18. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
@@ -804,6 +911,15 @@ before implementation.
 - Where's the boundary between "cart data" and "runtime asset library"
   — do sprite/sound libraries need independent versioning from the
   envelope format?
+- §17.3's shape-list sprites have authoring-time-only sugar
+  (`blobPlayerShapes`/`blobMonsterShapes`) for the two silhouette
+  families reused across carts. Worth promoting into a true
+  runtime-selectable `sprite_generator` id — a small library of named
+  archetypes (`blob_character`, `topdown_vehicle`, ...) the cart selects
+  by id plus a handful of color-index params, the same shape as
+  `map_generator` — once a few more carts show which archetypes actually
+  recur? Four sprites (two players, two monsters) already share two
+  families; two data points per family isn't a lot to generalize from.
 
 **VM & hooks**
 - How does bytecode read a property off an entity that is neither

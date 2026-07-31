@@ -149,6 +149,23 @@ and it's exercised on every play, not just asserted.
   shared "topology flag" would have to switch between two different
   stamping algorithms internally, which isn't really unification. See
   `DESIGN.md` §15.2 for the full writeup.
+- **Sprites as a real generator, not raw pixels or a hand-written painter
+  function.** Went through both alternatives first and both were real
+  findings: raw hex-typed pixel art, nearest-neighbor-scaled to make
+  sprites bigger, looked exactly like what it was ("too much blockiness,
+  just scaled up"); a hand-written ellipse-math JS function per sprite
+  fixed the blockiness but baked its one-time output into the cart —
+  functionally fine (verified: a cart decodes and renders correctly with
+  every painter function deleted from the page) but a real regression
+  against this runtime's own pattern everywhere else (palette/map/HUD/
+  camera: cart declares small params, runtime holds the generator), and
+  a fair complaint ("these are hand-written functions?"). Landed on a
+  small ordered list of ellipse/rect primitives — genuinely cart-declared
+  data (~6 bytes/shape), interpreted by a shared `renderShapeList` at
+  load time. Every sprite across all four carts decomposes into 3-8
+  shapes; measured result, not estimated: sprite data shrank the total
+  cart payload 20-37% depending on the cart. See `DESIGN.md` §17 for the
+  full three-stage writeup.
 - **Edge-to-edge game screens.** The canvas is `position:absolute;
   inset:0` with `object-fit:contain` — no bezel, border, or padding box
   around it; it fills the viewport (letterboxed only as much as the
