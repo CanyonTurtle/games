@@ -384,6 +384,34 @@ and it's exercised on every play, not just asserted.
   before a screenshot was catching stale frames under headless
   Chromium's rAF throttling, not a real bug.
 
+- **Real vertical structure — a stacked castle, not one block per enemy
+  on a flat line** (`DESIGN.md` §23). The previous fix only varied block
+  *sprites*; every position was still ground-level with two fixed height
+  offsets. Fixed at the map-generator level: `COIN_AT`/`ENEMY_AT` tokens
+  take an explicit row-offset operand and don't advance the column
+  cursor, so a run of them between two `FLAT`s stacks multiple
+  blocks/targets at one x position, at any heights — real skylines
+  (a 2-story shack; two 3-tall towers flanking a walled gate) instead of
+  a scattered line. This reopened the exact reachability question §21
+  already fixed once: the reachability sweep caught 3 of Castle
+  Crusher's 4 targets as structurally unreachable in the wider (58-col)
+  layout, not because of the stacking but because of scale — the
+  projectile's horizontal velocity decays under `GROUND_FRICTION` every
+  tick, airborne or not, so real reachable range is a hump that peaks
+  a handful of columns out and collapses to ground-level-only well
+  before 58 columns. Measured the actual envelope (a sweep recording
+  peak height reached at every column) and compressed the castle to fit
+  inside it with margin; the sweep came back clean, and a follow-up
+  search for the best angle/charge-tick per target — fired as one
+  continuous playthrough, not isolated trials — cleared all 4 targets
+  in 4 of 14 shots, confirming real margin. One testing-methodology bug
+  worth recording alongside the rAF one: an early "find the best combo"
+  script set the angle/power globals directly *and* still ran the
+  charge-tick loop on top, silently doubling the power applied — it
+  produced combos that looked perfect in isolation but didn't reproduce
+  when actually played back. Fixed by only ever driving angle/power
+  through real input ticks, same as a player would.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

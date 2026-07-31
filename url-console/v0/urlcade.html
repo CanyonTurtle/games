@@ -970,18 +970,34 @@ function buildCave(cave, rng){
    Same category (turtle grammar over an authored token list, emitting a
    tile grid + a checkpoint list), different generator.
    ============================================================ */
-const PLATFORM_TOKENS = { FLAT:0, STEP_UP:1, STEP_DOWN:2, GAP:3, BLOCK:4, COIN:5, ENEMY:6 };
+const PLATFORM_TOKENS = { FLAT:0, STEP_UP:1, STEP_DOWN:2, GAP:3, BLOCK:4, COIN:5, ENEMY:6, COIN_AT:7, ENEMY_AT:8 };
 // FLAT/STEP_UP/STEP_DOWN/GAP/BLOCK are each followed by one width byte in
 // the token stream (variable-operand tokens, the same idea as the VM's own
 // per-opcode operand specs in OPS); COIN/ENEMY are bare markers, consistent
 // with how the racer's CHECKPOINT token doesn't advance the cursor either.
+// COIN_AT/ENEMY_AT (added for the destruction genre's stacked structures,
+// DESIGN.md §23) are a third shape: a marker with an operand that isn't a
+// width — a row offset above the *current* groundY, letting a mark sit at
+// any height rather than COIN/ENEMY's fixed -3/-1. Terrain elevation
+// (STEP_UP/DOWN) still can't move past its own min/maxGroundY clamp or
+// the reachability trap §21/§22 already found, but a marker's height is
+// independent of the terrain entirely, so real multi-row stacking doesn't
+// need the ground to rise at all.
 const PLATFORM_WIDTH_TOKENS = new Set([0,1,2,3,4]);
+// Every token with ANY trailing operand byte, width or not — the pre-pass
+// below has to skip that byte regardless of whether it counts toward
+// gridW, or it misreads the operand as the next token id. COIN_AT/ENEMY_AT
+// row-offset values are small integers (0-5ish) that collide with real
+// token ids (FLAT=0..BLOCK=4) if this isn't handled — found by tracing
+// through the pre-pass by hand before it ever shipped, not by a live bug.
+const PLATFORM_OPERAND_TOKENS = new Set([0,1,2,3,4,7,8]);
 const PLATFORM_AIR=1, PLATFORM_GROUND=2, PLATFORM_DIRT=3, PLATFORM_BRICK=4;
 function buildPlatformLevel(level){
   const gridH = level.gridH;
   let gridW = 0;
   for(let i=0;i<level.tokens.length;i++){
     if(PLATFORM_WIDTH_TOKENS.has(level.tokens[i])) gridW += level.tokens[++i];
+    else if(PLATFORM_OPERAND_TOKENS.has(level.tokens[i])) i++;
   }
   const grid = [];
   for(let y=0;y<gridH;y++) grid.push(new Array(gridW).fill(PLATFORM_AIR));
@@ -1039,6 +1055,12 @@ function buildPlatformLevel(level){
       coinCps.push({x:(gx+0.5)*8, y:(groundY-3+0.5)*8});
     } else if(t === PLATFORM_TOKENS.ENEMY){
       enemyCps.push({x:(gx+0.5)*8, y:(groundY-1)*8});
+    } else if(t === PLATFORM_TOKENS.COIN_AT){
+      const rowOffset = level.tokens[++i];
+      coinCps.push({x:(gx+0.5)*8, y:(groundY-rowOffset+0.5)*8});
+    } else if(t === PLATFORM_TOKENS.ENEMY_AT){
+      const rowOffset = level.tokens[++i];
+      enemyCps.push({x:(gx+0.5)*8, y:(groundY-rowOffset)*8});
     }
   }
   const startCp = {x:16, y:(level.startGroundY-1)*8};
@@ -3564,23 +3586,28 @@ function buildSlingshotCart(){
   const targetShapes = blobMonsterShapes(11, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
-  // Deliberately flat — no STEP_UP/STEP_DOWN anywhere. MOVE_SOLID blocks
-  // horizontal movement against *any* solid tile regardless of step
-  // height (there's no step-assist), and since every shot restarts from
-  // the same fixed anchor (no forward progress carries between shots —
-  // §9c), even one elevation change between the anchor and a block/
-  // target can make it permanently unreachable. Found empirically: an
-  // earlier version with two small terrain rises left one Slingshot
-  // target and *all four* Castle Crusher targets unreachable at every
-  // angle/power combination in a full sweep, not just badly tuned.
-  // Vertical variety instead comes entirely from buildPlatformLevel's
-  // own COIN/ENEMY placement offsets (COIN sits 3 rows above the
-  // (constant) ground, ENEMY sits 1 row above it) — a block placed
-  // immediately before a target reads as "guarding" it without needing
-  // any terrain height at all.
+  // Terrain stays deliberately flat — no STEP_UP/STEP_DOWN anywhere.
+  // MOVE_SOLID blocks horizontal movement against *any* solid tile
+  // regardless of step height (there's no step-assist), and since every
+  // shot restarts from the same fixed anchor (no forward progress
+  // carries between shots), even one elevation change between the
+  // anchor and a block/target can make it permanently unreachable —
+  // found empirically last pass (§21/§22). But a real, stacked shack
+  // doesn't need the *terrain* to rise at all: blocks and targets are
+  // entities, not tiles, and the projectile passes through them (no
+  // physical collision, only on_collide damage), so height only has to
+  // exist in *marker* placement — COIN_AT/ENEMY_AT (§23), each taking an
+  // explicit row-offset-above-ground operand instead of COIN/ENEMY's
+  // fixed -3/-1. Two support posts (2 blocks stacked) flank a doorway
+  // target and a roof target floating above it; a third post plus one
+  // more exposed target sit further down the runway.
   const tokens = [
-    T.FLAT,14, T.FLAT,8, T.COIN, T.ENEMY, T.FLAT,6, T.COIN, T.FLAT,6,
-    T.COIN, T.ENEMY, T.FLAT,6, T.ENEMY, T.FLAT,6, T.COIN, T.FLAT,10,
+    T.FLAT,14, T.FLAT,8,
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2,
+    T.ENEMY_AT,1, T.ENEMY_AT,5, T.FLAT,2,
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2,
+    T.COIN_AT,1, T.FLAT,2,
+    T.ENEMY_AT,1, T.FLAT,10,
   ];
   const platform = {gridH:20, startGroundY:16, minGroundY:10, maxGroundY:18, tokens};
   const built = buildPlatformLevel(platform);
@@ -3647,7 +3674,7 @@ function buildSlingshotCart(){
     // full-power 45° shot's simulated apex/range against this level's
     // size), same "measure, don't guess" pass as every generator's
     // numeric constants elsewhere in this file — see DESIGN.md.
-    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 5, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 4, 0.04, 8],
+    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 6, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 4, 0.04, 8],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0}, // PROJECTILE
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:13, collisionH:13, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
@@ -3713,14 +3740,37 @@ function buildCastleCrusherCart(){
   const targetShapes = blobMonsterShapes(12, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
-  // Flat, same reasoning as Slingshot's tokens (§9c/its own comment) —
-  // no STEP_UP anywhere, so nothing between the fixed anchor and any
-  // block/target can wall it off. Bigger/harder than Slingshot purely
-  // via more COIN/ENEMY clusters and a longer runway, not elevation.
+  // Flat terrain, same reasoning as Slingshot's tokens — no STEP_UP
+  // anywhere, so nothing between the fixed anchor and any block/target
+  // can wall it off (§21/§22). A real castle silhouette instead: two
+  // 3-block towers flanking a connecting wall (2 courses high, using
+  // COIN_AT's row-offset operand — §23 — to stack blocks straight up
+  // at one column instead of spreading them along the ground), a gate
+  // gap in the middle of the wall, a guard target on top of each tower,
+  // and a target sitting in the gate itself plus one floating just
+  // above it. Bigger/harder than Slingshot via a taller, wider structure
+  // and tougher blocks (BLOCK_START_HP), not a different mechanic.
+  // Column placement matters as much as height here: the projectile's
+  // horizontal speed decays every tick (GROUND_FRICTION applies whether
+  // or not it's grounded), so the reachable envelope isn't the naive
+  // parabola range — it's a hump that peaks a handful of columns out
+  // from the anchor and collapses back to "ground level only" well
+  // before the level's far edge. Measured empirically (fine-grained
+  // angle/power sweep recording every (column, max height) actually
+  // touched): height-7 stacks are reachable out to roughly column 20
+  // from the anchor, not column 30+ — an earlier version placed the
+  // far tower past that boundary and it was structurally unreachable
+  // no matter the shot. Keeping the whole castle within ~24 columns
+  // keeps every stack inside the measured envelope with margin.
   const tokens = [
-    T.FLAT,16, T.FLAT,12, T.COIN, T.ENEMY, T.FLAT,5, T.COIN, T.FLAT,5,
-    T.COIN, T.ENEMY, T.FLAT,5, T.COIN, T.FLAT,5, T.COIN, T.ENEMY, T.FLAT,5,
-    T.COIN, T.FLAT,5, T.COIN, T.ENEMY, T.FLAT,12,
+    T.FLAT,6,
+    T.COIN_AT,1, T.COIN_AT,3, T.COIN_AT,5, T.ENEMY_AT,7, T.FLAT,2, // left tower
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2, // wall course
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2, // wall course
+    T.ENEMY_AT,1, T.ENEMY_AT,5, T.FLAT,2, // gate: ground target + floating target above it
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2, // wall course
+    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2, // wall course
+    T.COIN_AT,1, T.COIN_AT,3, T.COIN_AT,5, T.ENEMY_AT,7, T.FLAT,6, // right tower
   ];
   const platform = {gridH:20, startGroundY:16, minGroundY:8, maxGroundY:18, tokens};
   const built = buildPlatformLevel(platform);
@@ -3767,7 +3817,7 @@ function buildCastleCrusherCart(){
     // 6 vs 4, same BLOCK_DAMAGE) and a bigger, taller level need more shots
     // to clear — see DESIGN.md §9c for why these two carts share everything
     // but these numbers and the level/sprite dressing.
-    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 8, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 6, 0.04, 8],
+    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 14, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 6, 0.04, 8],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:14, collisionH:14, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
