@@ -364,6 +364,26 @@ and it's exercised on every play, not just asserted.
   aren't representable in that field at all, which only became clear by
   checking the *decoded* cart's params, not just the source object.
 
+- **An aim line — a fifth composable generator — and real visual identity
+  for the two destruction carts** (`DESIGN.md` §22), both from direct
+  play feedback: charging a shot had no visual feedback at all, and the
+  two carts' "structures" were just scattered identical squares. The aim
+  line follows the exact same cart-declares-params/runtime-draws-it
+  shape as camera/HUD/palette — genuinely optional (gated by a presence
+  byte, unlike camera's always-on sentinel), and both renderers compute
+  its direction with the *same formula* the destruction genre's own
+  launch-velocity math uses, so the line is provably where a shot fired
+  right now would go. Each cart also got a second block silhouette
+  (a plank alongside the crate, a turret alongside the wall) spawned on
+  alternating checkpoints, which needed widening `on_tick`/`on_collide`'s
+  type dispatch from "is this a block" to "is this either block variant"
+  — mechanical, not a new mechanic. One testing note worth keeping: the
+  aim line looked completely broken in every early screenshot, until
+  forcing a synchronous render and screenshotting in the same tick
+  showed it had worked correctly the whole time — `waitForTimeout`
+  before a screenshot was catching stale frames under headless
+  Chromium's rAF throttling, not a real bug.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 
