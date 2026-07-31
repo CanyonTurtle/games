@@ -126,10 +126,11 @@ and it's exercised on every play, not just asserted.
   bytecode ever touches the camera directly — it's pure declared data
   read generically by the runtime, the same shape as the other three
   generators, not the opcode family. Verified with a bot that holds
-  right and jumps periodically: it crosses the full ~1000px, 125-tile
-  level (4x the 256px viewport) with the camera visibly panning and
-  clamping correctly at both ends, screenshotted identically in both
-  the WebGL and Canvas2D backends.
+  right and jumps periodically: it crosses the full level with the
+  camera visibly panning and clamping correctly at both ends,
+  screenshotted identically in both the WebGL and Canvas2D backends. All
+  four carts now use this same camera (see the square-viewport pass
+  below, `DESIGN.md` §18) — the platformer was just first.
 - **A real authoring bug caught by the test suite, not eyeballing**:
   the platformer's level tokens mix marker tokens (`COIN`, `ENEMY` — no
   operand) with width-carrying tokens (`FLAT`, `GAP`, ...), and a naive
@@ -275,6 +276,36 @@ and it's exercised on every play, not just asserted.
   unrelated bug report specifically about Flappy Bird, which has no
   tilemap at all and was never affected by it.
 
+- **A square 160×160 viewport for all four carts, and three genuinely
+  more playable games behind it** (`DESIGN.md` §18). The racer's oval
+  used to fit on one un-scrolled screen; it's now an 80×65-tile loop with
+  a camera and a "double chicane" pattern verified to close by simulating
+  the turtle-walk position math standalone before committing token
+  counts to the cart (an earlier hand-counted attempt was off by exactly
+  one segment length). The roguelike's cave grew from 32×20 to 48×36,
+  which needed real parameter re-tuning — the same `fillProb` that gave a
+  balanced floor ratio at the old size pushed well past 80% floor at the
+  new one, and just raising `fillProb` to compensate hit a sharp collapse
+  cliff (some seeds degenerating to near-all-wall) rather than scaling
+  smoothly. And fixing "enemies don't move" surfaced a genuine, previously
+  unmeasured bug two layers down from the intended fix: a monster's
+  move-timer starts at 0 and counts down by checking `!= 0`, so it goes
+  0 → −1 → −2 → ... forever and never fires again — monsters had likely
+  never reliably moved, the intended retry-loop fix just happened to be
+  the first test rigorous enough to catch it. The platformer's jump got
+  heavier fall gravity than rise gravity plus a jump-cut on early release
+  (measured: a tap now rises ~21px, a held jump ~52px) and roughly double
+  the level length — which, walked end-to-end by an automated bot instead
+  of spot-checked, turned up two more shipped-but-never-exercised
+  generator bugs: `BLOCK` obstacles had no floor underneath at all (a
+  bottomless pit with a decoration floating over it), and `GAP`'s "no
+  death, just cost distance" safety net was pinned to the grid's absolute
+  bottom row rather than the current ground height, so a gap encountered
+  while the terrain was high up could be deeper than a jump can climb out
+  of — an unrecoverable trap despite the design explicitly promising
+  otherwise. All three bugs predate this pass; none had been walked or
+  swept exhaustively before.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 
@@ -311,9 +342,6 @@ Each one is a reasonable next step, not a design admission of defeat:
   start/finish, checkpoint). The 45°-curve and chicane pieces from
   `examples/race-car.md` aren't implemented; the interpreter would
   need diagonal tile rasterization to support them.
-- **No camera/scrolling.** Flappy fixes the bird's x position and
-  scrolls pipes through a static frame; the racer renders the entire
-  track at once. Both sidestep needing a camera system.
 - **Two entity types per cart.** Enough to exercise the per-type
   extension-field mechanism, not an exhaustive catalog.
 

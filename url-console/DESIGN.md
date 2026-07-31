@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §18 below:
+New open questions this raised, folded into §19 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -897,7 +897,159 @@ runtime-selectable `sprite_generator` id (a small library of named
 archetypes, the same shape as `map_generator`) rather than
 authoring-time-only sugar.
 
-## 18. Open questions
+## 18. Square viewports, and making the other three carts actually fun
+
+Flappy Bird had always been the cart that got attention — the other three
+(racer, roguelike, platformer) shipped functionally correct but, once
+actually played instead of just tested, thin: the racer's track fit
+entirely on one screen with no camera ("a tiny donut"), the roguelike's
+cave was one small flat room with monsters that barely moved, and the
+platformer was short with floaty, single-curve jump physics. This pass
+made all three genuinely more playable, and forced every cart's viewport
+to a square 160×160 — WASM-4's own convention, chosen here for the same
+reasons: it fits consistently under both portrait and landscape device
+aspect ratios without letterboxing math per cart, and it leaves predictable
+room for touch buttons/HUD outside the play area instead of every cart
+negotiating its own layout.
+
+### 18.1 Camera as a fourth composable generator
+
+The square viewport is smaller than any of these carts' actual world, so
+none of them can just render everything at once anymore — they all needed
+scrolling. Rather than build per-cart camera logic, this added `camera` as
+a cart-declared parameter block (`followGlobal`, `clampMin/MaxX/Y`) next to
+palette/backdrop/HUD/map_generator: the cart names which global holds the
+entity id to follow and the world-space bounds to clamp within, and the
+runtime's `updateCamera()` does the rest every frame — interpolated
+follow position, centered in the viewport, clamped to the declared box,
+subtracted from every draw call. Carts that don't need scrolling (nothing
+here — even the roguelike's cave now exceeds one screen) get a default
+`{followGlobal:255, ...}` synthesized by `encodeCart`, matching the
+project's running pattern: the cart supplies a handful of numbers, the
+runtime supplies the shared machinery.
+
+### 18.2 Racer: a track that actually needs a camera
+
+The original 32×20-tile oval fit entirely inside one un-scrolled screen —
+literally a small donut, no matter how the car moved. The fix was a
+bigger, more interesting loop: a 80×65 grid with a "double chicane" pattern
+(turn off the main heading, jog sideways, turn back) used symmetrically on
+opposite sides of the rectangle, plus real checkpoints spaced around it.
+
+Getting the turn/straight token counts right by hand turned out to be
+genuinely error-prone — a first attempt used the full chicane pattern on
+one side and a shortened variant on the other, and the track didn't close
+(off by exactly one segment length). Rather than debug that by staring at
+turn-count arithmetic, a standalone script (`track_sim.js`) reimplements
+just the turtle-walk position/heading math from `buildTrack()` — no tile
+stamping, just "where does the pen end up" — so candidate token sequences
+can be verified to close into a loop *before* being committed to the cart.
+Using the identical chicane pattern on both opposite sides closed exactly.
+This is the same "measure, don't guess" instinct that shows up elsewhere
+in this project (byte-count claims, cave floor ratios below) applied to
+geometry instead of statistics.
+
+### 18.3 Roguelike: a bigger cave, and a monster-AI bug two layers deep
+
+**The cave.** The original 32×20 cave, like the racer's track, fit on one
+un-scrolled screen — "one flat map." Scaling the same cellular-automata
+generator up to 64×64 with unchanged parameters shifted the floor/wall
+equilibrium hard: the border-forced-solid ring is always exactly one tile
+thick, so it's a much smaller fraction of a bigger grid, and dilutes its
+wall-injecting effect on the interior CA dynamics less. The same
+`fillProb`/`wallThreshold` that gave 58–75% floor at the old size gave
+83–88% at 64×64. Compensating by raising `fillProb` worked only up to a
+sharp collapse cliff — past a threshold, some seeds randomly degenerated
+to near-all-wall caves instead of scaling smoothly. Settling on a more
+modest 48×36 grid and sweeping `fillProb` across 40–150 seeds at a time
+(not eyeballing one map) found a collapse-free band; since the cart uses
+one fixed `rngSeed` rather than a random one per play, the real requirement
+was "this one seed is good," not "every seed is good," so the shipped
+values (`fillProb:122`, seed 11) were chosen well inside the stable region
+and specifically verified for that seed (0 unreachable floor tiles, full
+gold placement, stairs reachable).
+
+**The monster freeze.** Fixing "enemies don't move" took two passes. The
+intended fix — a retry loop letting a monster try a few random directions
+before giving up on a blocked move instead of freezing until the next full
+`MOVE_INTERVAL` — made things *worse*: all 18 monsters were completely
+frozen, never moving once across a 30-second test. The retry logic itself
+was correct on inspection; the actual bug was one layer underneath it, in
+code this pass never touched. A monster's move-timer prop starts at `0` on
+spawn, and the countdown was `timer -= 1; if(timer != 0) skip-this-tick`.
+Decrementing from 0 goes straight to −1 and keeps going negative forever —
+the counter never lands on exactly 0 again, so the "time to move" branch
+never fires, ever, for the lifetime of the entity. This predates this
+session entirely; the retry-loop work just happened to be the first test
+rigorous enough (tracking distinct tiles visited per monster over real
+time, not just "did a crash happen") to expose it. The fix generalizes the
+trigger condition from "equals zero" to "at or below zero" (`timer > 0` ?
+skip : move), which is self-correcting regardless of the counter's
+starting value, and the spawn-time counter is now randomized within
+`[0, MOVE_INTERVAL)` as a small bonus so monsters don't all step in
+lockstep. Two lessons: a fix can look completely correct in isolation and
+still fail if the bug is somewhere the fix's own code never runs through
+(the retry loop only executes *after* the timer reaches 0 — which it
+never did), and "monsters move occasionally" had apparently never actually
+been measured before, only assumed.
+
+### 18.4 Platformer: jump feel, a longer level, and two more "never actually measured" bugs
+
+**Jump feel.** "Clunky, not curved" wasn't a complaint about the physics
+model — gravity integration already produces a real parabola — it was
+about the *response curve*: one fixed gravity in both directions and a
+jump velocity that's identical whether the button is tapped or held. The
+fix is the standard platformer trick, not a new primitive: gravity is
+heavier once the entity is falling (`vel_y >= 0`) than while it's rising,
+for a soft rise and a snappy, decisive fall instead of a lazy symmetric
+arc; and releasing the jump button while still rising truncates `vel_y`
+toward zero (`JUMP_CUT_MULT`), so a tap gives a short hop and a hold gives
+the full arc — variable jump height instead of one fixed height every
+time. Measured directly: a 3-tick tap now rises ~21px versus ~52px for a
+held jump, a clear, controllable difference.
+
+**The level.** Roughly doubled in length and token variety (more
+step/gap/block combinations, more coins and enemies) so the new square,
+narrower viewport still has enough road ahead of the camera to feel like a
+real level rather than one lucky screen's worth of content.
+
+**Two more latent generator bugs, found by finally brute-force-walking the
+whole level instead of spot-checking a few ticks.** A static "does the
+whole level actually work" sweep — checking every column for *some*
+reachable solid tile, and every adjacent-column pair for a step no jump
+could climb — caught two bugs in `buildPlatformLevel` that had shipped
+with the original, shorter level and simply never been exercised by prior
+testing:
+- `BLOCK` tokens (the floating brick obstacle) only ever wrote the brick
+  tile itself; they never called the same `fillColumn` every other span
+  uses to lay a normal floor underneath. Every `BLOCK` was secretly a
+  bottomless pit with a decoration floating over it — one extra
+  `fillColumn` call before placing the brick fixes it to be what it reads
+  as: an overhead obstacle above ordinary ground, matching how `GAP`
+  already documents "missing a jump costs distance, not a run."
+- `GAP`'s safety-net floor was pinned to the grid's absolute bottom row
+  regardless of the *current* ground height. That's fine when the ground
+  is already low, but with `groundY` pushed up by consecutive `STEP_UP`s
+  (this cart's minimum is row 8 of 20), a gap there created a pit deeper
+  than a jump's apex height (~7 tiles) — falling in was permanent, exactly
+  the "costs a run" outcome the design comment says it isn't supposed to
+  be. The fix anchors the safety net a fixed, always-climbable distance
+  below the *current* groundY instead of an absolute row, so pit depth no
+  longer depends on how high up the surrounding terrain happens to be.
+
+Both were caught by the same discipline used for the cave and the track:
+don't trust a design comment's stated invariant ("no death, ever") until
+something has actually swept the generated output and checked it against
+that claim on every column, not just the ones a hand-written test bot
+happened to walk across.
+
+**One deliberate balance change, not a bug fix.** `PLAYER_START_HP` was
+`1` in the original cart — fine for a short level with three enemies, but
+with the level 2× longer and enemies more than 2× as numerous, a single
+touch anywhere ending the run stopped reading as "hard" and started
+reading as "unfair." Raised to `3` to match the larger hazard budget.
+
+## 19. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat

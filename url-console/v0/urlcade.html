@@ -894,15 +894,32 @@ function buildPlatformLevel(level){
       for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
     } else if(t === PLATFORM_TOKENS.GAP){
       // No death plane (V0 scope cut — see README): a gap just removes the
-      // floor down to the level's very bottom row, which stays solid as a
-      // catch-all safety net, so missing a jump costs distance, not a run.
+      // floor down to a catch-all safety net, so missing a jump costs
+      // distance, not a run — that net used to sit at the grid's absolute
+      // bottom row regardless of the *current* groundY, which was fine
+      // near the bottom of the groundY range but a real trap near the
+      // top: with groundY pushed up by consecutive STEP_UPs, the resulting
+      // pit could be deeper than a jump's apex height (~7 tiles, from
+      // JUMP_VELOCITY/GRAVITY), so falling in was unrecoverable — the
+      // exact "costs a run" outcome this was meant to prevent. Anchoring
+      // the net a fixed, climbable distance below groundY instead of an
+      // absolute row keeps every pit shallow enough to jump back out of,
+      // no matter how high up the surrounding ground is.
       const w = level.tokens[++i];
+      const pitY = Math.min(gridH-1, groundY+5);
       for(let k=0;k<w;k++){
-        if(gx>=0 && gx<gridW) grid[gridH-1][gx] = PLATFORM_GROUND;
+        if(gx>=0 && gx<gridW) grid[pitY][gx] = PLATFORM_GROUND;
         gx++;
       }
     } else if(t === PLATFORM_TOKENS.BLOCK){
+      // An overhead obstacle floating above ordinary ground, not a pit —
+      // fillColumn first so BLOCK's span keeps a normal floor underneath
+      // (found as a real bug: without this, the brick overlay below was
+      // the only tile written for these columns, leaving a bottomless,
+      // safety-net-free hole under every BLOCK, unlike GAP which always
+      // keeps the floor's own catch-all bottom row).
       const w = level.tokens[++i];
+      for(let k=0;k<w;k++){ fillColumn(gx+k, groundY); }
       const by = Math.max(0, groundY-4);
       for(let k=0;k<Math.min(3,w);k++){ const x=gx+k; if(x>=0&&x<gridW) grid[by][x]=PLATFORM_BRICK; }
       gx += w;
@@ -1452,7 +1469,7 @@ function buildFlappyCart(){
     rngSeed: 42,
     modeFlags: 0,
     screenW: 160,
-    screenH: 220,
+    screenH: 160, // square, matches every other cart now — see DESIGN.md §18
     mapGenerator: 0, // no tilemap — the backdrop generator covers the frame
     backdropFillIndex: 8,   // sky blue (curated bank #0)
     backdropGroundHeight: 16,
@@ -1468,7 +1485,9 @@ function buildFlappyCart(){
     // the original 30Hz tuning — the sim now runs at 60Hz (see the loop()
     // comment near render()), so per-tick rates are rescaled to keep the
     // same *real-time* feel; only the render smoothness changed, not the pace.
-    constants: [0.175, -1.6, 1.0, 34, 16, 130, 140, 220, 160, 40, 90, 16],
+    // GAP_SIZE/GAP_MIN_Y/GAP_MAX_Y/BIRD_START_Y retuned for the shorter
+    // 160px-tall square screen (was 220 tall) — see DESIGN.md §18.
+    constants: [0.175, -1.6, 1.0, 32, 14, 88, 140, 160, 160, 40, 70, 16],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
@@ -1786,20 +1805,37 @@ function buildRacerCart(){
     '67676767','76767676','67676767','76767676',
   ]);
 
-  const trackWidth = 5, segLen = 5, startGX = 8, startGY = 10, startDir = 0, gridW = 40, gridH = 28;
+  // A closed rectangular circuit, much bigger than the original small
+  // donut, with a "double chicane" (turn off the main heading, jog
+  // sideways, turn back — nets to zero lateral drift, verified by
+  // simulating the turtle walk before committing to it) on two opposite
+  // sides for visual variety a plain rectangle didn't have. Track
+  // geometry was designed by simulating buildTrack's own turtle-walk
+  // math standalone (position/heading only, no tile stamping) and
+  // checking the token list actually closes back to the start tile —
+  // see DESIGN.md §18 for why that's not just "count carefully by hand."
+  const trackWidth = 5, segLen = 6, startGX = 8, startGY = 8, startDir = 0, gridW = 80, gridH = 65;
+  const CHICANE = [
+    TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90,
+  ];
+  const S = (n) => new Array(n).fill(TRACK_TOKENS.STRAIGHT);
   const tokens = [
     TRACK_TOKENS.START_FINISH,
-    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    ...S(4), ...CHICANE, ...S(4),
     TRACK_TOKENS.CURVE_R90,
-    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    ...S(3), TRACK_TOKENS.CHECKPOINT, ...S(5),
     TRACK_TOKENS.CURVE_R90,
+    ...S(4), ...CHICANE, ...S(4),
     TRACK_TOKENS.CHECKPOINT,
-    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
     TRACK_TOKENS.CURVE_R90,
-    TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    ...S(3), TRACK_TOKENS.CHECKPOINT, ...S(5),
     TRACK_TOKENS.CURVE_R90,
   ];
   const startX = (startGX+0.5)*8, startY = (startGY+0.5)*8;
+  const screenW = 160, screenH = 160;
 
   const cart = {
     formatVersion: 1,
@@ -1808,8 +1844,10 @@ function buildRacerCart(){
     paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],
     rngSeed: 17,
     modeFlags: 0,
-    screenW: gridW*8,
-    screenH: gridH*8,
+    screenW, screenH, // square viewport, see DESIGN.md §18 — the track
+                      // itself (gridW*8 x gridH*8) is much bigger; the
+                      // camera below is what makes that work instead of
+                      // squashing the whole track into one small view
     mapGenerator: 1, // track-grammar generator (§16) — the same one any other
                      // genre could invoke for a loop-shaped level, not a
                      // "racer" special case
@@ -1817,6 +1855,12 @@ function buildRacerCart(){
     tileSurfaceOverrides: {[TILE_STARTLINE]: TILE_ROAD}, // startline tile renders distinctly but
                                                           // drives like road — cart-declared, not
                                                           // a runtime special case (DESIGN.md §16)
+    camera: {
+      followGlobal: RACER_GLOBAL_NAMES.g_car_player,
+      clampMinX: 0, clampMinY: 0,
+      clampMaxX: Math.max(0, gridW*8 - screenW),
+      clampMaxY: Math.max(0, gridH*8 - screenH),
+    },
     inputActiveButtons: 1|2|4,
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
     inputButtonLabels: {1:'Left', 2:'Right', 4:'Gas'},
@@ -1859,12 +1903,18 @@ function buildRacerCart(){
    ============================================================ */
 const ROGUELIKE_CONST_NAMES = {
   PLAYER_START_HP:0, MONSTER_START_HP:1, PLAYER_ATK:2, MONSTER_ATK:3,
-  MOVE_INTERVAL:4, CHASE_RADIUS:5, SCREEN_W:6, SCREEN_H:7, NUM_MONSTERS:8,
+  MOVE_INTERVAL:4, CHASE_RADIUS:5, MAP_W:6, MAP_H:7, NUM_MONSTERS:8,
+  // MAP_W/MAP_H are the cave's own pixel size (gridW*8/gridH*8), used only
+  // for random monster-spawn placement — distinct from the cart's
+  // screenW/screenH, which is now the fixed 160x160 viewport the camera
+  // scrolls within (DESIGN.md §18). They used to be the same number by
+  // coincidence (no camera meant the whole map always fit one screen);
+  // they aren't anymore, hence the rename away from "SCREEN_*".
 };
 const ROGUELIKE_GLOBAL_NAMES = {
   g_player:0, g_dead:1, g_won:2, g_gold:3, g_prev_input:4, g_scratch:5,
   g_target_x:6, g_target_y:7, g_dx:8, g_dy:9, g_mtx:10, g_mty:11, g_dir:12,
-  g_mx:13, g_my:14,
+  g_mx:13, g_my:14, g_retry:15,
 };
 const ROGUELIKE_SYM = {constants:ROGUELIKE_CONST_NAMES, globals:ROGUELIKE_GLOBAL_NAMES};
 
@@ -1899,11 +1949,11 @@ const ROGUELIKE_HOOKS_SRC = {
     STOREG g_dir
     spawn_loop:
     PUSHI 0
-    PUSHC SCREEN_W
+    PUSHC MAP_W
     RAND_RANGE
     STOREG g_mx
     PUSHI 0
-    PUSHC SCREEN_H
+    PUSHC MAP_H
     RAND_RANGE
     STOREG g_my
     LOADG g_mx
@@ -1921,6 +1971,8 @@ const ROGUELIKE_HOOKS_SRC = {
     PUSHC MONSTER_START_HP
     STOREE g_scratch 5
     PUSHI 0
+    PUSHC MOVE_INTERVAL
+    RAND_RANGE
     STOREE g_scratch 8
     LOADG g_dir
     PUSHI 1
@@ -2071,9 +2123,13 @@ const ROGUELIKE_HOOKS_SRC = {
     SUB
     DUP
     STORE_SELF 8
+    PUSHI 0
+    CMPGT
     JNZ tick_end
     PUSHC MOVE_INTERVAL
     STORE_SELF 8
+    PUSHI 3
+    STOREG g_retry
 
     LOAD_SELF 0
     LOAD_SELF 1
@@ -2196,7 +2252,15 @@ const ROGUELIKE_HOOKS_SRC = {
     GETTILE
     PUSHI 1
     CMPEQ
-    JNZ tick_end
+    JZ commit_move
+    LOADG g_retry
+    PUSHI 1
+    SUB
+    DUP
+    STOREG g_retry
+    JNZ wander
+    JMP tick_end
+    commit_move:
     LOADG g_mtx
     STORE_SELF 0
     LOADG g_mty
@@ -2274,7 +2338,19 @@ function buildRoguelikeCart(){
   // swap alone could have fixed it — see DESIGN.md for the postmortem.
   const monsterShapes = blobMonsterShapes(12, 14, 7, 14);
 
-  const gridW = 32, gridH = 20;
+  // Bigger than the original 32x20 (which fit entirely on one screen with
+  // no camera, reported as feeling like "one flat map") — big enough that
+  // the 160x160 viewport genuinely only shows a fraction at a time. Cave
+  // generation turned out to have real phase-transition sensitivity at
+  // this size: the same fillProb/wallThreshold that gave a well-balanced
+  // 58-75% floor ratio at 32x20 gives 75-86% at this size (the forced-
+  // solid border ring is a much smaller fraction of a bigger grid, so it
+  // dilutes into the interior CA dynamics less), and pushing fillProb up
+  // to compensate works until a sharp collapse cliff (some seeds produce
+  // a near-all-wall degenerate cave) — found by sweeping fillProb across
+  // many seeds and measuring floor%, not by eyeballing one map. 122 is
+  // the highest value that stayed collapse-free across 150 test seeds.
+  const gridW = 48, gridH = 36;
 
   const cart = {
     formatVersion: 1,
@@ -2282,14 +2358,21 @@ function buildRoguelikeCart(){
     paletteMode: 0, // curated bank #1 ("dungeon") — not the procedural
                      // hue-rotation mode; see CURATED_BANK's comment for why
     paletteParams: [1, 0, 0, 0, 0, 0, 0, 0],
-    rngSeed: 7,
+    rngSeed: 11,
     modeFlags: 0,
-    screenW: gridW*8,
-    screenH: gridH*8,
+    screenW: 160, screenH: 160, // square viewport, see DESIGN.md §18 —
+                                 // the cave (gridW*8 x gridH*8) is bigger;
+                                 // the camera below scrolls it into view
     mapGenerator: 2, // cellular-automata cave generator (§16) — a genuinely
                      // different archetype from the racer's turtle-grammar,
                      // stochastic + smoothed rather than turtle-walked
     backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
+    camera: {
+      followGlobal: ROGUELIKE_GLOBAL_NAMES.g_player,
+      clampMinX: 0, clampMinY: 0,
+      clampMaxX: Math.max(0, gridW*8 - 160),
+      clampMaxY: Math.max(0, gridH*8 - 160),
+    },
     inputActiveButtons: 1|2|4|8,
     inputTouchTemplate: TOUCH_TEMPLATE_DPAD_ONLY,
     inputButtonLabels: {1:'Left', 2:'Right', 4:'Up', 8:'Down'},
@@ -2299,7 +2382,13 @@ function buildRoguelikeCart(){
       {kind:1, sourceKind:0, srcA:ROGUELIKE_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'You died - refresh link to retry'},
       {kind:1, sourceKind:0, srcA:ROGUELIKE_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'You escaped! Refresh link to play again'},
     ],
-    constants: [20, 6, 3, 2, 20, 64, gridW*8, gridH*8, 6],
+    // MOVE_INTERVAL lowered 20->14 ticks and NUM_MONSTERS raised 6->18 for
+    // the bigger map — a monster whose random-direction attempt was
+    // blocked used to just sit still until the next full MOVE_INTERVAL
+    // (no retry), which read as "enemies don't move"; on_tick now retries
+    // a few times with a fresh random direction before giving up for the
+    // tick (see ROGUELIKE_HOOKS_SRC.on_tick's g_retry loop).
+    constants: [20, 6, 3, 2, 14, 70, gridW*8, gridH*8, 18],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // PLAYER
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // MONSTER (ext 8 = move_timer)
@@ -2309,7 +2398,7 @@ function buildRoguelikeCart(){
       {w:8,h:8,pixels:wallPixels}, {w:8,h:8,pixels:floorPixels},
       {w:8,h:8,pixels:stairsPixels}, {w:8,h:8,pixels:goldPixels},
     ],
-    cave: {gridW, gridH, fillProb:115, iterations:4, wallThreshold:5, goldCount:8},
+    cave: {gridW, gridH, fillProb:122, iterations:4, wallThreshold:5, goldCount:16},
     hooks: {},
   };
   for(const name of HOOK_NAMES){
@@ -2331,9 +2420,21 @@ function buildRoguelikeCart(){
 const PLATFORM_CONST_NAMES = {
   GRAVITY:0, MOVE_SPEED:1, JUMP_VELOCITY:2, ENEMY_SPEED:3, PLAYER_START_HP:4,
   ENEMY_ATK:5, LEVEL_W:6, LEVEL_H:7, NUM_COINS:8, NUM_ENEMIES:9, MAX_FALL_SPEED:10,
+  FALL_GRAVITY:11, JUMP_CUT_MULT:12,
+  // FALL_GRAVITY > GRAVITY (rising) is the whole "jump curve" fix: the
+  // original single-gravity arc integrates to a lazy, floaty parabola in
+  // both directions (a real curve, just not a snappy-feeling one — the
+  // clunkiness reported wasn't the underlying math shape, it was a flat
+  // response curve). Heavier gravity once vel_y>0 gives a fast, decisive
+  // fall while the rise stays soft, the standard platformer trick (see
+  // on_tick's tick_player/tick_enemy). JUMP_CUT_MULT is the other half:
+  // releasing JUMP while still rising truncates vel_y (on_input), so tap
+  // = short hop, hold = full arc — variable jump height instead of a
+  // single fixed-height jump every time the button is touched.
 };
 const PLATFORM_GLOBAL_NAMES = {
   g_player:0, g_dead:1, g_won:2, g_score:3, g_scratch:4, g_i:5, g_cx:6, g_cy:7,
+  g_prev_input:8,
 };
 const PLATFORM_SYM = {constants:PLATFORM_CONST_NAMES, globals:PLATFORM_GLOBAL_NAMES};
 
@@ -2439,16 +2540,34 @@ const PLATFORM_HOOKS_SRC = {
 
     LOAD_INPUT
     TESTBIT 2
-    JZ done
+    JZ chk_jump_release
     LOADE g_player 0
     LOADE g_player 1
     PUSHI 5
     ADD
     GETTILE
     TILE_SURFACE
-    JZ done
+    JZ store_prev
     PUSHC JUMP_VELOCITY
     STOREE g_player 3
+    JMP store_prev
+
+    chk_jump_release:
+    LOADG g_prev_input
+    TESTBIT 2
+    JZ store_prev
+    LOADE g_player 3
+    PUSHI 0
+    CMPLT
+    JZ store_prev
+    LOADE g_player 3
+    PUSHC JUMP_CUT_MULT
+    MUL
+    STOREE g_player 3
+
+    store_prev:
+    LOAD_INPUT
+    STOREG g_prev_input
     done:
     HALT
   `,
@@ -2501,7 +2620,16 @@ const PLATFORM_HOOKS_SRC = {
 
     tick_player:
     LOAD_SELF 3
+    PUSHI 0
+    CMPLT
+    JZ p_fall_grav
     PUSHC GRAVITY
+    JMP p_apply_grav
+    p_fall_grav:
+    PUSHC FALL_GRAVITY
+    p_apply_grav:
+    LOAD_SELF 3
+    SWAP
     ADD
     PUSHC MAX_FALL_SPEED
     CLAMP_ABS
@@ -2511,7 +2639,16 @@ const PLATFORM_HOOKS_SRC = {
 
     tick_enemy:
     LOAD_SELF 3
+    PUSHI 0
+    CMPLT
+    JZ e_fall_grav
     PUSHC GRAVITY
+    JMP e_apply_grav
+    e_fall_grav:
+    PUSHC FALL_GRAVITY
+    e_apply_grav:
+    LOAD_SELF 3
+    SWAP
     ADD
     PUSHC MAX_FALL_SPEED
     CLAMP_ABS
@@ -2648,12 +2785,24 @@ function buildPlatformerCart(){
     {type:SHAPE_ELLIPSE, cx:5.8,cy:5.8, rx:2.3,ry:2.3, color:15},
   ];
 
+  // Roughly double the original length and with more step/gap/block
+  // variety — at the old 256px-wide viewport the level already spanned
+  // ~3.7 screens, which read as "long enough" on paper but felt short in
+  // practice once the narrower 160px square viewport (see screenW below)
+  // meant more of it went by per second of camera pan. This also gives
+  // the new asymmetric-gravity jump more room to be felt across a mix of
+  // short hops and longer gap clears rather than just the original three.
   const T = PLATFORM_TOKENS;
   const tokens = [
-    T.FLAT,16, T.COIN, T.FLAT,10, T.STEP_UP,8, T.COIN, T.ENEMY,
-    T.FLAT,10, T.GAP,6, T.FLAT,8, T.STEP_DOWN,8, T.BLOCK,6, T.COIN,
-    T.FLAT,10, T.ENEMY, T.FLAT,8, T.STEP_UP,8, T.GAP,5, T.FLAT,10,
-    T.COIN, T.ENEMY, T.FLAT,12,
+    T.FLAT,14, T.COIN, T.FLAT,8, T.STEP_UP,8, T.COIN, T.ENEMY,
+    T.FLAT,8, T.GAP,6, T.FLAT,8, T.STEP_DOWN,8, T.BLOCK,6, T.COIN,
+    T.FLAT,8, T.ENEMY, T.FLAT,6, T.STEP_UP,8, T.GAP,5, T.FLAT,8,
+    T.COIN, T.ENEMY, T.FLAT,8, T.STEP_UP,6, T.STEP_UP,6, T.COIN,
+    T.FLAT,6, T.GAP,6, T.FLAT,6, T.BLOCK,6, T.ENEMY, T.FLAT,8,
+    T.STEP_DOWN,6, T.STEP_DOWN,6, T.FLAT,8, T.COIN, T.GAP,4, T.FLAT,6,
+    T.ENEMY, T.FLAT,8, T.STEP_UP,8, T.COIN, T.ENEMY, T.GAP,6, T.FLAT,8,
+    T.BLOCK,6, T.STEP_DOWN,8, T.FLAT,6, T.COIN, T.FLAT,8, T.ENEMY,
+    T.STEP_UP,6, T.GAP,5, T.COIN, T.FLAT,10, T.ENEMY, T.FLAT,14,
   ];
   const platform = {gridH:20, startGroundY:14, minGroundY:8, maxGroundY:18, tokens};
   // Author-time only: run the real generator once just to read off gridW and
@@ -2665,7 +2814,7 @@ function buildPlatformerCart(){
   const built = buildPlatformLevel(platform);
   const gridW = built.grid[0].length;
   const numCoins = built.numCoins, numEnemies = built.numEnemies;
-  const screenW = 256, screenH = 160;
+  const screenW = 160, screenH = 160; // square, matches every other cart — see DESIGN.md §18
 
   const cart = {
     formatVersion: 1,
@@ -2696,7 +2845,14 @@ function buildPlatformerCart(){
       {kind:1, sourceKind:0, srcA:PLATFORM_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'You died - refresh link to retry'},
       {kind:1, sourceKind:0, srcA:PLATFORM_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'You win! Refresh link to play again'},
     ],
-    constants: [0.35, 1.6, -6.2, 0.8, 1, 1, gridW*8, platform.gridH*8, numCoins, numEnemies, 6],
+    // FALL_GRAVITY (0.6) roughly 1.7x GRAVITY (0.35 while rising) and
+    // JUMP_CUT_MULT (0.4) are the jump-feel fix — see PLATFORM_CONST_NAMES.
+    // PLAYER_START_HP raised 1->3: fine for the original short/sparse
+    // level, but with 2x the length and more than 2x the enemies, a
+    // single touch anywhere ending the run stopped being "hard" and
+    // started being "unfair" — a few hits of leeway matches the bigger
+    // hazard budget instead of just making the level a longer insta-fail.
+    constants: [0.35, 1.6, -6.2, 0.8, 3, 1, gridW*8, platform.gridH*8, numCoins, numEnemies, 6, 0.6, 0.4],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:8, extFieldCount:0}, // PLAYER
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // COIN
