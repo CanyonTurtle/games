@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §21 below:
+New open questions this raised, folded into §22 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1175,7 +1175,95 @@ building the real thing is worth roughly another 5-10 points beyond
 what plain gzip/brotli would already buy for free, on top of compression
 already being worth doing at all.
 
-## 21. Open questions
+## 21. A fifth cart_type: destruction (Slingshot & Castle Crusher)
+
+Two new carts dogfood an Angry Birds / Crush the Castle-style genre:
+aim, charge, and fire a projectile at HP-bearing blocks and one-hit
+targets. The physics model is a deliberate scope cut, not a rigid-body
+simulation — blocks never move under gravity or stack on each other;
+they take damage and do a small damped-spring "wobble" back to their
+own spawn point, and the only entity with real physics is the launched
+PROJECTILE (gravity + `MOVE_SOLID`, exactly like the platformer's
+player). Zero new opcodes: even the wobble is a hand-rolled damped
+spring (`vel = (vel + (orig_pos - pos)*k) * damping`) using only
+existing arithmetic ops, and both carts reuse `buildPlatformLevel` and
+`PLATFORM_TOKENS` verbatim — COIN checkpoints become BLOCK spawns, ENEMY
+checkpoints become TARGET spawns, checkpoint 0 becomes the launcher
+anchor. Aim/power input is digital (hold left/right to sweep angle,
+hold fire to charge power, release to launch), matching the existing
+"no analog input" scope note — the same trick classic console golf
+games use.
+
+Three real bugs found by testing this properly, all before this genre
+had a single line of documentation:
+
+**Terrain elevation changes can make content permanently unreachable.**
+The first version of both levels used `STEP_UP` to build a "castle
+silhouette" with a rise at the entrance. `MOVE_SOLID` blocks horizontal
+movement against *any* solid tile in the way, regardless of how tall
+the step is — there's no step-assist, unlike a platformer where the
+player can jump over a rise. Combined with every shot restarting from
+the *same fixed anchor* (no forward progress carries between failed
+shots, unlike a real multi-shot artillery game where you might advance),
+a single elevation change between the anchor and a block/target can
+wall it off from every possible angle/power combination, not just
+badly-tuned ones. Caught by sweeping a full angle × power grid (12
+angles × 5 charge levels) against a fresh `World` per trial and checking
+which blocks/targets were ever actually destroyed: one Slingshot target
+and *all four* Castle Crusher targets were unreachable — not "hard to
+reach," provably unreachable. Fixed by making both terrains fully flat
+(no `STEP_UP`/`STEP_DOWN` at all), with vertical variety coming entirely
+from `buildPlatformLevel`'s own fixed COIN/ENEMY placement offsets
+instead. Confirmed fixed the same way: re-ran the sweep, zero
+unreachable targets in either cart.
+
+**A settled projectile could soft-lock a shot forever.** The original
+"is this shot over" check only looked for the projectile going off the
+level's bounds. A projectile that lands and rolls to a stop on flat
+ground satisfies neither "off bounds" nor any other check that existed
+— it would just sit there, never triggering the next shot to spawn,
+effectively burning one of a small fixed number of shots permanently.
+Fixed with a settle check: grounded (`vel_y` exactly `0`, which only
+happens from an actual `MOVE_SOLID` floor collision, not the momentary
+zero-crossing at a parabola's true apex) *and* horizontal speed decayed
+below a small threshold ends the shot. Caught by literally watching a
+shot's own trajectory in a test rather than only checking the final
+win/lose state — the first sign was a shot's `x`/`y` printing identically
+for 250 straight ticks.
+
+**A lingering touch could delete a block's HP as a non-event.**
+`on_collide` fires every tick two entities' boxes overlap, with no
+"already handled this contact" memory — fine for a fast-moving hit, but
+a slow-rolling projectile can sit inside a single block's hitbox for
+dozens of ticks, applying full damage on *every one* of them. A 6-HP
+block could be deleted by a graze that happened to be slow, making HP
+meaningless and (combined with the flat-terrain fix above, which let a
+single rolling shot touch every block in a row) let one shot clear
+levels that were supposed to take several. Fixed with a short per-block
+hit-cooldown counter (an entity ext field, ticked down every frame,
+checked by `on_collide` before applying damage) — the standard
+"invincibility frames" idea from action games, applied here to a block
+instead of a player.
+
+**One more, purely cosmetic but worth recording because it wasted more
+time than the real bugs:** `paletteParams` round-trips through the
+binary format as *unsigned* bytes. A first attempt to fix a badly-chosen
+accent hue (Slingshot's warm wood terrain paired with `accentOffset:150`
+— copied from the platformer without checking — landed the accent ramp
+on cyan) used a *negative* offset to reach red. It encoded, decoded, and
+rendered a completely different, still-wrong hue (purple), because
+`-35` truncates to `221` (`-35 & 0xFF`) on encode and is read back as
+`221`, not reconstructed as `-35` — there's no sign bit to reconstruct
+from. Signed hue offsets aren't representable in this field at all, not
+just inconvenient. The actual fix, once that was understood: pick a
+*positive* offset that lands somewhere good directly. From a base hue of
+35, the reachable accent range with an unsigned 0-255 offset is exactly
+`[35, 290]` — reds below hue 35 are permanently unreachable from that
+base hue with this field, full stop. Landed on green (`offset:85`,
+accent hue 120) instead, which turned out to fit better anyway (a green
+"pig" against brown wood is very on-theme for the genre).
+
+## 22. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat

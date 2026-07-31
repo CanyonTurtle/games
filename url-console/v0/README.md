@@ -333,6 +333,37 @@ and it's exercised on every play, not just asserted.
   `on_tick` retry loop) — the disassembler reconstructed it exactly,
   including the one instruction that makes it a loop.
 
+- **A fifth cart_type: destruction (Slingshot & Castle Crusher)**
+  (`DESIGN.md` §21). Angry Birds / Crush the Castle at a deliberately
+  simplified physics tier — no rigid-body simulation, no rotation; HP-
+  bearing blocks that wobble on a damped spring back to their own spawn
+  point instead of falling or stacking, and the one real physics body
+  (the launched projectile) reuses `MOVE_SOLID` + gravity exactly like
+  the platformer's player. Zero new opcodes: the wobble is hand-rolled
+  spring math, and both carts reuse `buildPlatformLevel`/`PLATFORM_TOKENS`
+  verbatim (COIN → block spawn, ENEMY → target spawn, checkpoint 0 →
+  launcher anchor) rather than a new map generator. Testing this properly
+  — not just "does it crash" — found three real bugs before any of it
+  shipped: an early terrain design with elevation changes left one
+  Slingshot target and *all four* Castle Crusher targets *provably*
+  unreachable at every angle/power combination (`MOVE_SOLID` has no
+  step-assist, and every shot restarts from a fixed anchor with no
+  forward progress carried between misses, so one wall between the
+  anchor and a target is fatal, not just inconvenient); a settled,
+  stopped projectile satisfied none of the "shot is over" conditions and
+  could soft-lock a shot forever; and `on_collide` re-applying damage on
+  every tick of continued overlap meant a slow graze could delete a
+  6-HP block as fast as a direct hit, making HP meaningless. All three
+  found by simulating (a full angle × power sweep against fresh `World`
+  instances, watching a shot's actual trajectory tick-by-tick) rather
+  than by eyeballing a couple of test plays. One more bug, purely
+  cosmetic but the most surprising: `paletteParams` round-trips through
+  the binary format as *unsigned* bytes, so a negative hue-offset value
+  used to fix a bad accent color silently wrapped to a different wrong
+  color instead of the intended one on encode/decode — signed offsets
+  aren't representable in that field at all, which only became clear by
+  checking the *decoded* cart's params, not just the source object.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

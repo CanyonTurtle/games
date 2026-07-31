@@ -2963,6 +2963,728 @@ function buildPlatformerCart(){
 }
 
 /* ============================================================
+   9c. Cart authoring — Slingshot & Castle Crusher (destruction genre)
+
+   Both dogfood the same new "physics destruction" archetype (Angry
+   Birds / Crush the Castle) with a deliberately simplified physics
+   model, not a real rigid-body simulation: structure BLOCKs never move
+   under gravity or stack on each other — they're anchored in place and
+   just take damage, with a small damped-spring "wobble" on a hit that
+   doesn't destroy them (vel/pos integrated each tick toward their own
+   spawn point, so a knock always settles back to rest instead of
+   drifting). The one real physics body is the launched PROJECTILE,
+   which reuses MOVE_SOLID + gravity exactly like the platformer's
+   player. This is a genuine "V0 scope cut, not a spec revision" in the
+   same spirit as the platformer's "no death plane": real inter-block
+   support/collapse physics (a struck block knocking over the ones
+   beside it) would need actual entity-vs-entity collision resolution,
+   which this VM has no primitive for (MOVE_SOLID only resolves against
+   tiles) — hand-rolling that in bytecode for every block pair, every
+   tick, is exactly the kind of fragile, easy-to-get-subtly-wrong logic
+   this project has needed a dedicated opcode for before (MOVE_SOLID
+   itself, born from the same instinct). Chose "blocks have HP and wobble
+   but don't fall on each other" over "add a new opcode to make them
+   fall on each other" — the destruction spectacle survives fully intact
+   (satisfying hits, breakage, a piercing shot that can clear a row) at
+   a fraction of the risk.
+
+   Both carts share one symbol table and one hook source: Slingshot and
+   Castle Crusher are the same mechanic (aim, charge, fire a piercing
+   shot at HP-bearing blocks and one-hit-kill targets) at two difficulty
+   tiers, exactly like Cave Crawler and Run & Jump are two different
+   *genres* sharing the camera/MOVE_SOLID/checkpoint conventions — reuse
+   the terrain (buildPlatformLevel + PLATFORM_TOKENS, unmodified) purely
+   for its existing "walk a token stream, drop entities at COIN/ENEMY
+   marker positions" behavior: COIN slots become BLOCK spawns, ENEMY
+   slots become TARGET spawns, and checkpoint 0 (originally "player
+   start") becomes the launcher anchor. Zero new map-generator code,
+   zero new opcodes — see the README for why that mattered here
+   specifically (a physics-heavy genre was the highest-risk build of
+   this pass; reuse was how the risk stayed low).
+
+   Aim/charge input is deliberately digital (hold LEFT/RIGHT to sweep
+   the angle, hold FIRE to charge power, release to launch) rather than
+   an analog drag vector, matching the README's existing "digital input
+   only" scope note — this is the same trick classic console
+   golf/artillery games use to make an aim-and-power mechanic work
+   without a mouse.
+   ============================================================ */
+const DESTRUCT_CONST_NAMES = {
+  GRAVITY:0, MAX_FALL_SPEED:1, LAUNCH_SPEED_SCALE:2, MIN_ANGLE:3, MAX_ANGLE:4,
+  ANGLE_RATE:5, CHARGE_RATE:6, MAX_POWER:7, BLOCK_DAMAGE:8, SPRING_K:9,
+  WOBBLE_DAMPING:10, NUM_SHOTS:11, NUM_BLOCKS:12, NUM_TARGETS:13,
+  LEVEL_W:14, LEVEL_H:15, GROUND_FRICTION:16, BLOCK_START_HP:17, SETTLE_SPEED2:18,
+  HIT_COOLDOWN:19,
+};
+const DESTRUCT_GLOBAL_NAMES = {
+  g_active_proj:0, g_angle:1, g_power:2, g_launched:3, g_shots_left:4,
+  g_targets_left:5, g_won:6, g_lost:7, g_anchor_x:8, g_anchor_y:9,
+  g_prev_input:10, g_scratch:11, g_i:12, g_cx:13, g_cy:14, g_proj_done:15,
+};
+const DESTRUCT_SYM = {constants:DESTRUCT_CONST_NAMES, globals:DESTRUCT_GLOBAL_NAMES};
+
+// Entity type ids: 0=PROJECTILE, 1=BLOCK (ext 8=orig_x, 9=orig_y — the
+// spring-back anchor for the wobble; ext 10=hit_cooldown, counted down
+// every tick, blocking on_collide from re-applying damage every single
+// tick a slow-moving projectile happens to still be overlapping it —
+// found empirically: without this, a lingering touch could apply
+// BLOCK_DAMAGE dozens of times over a slow pass, destroying any block
+// almost on contact regardless of its HP, making HP meaningless), 2=TARGET.
+const DESTRUCT_HOOKS_SRC = {
+  on_init: `
+    PUSHI 0
+    GET_CHECKPOINT
+    STOREG g_anchor_y
+    STOREG g_anchor_x
+
+    SPAWN 0
+    STOREG g_active_proj
+    LOADG g_anchor_x
+    STOREE g_active_proj 0
+    LOADG g_anchor_y
+    STOREE g_active_proj 1
+    PUSHI 0
+    STOREE g_active_proj 2
+    PUSHI 0
+    STOREE g_active_proj 3
+
+    PUSHC MIN_ANGLE
+    STOREG g_angle
+    PUSHI 0
+    STOREG g_power
+    PUSHI 0
+    STOREG g_launched
+    PUSHI 0
+    STOREG g_proj_done
+    PUSHC NUM_SHOTS
+    STOREG g_shots_left
+    PUSHI 0
+    STOREG g_won
+    PUSHI 0
+    STOREG g_lost
+
+    PUSHI 0
+    STOREG g_i
+    block_loop:
+    LOADG g_i
+    PUSHI 1
+    ADD
+    GET_CHECKPOINT
+    STOREG g_cy
+    STOREG g_cx
+    SPAWN 1
+    STOREG g_scratch
+    LOADG g_cx
+    STOREE g_scratch 0
+    LOADG g_cy
+    STOREE g_scratch 1
+    LOADG g_cx
+    STOREE g_scratch 8
+    LOADG g_cy
+    STOREE g_scratch 9
+    PUSHI 0
+    STOREE g_scratch 10
+    PUSHC BLOCK_START_HP
+    STOREE g_scratch 5
+    LOADG g_i
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_i
+    PUSHC NUM_BLOCKS
+    CMPLT
+    JNZ block_loop
+
+    PUSHI 0
+    STOREG g_i
+    target_loop:
+    LOADG g_i
+    PUSHC NUM_BLOCKS
+    ADD
+    PUSHI 1
+    ADD
+    GET_CHECKPOINT
+    STOREG g_cy
+    STOREG g_cx
+    SPAWN 2
+    STOREG g_scratch
+    LOADG g_cx
+    STOREE g_scratch 0
+    LOADG g_cy
+    STOREE g_scratch 1
+    PUSHI 1
+    STOREE g_scratch 5
+    LOADG g_i
+    PUSHI 1
+    ADD
+    DUP
+    STOREG g_i
+    PUSHC NUM_TARGETS
+    CMPLT
+    JNZ target_loop
+
+    PUSHC NUM_TARGETS
+    STOREG g_targets_left
+    HALT
+  `,
+  on_input: `
+    LOADG g_won
+    JNZ done
+    LOADG g_lost
+    JNZ done
+    LOADG g_launched
+    JNZ done
+
+    LOAD_INPUT
+    TESTBIT 0
+    JZ chk_right
+    LOADG g_angle
+    PUSHC ANGLE_RATE
+    SUB
+    STOREG g_angle
+    chk_right:
+    LOAD_INPUT
+    TESTBIT 1
+    JZ clamp_lo
+    LOADG g_angle
+    PUSHC ANGLE_RATE
+    ADD
+    STOREG g_angle
+    clamp_lo:
+    LOADG g_angle
+    PUSHC MIN_ANGLE
+    CMPLT
+    JZ clamp_hi
+    PUSHC MIN_ANGLE
+    STOREG g_angle
+    clamp_hi:
+    LOADG g_angle
+    PUSHC MAX_ANGLE
+    CMPGT
+    JZ chk_charge
+    PUSHC MAX_ANGLE
+    STOREG g_angle
+    chk_charge:
+
+    LOAD_INPUT
+    TESTBIT 2
+    JZ chk_release
+    LOADG g_power
+    PUSHC CHARGE_RATE
+    ADD
+    STOREG g_power
+    LOADG g_power
+    PUSHC MAX_POWER
+    CMPGT
+    JZ store_prev
+    PUSHC MAX_POWER
+    STOREG g_power
+    JMP store_prev
+
+    chk_release:
+    LOADG g_prev_input
+    TESTBIT 2
+    JZ store_prev
+    LOADG g_power
+    PUSHI 0
+    CMPLE
+    JNZ store_prev
+    LOADG g_angle
+    COS
+    LOADG g_power
+    PUSHC LAUNCH_SPEED_SCALE
+    MUL
+    MUL
+    STOREE g_active_proj 2
+    LOADG g_angle
+    SIN
+    LOADG g_power
+    PUSHC LAUNCH_SPEED_SCALE
+    MUL
+    MUL
+    NEG
+    STOREE g_active_proj 3
+    PUSHI 1
+    STOREG g_launched
+    PUSHI 0
+    STOREG g_power
+
+    store_prev:
+    LOAD_INPUT
+    STOREG g_prev_input
+    done:
+    HALT
+  `,
+  on_frame: `
+    LOADG g_won
+    JNZ done
+    LOADG g_lost
+    JNZ done
+
+    LOADG g_targets_left
+    PUSHI 0
+    CMPLE
+    JZ chk_lost
+    PUSHI 1
+    STOREG g_won
+    JMP done
+
+    chk_lost:
+    LOADG g_proj_done
+    JZ done
+    PUSHI 0
+    STOREG g_proj_done
+    LOADG g_shots_left
+    PUSHI 1
+    SUB
+    STOREG g_shots_left
+    LOADG g_shots_left
+    PUSHI 0
+    CMPLE
+    JZ respawn
+    PUSHI 1
+    STOREG g_lost
+    JMP done
+
+    respawn:
+    SPAWN 0
+    STOREG g_active_proj
+    LOADG g_anchor_x
+    STOREE g_active_proj 0
+    LOADG g_anchor_y
+    STOREE g_active_proj 1
+    PUSHI 0
+    STOREE g_active_proj 2
+    PUSHI 0
+    STOREE g_active_proj 3
+    PUSHI 0
+    STOREG g_launched
+
+    done:
+    HALT
+  `,
+  on_tick: `
+    LOAD_SELF 4
+    PUSHI 0
+    CMPEQ
+    JNZ tick_proj
+    LOAD_SELF 4
+    PUSHI 1
+    CMPEQ
+    JNZ tick_block
+    LOAD_SELF 4
+    PUSHI 2
+    CMPEQ
+    JNZ tick_target
+    JMP tick_end
+
+    tick_proj:
+    LOADG g_launched
+    JZ tick_end
+    LOAD_SELF 3
+    PUSHC GRAVITY
+    ADD
+    PUSHC MAX_FALL_SPEED
+    CLAMP_ABS
+    STORE_SELF 3
+    MOVE_SOLID
+    LOAD_SELF 2
+    PUSHC GROUND_FRICTION
+    MUL
+    STORE_SELF 2
+
+    LOAD_SELF 3
+    PUSHI 0
+    CMPNE
+    JNZ chk_bounds
+    LOAD_SELF 2
+    DUP
+    MUL
+    PUSHC SETTLE_SPEED2
+    CMPLT
+    JZ chk_bounds
+    JMP proj_die
+
+    chk_bounds:
+    LOAD_SELF 1
+    PUSHC LEVEL_H
+    PUSHI 20
+    ADD
+    CMPGT
+    JNZ proj_die
+    LOAD_SELF 0
+    PUSHI 0
+    CMPLT
+    JNZ proj_die
+    LOAD_SELF 0
+    PUSHC LEVEL_W
+    CMPGT
+    JNZ proj_die
+    JMP tick_end
+    proj_die:
+    PUSHI 1
+    STOREG g_proj_done
+    KILL_SELF
+    JMP tick_end
+
+    tick_block:
+    LOAD_SELF 5
+    PUSHI 0
+    CMPLE
+    JZ block_alive
+    KILL_SELF
+    JMP tick_end
+    block_alive:
+    LOAD_SELF 10
+    PUSHI 0
+    CMPGT
+    JZ skip_cooldown
+    LOAD_SELF 10
+    PUSHI 1
+    SUB
+    STORE_SELF 10
+    skip_cooldown:
+    LOAD_SELF 8
+    LOAD_SELF 0
+    SUB
+    PUSHC SPRING_K
+    MUL
+    LOAD_SELF 2
+    ADD
+    PUSHC WOBBLE_DAMPING
+    MUL
+    STORE_SELF 2
+    LOAD_SELF 9
+    LOAD_SELF 1
+    SUB
+    PUSHC SPRING_K
+    MUL
+    LOAD_SELF 3
+    ADD
+    PUSHC WOBBLE_DAMPING
+    MUL
+    STORE_SELF 3
+    LOAD_SELF 0
+    LOAD_SELF 2
+    ADD
+    STORE_SELF 0
+    LOAD_SELF 1
+    LOAD_SELF 3
+    ADD
+    STORE_SELF 1
+    JMP tick_end
+
+    tick_target:
+    LOAD_SELF 5
+    PUSHI 0
+    CMPLE
+    JZ tick_end
+    LOADG g_targets_left
+    PUSHI 1
+    SUB
+    STOREG g_targets_left
+    KILL_SELF
+
+    tick_end:
+    HALT
+  `,
+  on_collide: `
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    AND
+    JNZ ab_block
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ ba_block
+    LOAD_A 4
+    PUSHI 0
+    CMPEQ
+    LOAD_B 4
+    PUSHI 2
+    CMPEQ
+    AND
+    JNZ ab_target
+    LOAD_A 4
+    PUSHI 2
+    CMPEQ
+    LOAD_B 4
+    PUSHI 0
+    CMPEQ
+    AND
+    JNZ ba_target
+    JMP done
+
+    ab_block:
+    LOAD_B 10
+    PUSHI 0
+    CMPGT
+    JNZ done
+    LOAD_B 5
+    PUSHC BLOCK_DAMAGE
+    SUB
+    STORE_B 5
+    PUSHC HIT_COOLDOWN
+    STORE_B 10
+    JMP done
+    ba_block:
+    LOAD_A 10
+    PUSHI 0
+    CMPGT
+    JNZ done
+    LOAD_A 5
+    PUSHC BLOCK_DAMAGE
+    SUB
+    STORE_A 5
+    PUSHC HIT_COOLDOWN
+    STORE_A 10
+    JMP done
+    ab_target:
+    PUSHI 0
+    STORE_B 5
+    JMP done
+    ba_target:
+    PUSHI 0
+    STORE_A 5
+    JMP done
+
+    done:
+    HALT
+  `,
+};
+
+function buildSlingshotCart(){
+  const airPixels = hexRowsToPixels(new Array(8).fill('77777777'));
+  const groundPixels = hexRowsToPixels([
+    '11111111','11211121','22222222','22322232',
+    '23222322','22322232','22232223','23222322',
+  ]);
+  const dirtPixels = hexRowsToPixels([
+    '22222222','22322232','23222322','22222222',
+    '22322232','22222222','23222322','22222222',
+  ]);
+  const woodPixels = hexRowsToPixels([
+    '99999999','99a99a99','99999999','a99999a9',
+    '99999999','99a99a99','99999999','a99999a9',
+  ]);
+  const ballShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:6.3, color:0},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5,ry:5, color:12},
+    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.7,ry:1.7, color:15},
+  ];
+  // A crate: outline, wood-grain body, and a lighter top-sheen strip —
+  // deliberately static-looking (no motion blur / squash) since these
+  // never move under their own gravity, only wobble in place.
+  // Base-ramp browns, not the accent ramp — keeps the crate reading as
+  // "wood structure" distinct from the green ball/target (both accent),
+  // rather than all three blending into the same hue family.
+  const crateShapes = [
+    {type:SHAPE_RECT, x:1,y:1,w:14,h:14, color:1},
+    {type:SHAPE_RECT, x:2.5,y:2.5,w:11,h:11, color:3},
+    {type:SHAPE_RECT, x:2.5,y:2.5,w:11,h:2.5, color:5},
+    {type:SHAPE_RECT, x:2.5,y:2.5,w:2.5,h:11, color:5},
+  ];
+  const targetShapes = blobMonsterShapes(11, 0, 15, 0);
+
+  const T = PLATFORM_TOKENS;
+  // Deliberately flat — no STEP_UP/STEP_DOWN anywhere. MOVE_SOLID blocks
+  // horizontal movement against *any* solid tile regardless of step
+  // height (there's no step-assist), and since every shot restarts from
+  // the same fixed anchor (no forward progress carries between shots —
+  // §9c), even one elevation change between the anchor and a block/
+  // target can make it permanently unreachable. Found empirically: an
+  // earlier version with two small terrain rises left one Slingshot
+  // target and *all four* Castle Crusher targets unreachable at every
+  // angle/power combination in a full sweep, not just badly tuned.
+  // Vertical variety instead comes entirely from buildPlatformLevel's
+  // own COIN/ENEMY placement offsets (COIN sits 3 rows above the
+  // (constant) ground, ENEMY sits 1 row above it) — a block placed
+  // immediately before a target reads as "guarding" it without needing
+  // any terrain height at all.
+  const tokens = [
+    T.FLAT,14, T.FLAT,8, T.COIN, T.ENEMY, T.FLAT,6, T.COIN, T.FLAT,6,
+    T.COIN, T.ENEMY, T.FLAT,6, T.ENEMY, T.FLAT,6, T.COIN, T.FLAT,10,
+  ];
+  const platform = {gridH:20, startGroundY:16, minGroundY:10, maxGroundY:18, tokens};
+  const built = buildPlatformLevel(platform);
+  const gridW = built.grid[0].length;
+  const numBlocks = built.numCoins, numTargets = built.numEnemies;
+  const screenW = 160, screenH = 160;
+  const levelWpx = gridW*8, levelHpx = platform.gridH*8;
+
+  const cart = {
+    formatVersion: 1,
+    cartType: 5, // advisory label only — see DESIGN.md §14; a new genre id
+                 // for the destruction archetype, distinct from 4 (platformer)
+    paletteMode: 1,
+    // warm wood/straw base hue; accentOffset 85 lands the accent ramp on
+    // green (a fitting "pig" color against brown wood, handily). Found by
+    // rendering it, in two steps: +150 (the platformer's own offset,
+    // copied without checking) wrapped to a jarring teal; a first fix
+    // attempt using a *negative* offset (-35, to reach red) silently
+    // wrapped to a wrong, unrelated hue instead, because paletteParams
+    // round-trips through the binary format as unsigned bytes — signed
+    // offsets aren't representable at all, not even conceptually, so the
+    // only real fix is picking a positive offset that lands somewhere
+    // good directly (baseHue=35 can only reach accent hues in [35,290]
+    // with a 0-255 offset — reds below hue 35 are simply unreachable
+    // from this base hue with this field, offset or no offset).
+    paletteParams: [35, 0, 30, 60, 30, 75, 85, 0],
+    rngSeed: 3,
+    modeFlags: 0,
+    screenW, screenH,
+    mapGenerator: 3, // reuses the platformer's heightmap generator verbatim —
+                      // see §9c's comment for why (COIN/ENEMY markers become
+                      // block/target spawn slots, no new generator code)
+    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
+    camera: {
+      followGlobal: DESTRUCT_GLOBAL_NAMES.g_active_proj,
+      clampMinX: 0, clampMinY: 0,
+      clampMaxX: Math.max(0, levelWpx - screenW),
+      clampMaxY: Math.max(0, levelHpx - screenH),
+    },
+    inputActiveButtons: 1|2|4,
+    inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
+    inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
+    hudSpec: [
+      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_shots_left, srcB:0, delta:0, suffixConstIdx:255, label:'Shots'},
+      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_targets_left, srcB:0, delta:0, suffixConstIdx:255, label:'Targets'},
+      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Cleared! Refresh link to play again'},
+      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_lost, srcB:0, delta:0, suffixConstIdx:255, label:'Out of shots - refresh link to retry'},
+    ],
+    // GRAVITY/LAUNCH_SPEED_SCALE/etc tuned by measured trajectory (a
+    // full-power 45° shot's simulated apex/range against this level's
+    // size), same "measure, don't guess" pass as every generator's
+    // numeric constants elsewhere in this file — see DESIGN.md.
+    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 5, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 4, 0.04, 8],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0}, // PROJECTILE
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:13, collisionH:13, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
+      {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0}, // TARGET
+    ],
+    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:crateShapes}, {kind:1, w:16, h:16, shapes:targetShapes} ],
+    tiles: [
+      {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
+      {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:woodPixels},
+    ],
+    tileSurfaceOverrides: {[PLATFORM_AIR]: 0},
+    platform,
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = DESTRUCT_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), DESTRUCT_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+function buildCastleCrusherCart(){
+  const airPixels = hexRowsToPixels(new Array(8).fill('77777777')); // base ramp (cool stone-grey sky), not the accent ramp
+  const groundPixels = hexRowsToPixels([
+    '11111111','11311131','33333333','33433433',
+    '34333433','33433433','33343233','34333433',
+  ]);
+  const dirtPixels = hexRowsToPixels([
+    '33333333','33433433','34333433','33333333',
+    '33433433','33333333','34333433','33333333',
+  ]);
+  const stonePixels = hexRowsToPixels([
+    '00000000','04440444','04440444','00000000',
+    '44404440','44404440','00000000','04440444',
+  ]);
+  const ballShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.5,ry:6.5, color:0},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:1},
+    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:7},
+  ];
+  // A heavier, squarer stone block than Slingshot's crate — same shape
+  // family (outline/body/sheen). Base-ramp greys, not the accent ramp —
+  // same reasoning as Slingshot's crate: keeps the block reading as
+  // "stone structure," distinct from the red ball/target (both accent).
+  const blockShapes = [
+    {type:SHAPE_RECT, x:0.5,y:0.5,w:15,h:15, color:0},
+    {type:SHAPE_RECT, x:2,y:2,w:12,h:12, color:2},
+    {type:SHAPE_RECT, x:2,y:2,w:12,h:2.5, color:4},
+  ];
+  const targetShapes = blobMonsterShapes(12, 0, 15, 0);
+
+  const T = PLATFORM_TOKENS;
+  // Flat, same reasoning as Slingshot's tokens (§9c/its own comment) —
+  // no STEP_UP anywhere, so nothing between the fixed anchor and any
+  // block/target can wall it off. Bigger/harder than Slingshot purely
+  // via more COIN/ENEMY clusters and a longer runway, not elevation.
+  const tokens = [
+    T.FLAT,16, T.FLAT,12, T.COIN, T.ENEMY, T.FLAT,5, T.COIN, T.FLAT,5,
+    T.COIN, T.ENEMY, T.FLAT,5, T.COIN, T.FLAT,5, T.COIN, T.ENEMY, T.FLAT,5,
+    T.COIN, T.FLAT,5, T.COIN, T.ENEMY, T.FLAT,12,
+  ];
+  const platform = {gridH:20, startGroundY:16, minGroundY:8, maxGroundY:18, tokens};
+  const built = buildPlatformLevel(platform);
+  const gridW = built.grid[0].length;
+  const numBlocks = built.numCoins, numTargets = built.numEnemies;
+  const screenW = 160, screenH = 160;
+  const levelWpx = gridW*8, levelHpx = platform.gridH*8;
+
+  const cart = {
+    formatVersion: 1,
+    cartType: 5,
+    paletteMode: 1,
+    paletteParams: [210, 0, 10, 30, 25, 70, 150, 0], // cool stone/grey hue
+    rngSeed: 4,
+    modeFlags: 0,
+    screenW, screenH,
+    mapGenerator: 3,
+    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
+    camera: {
+      followGlobal: DESTRUCT_GLOBAL_NAMES.g_active_proj,
+      clampMinX: 0, clampMinY: 0,
+      clampMaxX: Math.max(0, levelWpx - screenW),
+      clampMaxY: Math.max(0, levelHpx - screenH),
+    },
+    inputActiveButtons: 1|2|4,
+    inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
+    inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
+    hudSpec: [
+      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_shots_left, srcB:0, delta:0, suffixConstIdx:255, label:'Shots'},
+      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_targets_left, srcB:0, delta:0, suffixConstIdx:255, label:'Targets'},
+      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Castle cleared! Refresh link to play again'},
+      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_lost, srcB:0, delta:0, suffixConstIdx:255, label:'Out of shots - refresh link to retry'},
+    ],
+    // Same mechanic as Slingshot, harder tier: tougher blocks (BLOCK_START_HP
+    // 6 vs 4, same BLOCK_DAMAGE) and a bigger, taller level need more shots
+    // to clear — see DESIGN.md §9c for why these two carts share everything
+    // but these numbers and the level/sprite dressing.
+    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 8, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 6, 0.04, 8],
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:14, collisionH:14, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
+      {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0},
+    ],
+    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:blockShapes}, {kind:1, w:16, h:16, shapes:targetShapes} ],
+    tiles: [
+      {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
+      {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:stonePixels},
+    ],
+    tileSurfaceOverrides: {[PLATFORM_AIR]: 0},
+    platform,
+    hooks: {},
+  };
+  for(const name of HOOK_NAMES){
+    const src = DESTRUCT_HOOKS_SRC[name];
+    cart.hooks[name] = src ? assemble(src.split('\n'), DESTRUCT_SYM) : new Uint8Array(0);
+  }
+  return cart;
+}
+
+/* ============================================================
    10. Build carts, encode, round-trip check
    ============================================================ */
 const CARTS = {};
@@ -2999,6 +3721,8 @@ registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFla
 registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
 registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
 registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
+registerCart('slingshot', 'Slingshot', 'cart_type 5 · destruction/arcade', 12, buildSlingshotCart);
+registerCart('castle', 'Castle Crusher', 'cart_type 5 · destruction/arcade', 10, buildCastleCrusherCart);
 
 /* ============================================================
    11. Cart Inspector — a generic disassembler (reverses assemble() back
