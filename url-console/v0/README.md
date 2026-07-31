@@ -412,6 +412,38 @@ and it's exercised on every play, not just asserted.
   when actually played back. Fixed by only ever driving angle/power
   through real input ticks, same as a player would.
 
+- **Slingshot removed; Castle Crusher gets real physics** (`DESIGN.md`
+  §24), on direct feedback: "delete the angry birds slingshot game and
+  focus only on the castle crusher. Also the blocks have no falling
+  physics or ball collision. Fix." §21's simplified model (blocks never
+  move, the projectile pierces through) turned out not to need a new
+  opcode to fix — the engine's existing per-tick pairwise overlap scan
+  and `on_collide(a,b)` callback were already the right primitive, just
+  unused this way. Now: gravity applies uniformly to every structural
+  entity, `on_collide` resolves entity-on-entity resting (whichever
+  entity is higher snaps to sit exactly on the other's top surface,
+  zeroing its fall — a stack catches itself bottom-up, for free, the
+  same order gravity produces), and the projectile is genuinely solid
+  against blocks/targets (reflects and damps on the dominant hit axis,
+  shoves the other entity with a knockback fraction of its own
+  velocity) instead of passing through. Two real bugs found by testing:
+  a stack-management mistake in a velocity "deadzone" clamp (`DUP; MUL`
+  consumed the value needed for the later store, writing `undefined` →
+  `NaN` → a bounds-check bypass that crashed on the next tile lookup —
+  fixed by duplicating twice, not once) and a knockback hard enough to
+  tunnel a block through the level's edge in one tick, faster than
+  `MOVE_SOLID`'s discrete per-tick check could catch it (fixed with an
+  always-correct hard position clamp, plus a gentler knockback so it's
+  less often needed). A third finding was in the *test*, not the
+  engine: an adaptive best-shot search cloned the live `World` with a
+  shallow copy, but the clone's internal closures still pointed at the
+  original — "trial" shots were silently mutating the real game state.
+  Fixed by constructing a genuine new `World` instance instead of
+  shortcutting construction. Verified: settling is stable indefinitely
+  (no jitter), a 72-trial fuzz sweep found no crashes or entities
+  escaping the map, and a corrected adaptive-search playthrough clears
+  all 4 targets in 2 of 16 shots — real margin.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

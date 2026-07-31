@@ -3015,74 +3015,81 @@ function buildPlatformerCart(){
 }
 
 /* ============================================================
-   9c. Cart authoring — Slingshot & Castle Crusher (destruction genre)
+   9c. Cart authoring — Castle Crusher (destruction genre)
 
-   Both dogfood the same new "physics destruction" archetype (Angry
-   Birds / Crush the Castle) with a deliberately simplified physics
-   model, not a real rigid-body simulation: structure BLOCKs never move
-   under gravity or stack on each other — they're anchored in place and
-   just take damage, with a small damped-spring "wobble" on a hit that
-   doesn't destroy them (vel/pos integrated each tick toward their own
-   spawn point, so a knock always settles back to rest instead of
-   drifting). The one real physics body is the launched PROJECTILE,
-   which reuses MOVE_SOLID + gravity exactly like the platformer's
-   player. This is a genuine "V0 scope cut, not a spec revision" in the
-   same spirit as the platformer's "no death plane": real inter-block
-   support/collapse physics (a struck block knocking over the ones
-   beside it) would need actual entity-vs-entity collision resolution,
-   which this VM has no primitive for (MOVE_SOLID only resolves against
-   tiles) — hand-rolling that in bytecode for every block pair, every
-   tick, is exactly the kind of fragile, easy-to-get-subtly-wrong logic
-   this project has needed a dedicated opcode for before (MOVE_SOLID
-   itself, born from the same instinct). Chose "blocks have HP and wobble
-   but don't fall on each other" over "add a new opcode to make them
-   fall on each other" — the destruction spectacle survives fully intact
-   (satisfying hits, breakage, a piercing shot that can clear a row) at
-   a fraction of the risk.
+   Dogfoods the "physics destruction" archetype (Angry Birds / Crush the
+   Castle): aim, charge, fire a projectile at an HP-bearing structure.
+   §21/§22's version deliberately simplified the physics — blocks never
+   moved, the projectile pierced straight through with no real collision
+   — on the reasoning that entity-vs-entity solid resolution needed a
+   primitive this VM didn't have. That trade was revisited on direct
+   feedback ("blocks have no falling physics or ball collision"): real
+   gravity and real projectile-vs-block collision turned out not to need
+   a new opcode at all, just a different use of the one mechanism the
+   engine already provides for entity pairs — on_collide, called once
+   per tick for every already-overlapping pair, with direct read/write
+   access to both entities' props.
 
-   Both carts share one symbol table and one hook source: Slingshot and
-   Castle Crusher are the same mechanic (aim, charge, fire a piercing
-   shot at HP-bearing blocks and one-hit-kill targets) at two difficulty
-   tiers, exactly like Cave Crawler and Run & Jump are two different
-   *genres* sharing the camera/MOVE_SOLID/checkpoint conventions — reuse
-   the terrain (buildPlatformLevel + PLATFORM_TOKENS, unmodified) purely
-   for its existing "walk a token stream, drop entities at COIN/ENEMY
-   marker positions" behavior: COIN slots become BLOCK spawns, ENEMY
-   slots become TARGET spawns, and checkpoint 0 (originally "player
-   start") becomes the launcher anchor. Zero new map-generator code,
-   zero new opcodes — see the README for why that mattered here
-   specifically (a physics-heavy genre was the highest-risk build of
-   this pass; reuse was how the risk stayed low).
+   Gravity is uniform: every BLOCK, BLOCK variant, and TARGET falls
+   every tick (same GRAVITY/MAX_FALL_SPEED as the projectile) and uses
+   MOVE_SOLID to rest against the tilemap exactly like the platformer's
+   player. Resting *on top of another entity* (the case MOVE_SOLID can't
+   see, since it only resolves against tiles) is handled in on_collide:
+   when two non-projectile entities overlap, whichever has the smaller
+   y (higher on screen) is snapped to sit exactly on the other's top
+   surface and its vel_y zeroed — a stack "catches" the moment its
+   support arrives, tower-block-by-tower-block, the same tick order
+   gravity naturally produces (the bottom of a stack always stops
+   falling first). Knock the bottom block out and nothing above it has
+   anything to rest on; gravity takes it from there. No new global
+   state, no iteration over "all nearby entities" — just the pairwise
+   overlap the engine was already computing.
 
-   Aim/charge input is deliberately digital (hold LEFT/RIGHT to sweep
-   the angle, hold FIRE to charge power, release to launch) rather than
-   an analog drag vector, matching the README's existing "digital input
-   only" scope note — this is the same trick classic console
+   The projectile is solid against BLOCK/TARGET too, same mechanism:
+   on_collide picks whichever axis the ball's incoming velocity is
+   dominant on (compared via squared components, so no ABS opcode is
+   needed) as the hit axis, reflects and damps that component of the
+   ball's own velocity (a real bounce, not a pass-through), snaps it
+   back outside the block along that axis, and shoves the block with a
+   fraction of the ball's original velocity (knockback) — hard enough
+   hits can now visibly topple a block off a stack, not just chip its
+   HP. A damage/instant-kill step (cooldown-gated for multi-hit blocks,
+   immediate for one-hit targets) rides along in the same branch.
+
+   Aim/charge input is still deliberately digital (hold LEFT/RIGHT to
+   sweep the angle, hold FIRE to charge power, release to launch)
+   rather than an analog drag vector — the same trick classic console
    golf/artillery games use to make an aim-and-power mechanic work
    without a mouse.
    ============================================================ */
 const DESTRUCT_CONST_NAMES = {
   GRAVITY:0, MAX_FALL_SPEED:1, LAUNCH_SPEED_SCALE:2, MIN_ANGLE:3, MAX_ANGLE:4,
-  ANGLE_RATE:5, CHARGE_RATE:6, MAX_POWER:7, BLOCK_DAMAGE:8, SPRING_K:9,
-  WOBBLE_DAMPING:10, NUM_SHOTS:11, NUM_BLOCKS:12, NUM_TARGETS:13,
-  LEVEL_W:14, LEVEL_H:15, GROUND_FRICTION:16, BLOCK_START_HP:17, SETTLE_SPEED2:18,
-  HIT_COOLDOWN:19,
+  ANGLE_RATE:5, CHARGE_RATE:6, MAX_POWER:7, BLOCK_DAMAGE:8, NUM_SHOTS:9,
+  NUM_BLOCKS:10, NUM_TARGETS:11, LEVEL_W:12, LEVEL_H:13, GROUND_FRICTION:14,
+  BLOCK_START_HP:15, SETTLE_SPEED2:16, HIT_COOLDOWN:17, BOUNCE_DAMPING:18,
+  KNOCKBACK_SCALE:19,
 };
 const DESTRUCT_GLOBAL_NAMES = {
   g_active_proj:0, g_angle:1, g_power:2, g_launched:3, g_shots_left:4,
   g_targets_left:5, g_won:6, g_lost:7, g_anchor_x:8, g_anchor_y:9,
   g_prev_input:10, g_scratch:11, g_i:12, g_cx:13, g_cy:14, g_proj_done:15,
-  g_aiming:16,
+  g_aiming:16, g_scratch2:17,
 };
 const DESTRUCT_SYM = {constants:DESTRUCT_CONST_NAMES, globals:DESTRUCT_GLOBAL_NAMES};
 
-// Entity type ids: 0=PROJECTILE, 1=BLOCK (ext 8=orig_x, 9=orig_y — the
-// spring-back anchor for the wobble; ext 10=hit_cooldown, counted down
-// every tick, blocking on_collide from re-applying damage every single
-// tick a slow-moving projectile happens to still be overlapping it —
-// found empirically: without this, a lingering touch could apply
+// Entity type ids: 0=PROJECTILE, 1=BLOCK (ext 8=hit_cooldown, counted
+// down every tick, blocking on_collide from re-applying damage every
+// single tick a slow-moving projectile happens to still be overlapping
+// it — found empirically: without this, a lingering touch could apply
 // BLOCK_DAMAGE dozens of times over a slow pass, destroying any block
-// almost on contact regardless of its HP, making HP meaningless), 2=TARGET.
+// almost on contact regardless of its HP, making HP meaningless),
+// 2=TARGET (no ext fields — dies in one hit, nothing to cool down),
+// 3=BLOCK variant (same ext8 hit_cooldown as BLOCK).
+//
+// Gravity, tilemap-resting (MOVE_SOLID), and entity-on-entity resting
+// (on_collide, see below) apply uniformly to BLOCK/BLOCK-variant/TARGET
+// — all three are "structural," differing only in HP and death rules,
+// not in physics.
 const DESTRUCT_HOOKS_SRC = {
   on_init: `
     PUSHI 0
@@ -3143,12 +3150,8 @@ const DESTRUCT_HOOKS_SRC = {
     STOREE g_scratch 0
     LOADG g_cy
     STOREE g_scratch 1
-    LOADG g_cx
-    STOREE g_scratch 8
-    LOADG g_cy
-    STOREE g_scratch 9
     PUSHI 0
-    STOREE g_scratch 10
+    STOREE g_scratch 8
     PUSHC BLOCK_START_HP
     STOREE g_scratch 5
     LOADG g_i
@@ -3408,294 +3411,432 @@ const DESTRUCT_HOOKS_SRC = {
     KILL_SELF
     JMP tick_end
     block_alive:
-    LOAD_SELF 10
+    LOAD_SELF 8
     PUSHI 0
     CMPGT
     JZ skip_cooldown
-    LOAD_SELF 10
+    LOAD_SELF 8
     PUSHI 1
     SUB
-    STORE_SELF 10
+    STORE_SELF 8
     skip_cooldown:
-    LOAD_SELF 8
-    LOAD_SELF 0
-    SUB
-    PUSHC SPRING_K
-    MUL
-    LOAD_SELF 2
+    LOAD_SELF 3
+    PUSHC GRAVITY
     ADD
-    PUSHC WOBBLE_DAMPING
+    PUSHC MAX_FALL_SPEED
+    CLAMP_ABS
+    STORE_SELF 3
+    MOVE_SOLID
+    LOAD_SELF 2
+    PUSHC GROUND_FRICTION
     MUL
     STORE_SELF 2
-    LOAD_SELF 9
-    LOAD_SELF 1
-    SUB
-    PUSHC SPRING_K
-    MUL
-    LOAD_SELF 3
-    ADD
-    PUSHC WOBBLE_DAMPING
-    MUL
-    STORE_SELF 3
+    ; Hard horizontal safety clamp (found live, not guessed): a solid
+    ; knockback hit can give a block enough vel_x that in one tick it
+    ; crosses the entire remaining width of this narrow level before
+    ; MOVE_SOLID's discrete per-tick edge check ever sees it *inside*
+    ; the out-of-bounds column that would otherwise stop it — the block
+    ; tunnels straight through the boundary and falls forever past the
+    ; map's edge. Clamping position (and zeroing vel_x on clamp) is a
+    ; blunt but always-correct backstop, independent of tuning
+    ; KNOCKBACK_SCALE to "hopefully" stay under the tunneling threshold.
     LOAD_SELF 0
-    LOAD_SELF 2
-    ADD
+    PUSHI 0
+    CMPLT
+    JZ block_clamp_hi
+    PUSHI 0
     STORE_SELF 0
-    LOAD_SELF 1
-    LOAD_SELF 3
-    ADD
-    STORE_SELF 1
+    PUSHI 0
+    STORE_SELF 2
+    JMP tick_end
+    block_clamp_hi:
+    LOAD_SELF 0
+    PUSHC LEVEL_W
+    CMPGT
+    JZ tick_end
+    PUSHC LEVEL_W
+    STORE_SELF 0
+    PUSHI 0
+    STORE_SELF 2
     JMP tick_end
 
     tick_target:
     LOAD_SELF 5
     PUSHI 0
     CMPLE
-    JZ tick_end
+    JZ target_alive
     LOADG g_targets_left
     PUSHI 1
     SUB
     STOREG g_targets_left
     KILL_SELF
+    JMP tick_end
+    target_alive:
+    LOAD_SELF 3
+    PUSHC GRAVITY
+    ADD
+    PUSHC MAX_FALL_SPEED
+    CLAMP_ABS
+    STORE_SELF 3
+    MOVE_SOLID
+    LOAD_SELF 2
+    PUSHC GROUND_FRICTION
+    MUL
+    STORE_SELF 2
+    LOAD_SELF 0
+    PUSHI 0
+    CMPLT
+    JZ target_clamp_hi
+    PUSHI 0
+    STORE_SELF 0
+    PUSHI 0
+    STORE_SELF 2
+    JMP tick_end
+    target_clamp_hi:
+    LOAD_SELF 0
+    PUSHC LEVEL_W
+    CMPGT
+    JZ tick_end
+    PUSHC LEVEL_W
+    STORE_SELF 0
+    PUSHI 0
+    STORE_SELF 2
+    JMP tick_end
 
     tick_end:
     HALT
   `,
   on_collide: `
+    ; Dispatch on "is either side the ball" rather than exact type pairs
+    ; (§24): the ball is solid against BOTH structural types the same
+    ; way, and structural-vs-structural (neither is the ball) is always
+    ; a resting/support check regardless of which specific types they
+    ; are. Only one ball exists, so at most one of A/B can be type 0.
     LOAD_A 4
     PUSHI 0
     CMPEQ
-    LOAD_B 4
-    PUSHI 1
-    CMPEQ
-    LOAD_B 4
-    PUSHI 3
-    CMPEQ
-    OR
-    AND
-    JNZ ab_block
-    LOAD_A 4
-    PUSHI 1
-    CMPEQ
-    LOAD_A 4
-    PUSHI 3
-    CMPEQ
-    OR
+    JNZ a_is_ball
     LOAD_B 4
     PUSHI 0
     CMPEQ
-    AND
-    JNZ ba_block
-    LOAD_A 4
-    PUSHI 0
-    CMPEQ
-    LOAD_B 4
-    PUSHI 2
-    CMPEQ
-    AND
-    JNZ ab_target
-    LOAD_A 4
-    PUSHI 2
-    CMPEQ
-    LOAD_B 4
-    PUSHI 0
-    CMPEQ
-    AND
-    JNZ ba_target
-    JMP done
+    JNZ b_is_ball
+    JMP support_resolve
 
-    ab_block:
-    LOAD_B 10
+    a_is_ball:
+    ; ball = A, other = B. Capture the ball's pre-collision velocity —
+    ; everything below reads it repeatedly (axis choice, the bounce
+    ; itself, the other's knockback) and STORE_A below would clobber it.
+    LOAD_A 2
+    STOREG g_scratch
+    LOAD_A 3
+    STOREG g_scratch2
+    LOAD_B 4
+    PUSHI 2
+    CMPEQ
+    JNZ a_hit_target
+    LOAD_B 8
     PUSHI 0
     CMPGT
-    JNZ done
+    JNZ a_bounce
     LOAD_B 5
     PUSHC BLOCK_DAMAGE
     SUB
     STORE_B 5
     PUSHC HIT_COOLDOWN
-    STORE_B 10
+    STORE_B 8
+    JMP a_bounce
+    a_hit_target:
+    PUSHI 0
+    STORE_B 5
+    a_bounce:
+    ; Which axis was the ball moving faster on? (compare squared
+    ; components — no ABS opcode needed, squares are never negative.)
+    ; That's the hit axis: reflect+damp the ball's velocity on it, snap
+    ; the ball back outside the other entity along it (half-extents
+    ; approximated to 11px combined — exact for the 14px BLOCK, within
+    ; a pixel for the 12/13px TARGET/turret, invisible at this scale),
+    ; and shove the other entity with a fraction of the ball's original
+    ; velocity — a real knockback, not just a damage tick.
+    LOADG g_scratch
+    DUP
+    MUL
+    LOADG g_scratch2
+    DUP
+    MUL
+    CMPGE
+    JZ a_vert
+    LOADG g_scratch
+    NEG
+    PUSHC BOUNCE_DAMPING
+    MUL
+    STORE_A 2
+    LOAD_A 0
+    LOAD_B 0
+    CMPLT
+    JZ a_push_right
+    LOAD_B 0
+    PUSHI 11
+    SUB
+    STORE_A 0
+    JMP a_knock_x
+    a_push_right:
+    LOAD_B 0
+    PUSHI 11
+    ADD
+    STORE_A 0
+    a_knock_x:
+    LOAD_B 2
+    LOADG g_scratch
+    PUSHC KNOCKBACK_SCALE
+    MUL
+    ADD
+    STORE_B 2
     JMP done
-    ba_block:
-    LOAD_A 10
+    a_vert:
+    LOADG g_scratch2
+    NEG
+    PUSHC BOUNCE_DAMPING
+    MUL
+    ; deadzone: a bounce that's already nearly settled snaps to exactly
+    ; 0 instead of asymptotically approaching it forever — tick_proj's
+    ; own "shot is over" check needs vel_y === 0 exactly (see its
+    ; comment), which a damped-forever bounce would never actually reach.
+    ; DUP twice, not once: one copy is squared away for the threshold
+    ; test, the other has to survive on the stack for STORE_A below —
+    ; a single DUP+MUL leaves only the square on the stack, and the new
+    ; velocity itself is gone by the time STORE_A runs (found live: it
+    ; pops an empty stack, storing undefined into vel_y).
+    DUP
+    DUP
+    MUL
+    PUSHC SETTLE_SPEED2
+    CMPLT
+    JZ a_vert_store
+    POP
+    PUSHI 0
+    a_vert_store:
+    STORE_A 3
+    LOAD_A 1
+    LOAD_B 1
+    CMPLT
+    JZ a_push_down
+    LOAD_B 1
+    PUSHI 11
+    SUB
+    STORE_A 1
+    JMP a_knock_y
+    a_push_down:
+    LOAD_B 1
+    PUSHI 11
+    ADD
+    STORE_A 1
+    a_knock_y:
+    LOAD_B 3
+    LOADG g_scratch2
+    PUSHC KNOCKBACK_SCALE
+    MUL
+    ADD
+    STORE_B 3
+    JMP done
+
+    b_is_ball:
+    ; ball = B, other = A — exact mirror of the block above.
+    LOAD_B 2
+    STOREG g_scratch
+    LOAD_B 3
+    STOREG g_scratch2
+    LOAD_A 4
+    PUSHI 2
+    CMPEQ
+    JNZ b_hit_target
+    LOAD_A 8
     PUSHI 0
     CMPGT
-    JNZ done
+    JNZ b_bounce
     LOAD_A 5
     PUSHC BLOCK_DAMAGE
     SUB
     STORE_A 5
     PUSHC HIT_COOLDOWN
-    STORE_A 10
-    JMP done
-    ab_target:
-    PUSHI 0
-    STORE_B 5
-    JMP done
-    ba_target:
+    STORE_A 8
+    JMP b_bounce
+    b_hit_target:
     PUSHI 0
     STORE_A 5
+    b_bounce:
+    LOADG g_scratch
+    DUP
+    MUL
+    LOADG g_scratch2
+    DUP
+    MUL
+    CMPGE
+    JZ b_vert
+    LOADG g_scratch
+    NEG
+    PUSHC BOUNCE_DAMPING
+    MUL
+    STORE_B 2
+    LOAD_B 0
+    LOAD_A 0
+    CMPLT
+    JZ b_push_right
+    LOAD_A 0
+    PUSHI 11
+    SUB
+    STORE_B 0
+    JMP b_knock_x
+    b_push_right:
+    LOAD_A 0
+    PUSHI 11
+    ADD
+    STORE_B 0
+    b_knock_x:
+    LOAD_A 2
+    LOADG g_scratch
+    PUSHC KNOCKBACK_SCALE
+    MUL
+    ADD
+    STORE_A 2
+    JMP done
+    b_vert:
+    LOADG g_scratch2
+    NEG
+    PUSHC BOUNCE_DAMPING
+    MUL
+    DUP
+    DUP
+    MUL
+    PUSHC SETTLE_SPEED2
+    CMPLT
+    JZ b_vert_store
+    POP
+    PUSHI 0
+    b_vert_store:
+    STORE_B 3
+    LOAD_B 1
+    LOAD_A 1
+    CMPLT
+    JZ b_push_down
+    LOAD_A 1
+    PUSHI 11
+    SUB
+    STORE_B 1
+    JMP b_knock_y
+    b_push_down:
+    LOAD_A 1
+    PUSHI 11
+    ADD
+    STORE_B 1
+    b_knock_y:
+    LOAD_A 3
+    LOADG g_scratch2
+    PUSHC KNOCKBACK_SCALE
+    MUL
+    ADD
+    STORE_A 3
+    JMP done
+
+    support_resolve:
+    ; Neither is the ball: pure resting/support, no damage. Whichever
+    ; has the smaller y (higher on screen) sits on top of the other —
+    ; snap it to rest exactly on the other's top surface and zero its
+    ; fall, using each side's real half-height (BLOCK type 1 is 14px
+    ; tall, everything else structural is 12-13px — a single type==1
+    ; check covers all three types exactly enough to not visibly sink
+    ; or float).
+    LOAD_A 1
+    LOAD_B 1
+    CMPLT
+    JZ b_upper
+    LOAD_A 3
+    PUSHI 0
+    CMPGT
+    JZ done
+    PUSHI 0
+    STORE_A 3
+    ; Half-heights shaved by 1px from their true value (7/6 -> 6/5): a
+    ; deliberate small overlap margin, not an approximation error. An
+    ; exact-touch snap sits precisely on the strict-inequality overlap
+    ; boundary the engine's collision scan uses, so a single tick's
+    ; GRAVITY (0.28px of movement) can knock it just outside that
+    ; boundary — on_collide then skips the pair entirely that tick
+    ; (nothing overlapping to resolve), gravity adds another 0.28px,
+    ; and it falls back in range next tick: a stable but visible
+    ; forever-alternating vel_y between 0 and 0.28 (found by sampling
+    ; a resting stack for thousands of ticks, not by eyeballing). A 1px
+    ; overlap margin is comfortably bigger than one tick's fall, so the
+    ; pair stays inside the strict-overlap boundary permanently and
+    ; on_collide re-corrects it every single tick — genuinely at rest,
+    ; not oscillating at a sub-pixel amplitude that happened to be
+    ; small enough not to matter.
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    JZ a_halfB_6
+    PUSHI 6
+    JMP a_halfB_done
+    a_halfB_6:
+    PUSHI 5
+    a_halfB_done:
+    STOREG g_scratch
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    JZ a_halfA_6
+    PUSHI 6
+    JMP a_halfA_done
+    a_halfA_6:
+    PUSHI 5
+    a_halfA_done:
+    STOREG g_scratch2
+    LOAD_B 1
+    LOADG g_scratch
+    SUB
+    LOADG g_scratch2
+    SUB
+    STORE_A 1
+    JMP done
+
+    b_upper:
+    LOAD_B 3
+    PUSHI 0
+    CMPGT
+    JZ done
+    PUSHI 0
+    STORE_B 3
+    LOAD_A 4
+    PUSHI 1
+    CMPEQ
+    JZ b_halfA_6
+    PUSHI 6
+    JMP b_halfA_done
+    b_halfA_6:
+    PUSHI 5
+    b_halfA_done:
+    STOREG g_scratch
+    LOAD_B 4
+    PUSHI 1
+    CMPEQ
+    JZ b_halfB_6
+    PUSHI 6
+    JMP b_halfB_done
+    b_halfB_6:
+    PUSHI 5
+    b_halfB_done:
+    STOREG g_scratch2
+    LOAD_A 1
+    LOADG g_scratch
+    SUB
+    LOADG g_scratch2
+    SUB
+    STORE_B 1
     JMP done
 
     done:
     HALT
   `,
 };
-
-function buildSlingshotCart(){
-  const airPixels = hexRowsToPixels(new Array(8).fill('77777777'));
-  const groundPixels = hexRowsToPixels([
-    '11111111','11211121','22222222','22322232',
-    '23222322','22322232','22232223','23222322',
-  ]);
-  const dirtPixels = hexRowsToPixels([
-    '22222222','22322232','23222322','22222222',
-    '22322232','22222222','23222322','22222222',
-  ]);
-  const woodPixels = hexRowsToPixels([
-    '99999999','99a99a99','99999999','a99999a9',
-    '99999999','99a99a99','99999999','a99999a9',
-  ]);
-  const ballShapes = [
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:6.3, color:0},
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5,ry:5, color:12},
-    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.7,ry:1.7, color:15},
-  ];
-  // A crate: outline, wood-grain body, and a lighter top-sheen strip —
-  // deliberately static-looking (no motion blur / squash) since these
-  // never move under their own gravity, only wobble in place.
-  // Base-ramp browns, not the accent ramp — keeps the crate reading as
-  // "wood structure" distinct from the green ball/target (both accent),
-  // rather than all three blending into the same hue family.
-  const crateShapes = [
-    {type:SHAPE_RECT, x:1,y:1,w:14,h:14, color:1},
-    {type:SHAPE_RECT, x:2.5,y:2.5,w:11,h:11, color:3},
-    {type:SHAPE_RECT, x:2.5,y:2.5,w:11,h:2.5, color:5},
-    {type:SHAPE_RECT, x:2.5,y:2.5,w:2.5,h:11, color:5},
-  ];
-  // Second block silhouette (§21 follow-up: the structure read as
-  // scattered identical squares, not a shack) — a wide, short plank/
-  // beam instead of the crate's tall square, spawned on alternating
-  // block checkpoints (see on_init's block_loop) so the shack silhouette
-  // actually varies instead of repeating one shape.
-  const plankShapes = [
-    {type:SHAPE_RECT, x:0.5,y:5,w:15,h:6, color:1},
-    {type:SHAPE_RECT, x:2,y:6,w:12,h:4, color:3},
-    {type:SHAPE_RECT, x:2,y:6,w:12,h:1, color:5},
-  ];
-  const targetShapes = blobMonsterShapes(11, 0, 15, 0);
-
-  const T = PLATFORM_TOKENS;
-  // Terrain stays deliberately flat — no STEP_UP/STEP_DOWN anywhere.
-  // MOVE_SOLID blocks horizontal movement against *any* solid tile
-  // regardless of step height (there's no step-assist), and since every
-  // shot restarts from the same fixed anchor (no forward progress
-  // carries between shots), even one elevation change between the
-  // anchor and a block/target can make it permanently unreachable —
-  // found empirically last pass (§21/§22). But a real, stacked shack
-  // doesn't need the *terrain* to rise at all: blocks and targets are
-  // entities, not tiles, and the projectile passes through them (no
-  // physical collision, only on_collide damage), so height only has to
-  // exist in *marker* placement — COIN_AT/ENEMY_AT (§23), each taking an
-  // explicit row-offset-above-ground operand instead of COIN/ENEMY's
-  // fixed -3/-1. Two support posts (2 blocks stacked) flank a doorway
-  // target and a roof target floating above it; a third post plus one
-  // more exposed target sit further down the runway.
-  const tokens = [
-    T.FLAT,14, T.FLAT,8,
-    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2,
-    T.ENEMY_AT,1, T.ENEMY_AT,5, T.FLAT,2,
-    T.COIN_AT,1, T.COIN_AT,3, T.FLAT,2,
-    T.COIN_AT,1, T.FLAT,2,
-    T.ENEMY_AT,1, T.FLAT,10,
-  ];
-  const platform = {gridH:20, startGroundY:16, minGroundY:10, maxGroundY:18, tokens};
-  const built = buildPlatformLevel(platform);
-  const gridW = built.grid[0].length;
-  const numBlocks = built.numCoins, numTargets = built.numEnemies;
-  const screenW = 160, screenH = 160;
-  const levelWpx = gridW*8, levelHpx = platform.gridH*8;
-
-  const cart = {
-    formatVersion: 1,
-    cartType: 5, // advisory label only — see DESIGN.md §14; a new genre id
-                 // for the destruction archetype, distinct from 4 (platformer)
-    paletteMode: 1,
-    // warm wood/straw base hue; accentOffset 85 lands the accent ramp on
-    // green (a fitting "pig" color against brown wood, handily). Found by
-    // rendering it, in two steps: +150 (the platformer's own offset,
-    // copied without checking) wrapped to a jarring teal; a first fix
-    // attempt using a *negative* offset (-35, to reach red) silently
-    // wrapped to a wrong, unrelated hue instead, because paletteParams
-    // round-trips through the binary format as unsigned bytes — signed
-    // offsets aren't representable at all, not even conceptually, so the
-    // only real fix is picking a positive offset that lands somewhere
-    // good directly (baseHue=35 can only reach accent hues in [35,290]
-    // with a 0-255 offset — reds below hue 35 are simply unreachable
-    // from this base hue with this field, offset or no offset).
-    paletteParams: [35, 0, 30, 60, 30, 75, 85, 0],
-    rngSeed: 3,
-    modeFlags: 0,
-    screenW, screenH,
-    mapGenerator: 3, // reuses the platformer's heightmap generator verbatim —
-                      // see §9c's comment for why (COIN/ENEMY markers become
-                      // block/target spawn slots, no new generator code)
-    backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
-    camera: {
-      followGlobal: DESTRUCT_GLOBAL_NAMES.g_active_proj,
-      clampMinX: 0, clampMinY: 0,
-      clampMaxX: Math.max(0, levelWpx - screenW),
-      clampMaxY: Math.max(0, levelHpx - screenH),
-    },
-    // Aim line (§21 follow-up, DESIGN.md's new "5th composable generator"):
-    // draws while g_aiming is set (before a shot launches, cleared again
-    // once it does), growing from a stub to maxLengthPx as g_power climbs
-    // toward MAX_POWER — the missing "what am I about to do" feedback
-    // that made charging a shot pure guesswork before this.
-    aimLine: {
-      anchorXGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_x,
-      anchorYGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_y,
-      angleGlobal: DESTRUCT_GLOBAL_NAMES.g_angle,
-      powerGlobal: DESTRUCT_GLOBAL_NAMES.g_power,
-      maxPowerConstIdx: DESTRUCT_CONST_NAMES.MAX_POWER,
-      activeGlobal: DESTRUCT_GLOBAL_NAMES.g_aiming,
-      colorIdx: 0, maxLengthPx: 40,
-    },
-    inputActiveButtons: 1|2|4,
-    inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
-    inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
-    hudSpec: [
-      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_shots_left, srcB:0, delta:0, suffixConstIdx:255, label:'Shots'},
-      {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_targets_left, srcB:0, delta:0, suffixConstIdx:255, label:'Targets'},
-      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Cleared! Refresh link to play again'},
-      {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_lost, srcB:0, delta:0, suffixConstIdx:255, label:'Out of shots - refresh link to retry'},
-    ],
-    // GRAVITY/LAUNCH_SPEED_SCALE/etc tuned by measured trajectory (a
-    // full-power 45° shot's simulated apex/range against this level's
-    // size), same "measure, don't guess" pass as every generator's
-    // numeric constants elsewhere in this file — see DESIGN.md.
-    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 6, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 4, 0.04, 8],
-    entityTypes: [
-      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0}, // PROJECTILE
-      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:13, collisionH:13, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
-      {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0}, // TARGET
-      {renderKind:0, assetIndex:3, rotateFlag:0, collisionW:13, collisionH:9, extFieldCount:3}, // BLOCK variant (plank) — same fields as BLOCK, just a different sprite/shape
-    ],
-    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:crateShapes}, {kind:1, w:16, h:16, shapes:targetShapes}, {kind:1, w:16, h:16, shapes:plankShapes} ],
-    tiles: [
-      {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
-      {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:woodPixels},
-    ],
-    tileSurfaceOverrides: {[PLATFORM_AIR]: 0},
-    platform,
-    hooks: {},
-  };
-  for(const name of HOOK_NAMES){
-    const src = DESTRUCT_HOOKS_SRC[name];
-    cart.hooks[name] = src ? assemble(src.split('\n'), DESTRUCT_SYM) : new Uint8Array(0);
-  }
-  return cart;
-}
 
 function buildCastleCrusherCart(){
   const airPixels = hexRowsToPixels(new Array(8).fill('77777777')); // base ramp (cool stone-grey sky), not the accent ramp
@@ -3716,10 +3857,9 @@ function buildCastleCrusherCart(){
     {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:1},
     {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:7},
   ];
-  // A heavier, squarer stone block than Slingshot's crate — same shape
-  // family (outline/body/sheen). Base-ramp greys, not the accent ramp —
-  // same reasoning as Slingshot's crate: keeps the block reading as
-  // "stone structure," distinct from the red ball/target (both accent).
+  // A heavy, square stone block — outline/body/sheen. Base-ramp greys,
+  // not the accent ramp — keeps the block reading as "stone structure,"
+  // distinct from the red ball/target (both accent).
   const blockShapes = [
     {type:SHAPE_RECT, x:0.5,y:0.5,w:15,h:15, color:0},
     {type:SHAPE_RECT, x:2,y:2,w:12,h:12, color:2},
@@ -3740,16 +3880,14 @@ function buildCastleCrusherCart(){
   const targetShapes = blobMonsterShapes(12, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
-  // Flat terrain, same reasoning as Slingshot's tokens — no STEP_UP
-  // anywhere, so nothing between the fixed anchor and any block/target
-  // can wall it off (§21/§22). A real castle silhouette instead: two
-  // 3-block towers flanking a connecting wall (2 courses high, using
-  // COIN_AT's row-offset operand — §23 — to stack blocks straight up
-  // at one column instead of spreading them along the ground), a gate
-  // gap in the middle of the wall, a guard target on top of each tower,
-  // and a target sitting in the gate itself plus one floating just
-  // above it. Bigger/harder than Slingshot via a taller, wider structure
-  // and tougher blocks (BLOCK_START_HP), not a different mechanic.
+  // Flat terrain — no STEP_UP anywhere, so nothing between the fixed
+  // anchor and any block/target can wall it off (§21/§22). A real
+  // castle silhouette: two 3-block towers flanking a connecting wall
+  // (2 courses high, using COIN_AT's row-offset operand — §23 — to
+  // stack blocks straight up at one column instead of spreading them
+  // along the ground), a gate gap in the middle of the wall, a guard
+  // target on top of each tower, and a target sitting in the gate
+  // itself plus one floating just above it.
   // Column placement matters as much as height here: the projectile's
   // horizontal speed decays every tick (GROUND_FRICTION applies whether
   // or not it's grounded), so the reachable envelope isn't the naive
@@ -3813,16 +3951,21 @@ function buildCastleCrusherCart(){
       {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Castle cleared! Refresh link to play again'},
       {kind:1, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_lost, srcB:0, delta:0, suffixConstIdx:255, label:'Out of shots - refresh link to retry'},
     ],
-    // Same mechanic as Slingshot, harder tier: tougher blocks (BLOCK_START_HP
-    // 6 vs 4, same BLOCK_DAMAGE) and a bigger, taller level need more shots
-    // to clear — see DESIGN.md §9c for why these two carts share everything
-    // but these numbers and the level/sprite dressing.
-    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 0.3, 0.75, 14, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 6, 0.04, 8],
+    // constants array must match DESTRUCT_CONST_NAMES' index order exactly:
+    // GRAVITY, MAX_FALL_SPEED, LAUNCH_SPEED_SCALE, MIN_ANGLE, MAX_ANGLE,
+    // ANGLE_RATE, CHARGE_RATE, MAX_POWER, BLOCK_DAMAGE, NUM_SHOTS,
+    // NUM_BLOCKS, NUM_TARGETS, LEVEL_W, LEVEL_H, GROUND_FRICTION,
+    // BLOCK_START_HP, SETTLE_SPEED2, HIT_COOLDOWN, BOUNCE_DAMPING,
+    // KNOCKBACK_SCALE. BOUNCE_DAMPING/KNOCKBACK_SCALE tuned by measured
+    // playtest (see DESIGN.md §24): damped enough that a shot doesn't
+    // ricochet wildly, strong enough that a solid hit visibly topples a
+    // block off a stack rather than just rocking in place.
+    constants: [0.28, 8, 0.09, 15, 75, 1.5, 4, 100, 2, 16, numBlocks, numTargets, levelWpx, levelHpx, 0.985, 6, 0.04, 8, 0.35, 0.45],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
-      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:14, collisionH:14, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:14, collisionH:14, extFieldCount:1}, // BLOCK (ext 8 = hit_cooldown)
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0},
-      {renderKind:0, assetIndex:3, rotateFlag:0, collisionW:13, collisionH:12, extFieldCount:3}, // BLOCK variant (turret) — same fields as BLOCK, just a different sprite/shape
+      {renderKind:0, assetIndex:3, rotateFlag:0, collisionW:13, collisionH:12, extFieldCount:1}, // BLOCK variant (turret) — same fields as BLOCK, just a different sprite/shape
     ],
     sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:blockShapes}, {kind:1, w:16, h:16, shapes:targetShapes}, {kind:1, w:16, h:16, shapes:towerShapes} ],
     tiles: [
@@ -3877,7 +4020,6 @@ registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFla
 registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
 registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
 registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
-registerCart('slingshot', 'Slingshot', 'cart_type 5 · destruction/arcade', 12, buildSlingshotCart);
 registerCart('castle', 'Castle Crusher', 'cart_type 5 · destruction/arcade', 10, buildCastleCrusherCart);
 
 /* ============================================================
