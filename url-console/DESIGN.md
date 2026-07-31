@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §24 below:
+New open questions this raised, folded into §25 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1391,7 +1391,114 @@ never by writing the globals directly — same lesson as always in this
 project: simulate the actual input path, don't shortcut it and assume
 the shortcut is equivalent.
 
-## 24. Open questions
+## 24. Real physics: gravity, entity-on-entity resting, and solid ball collision — and dropping Slingshot
+
+Direct feedback on §23's stacked castle: "delete the angry birds slingshot
+game and focus only on the castle crusher. Also the blocks have no
+falling physics or ball collision. Fix." Two changes, in order.
+
+**Slingshot is gone.** `buildSlingshotCart`, its `registerCart` entry,
+and every comment cross-reference to it were removed; Castle Crusher is
+now the only destruction-genre cart. `DESTRUCT_HOOKS_SRC` and the
+`DESTRUCT_*_NAMES` symbol tables are unchanged in *shape* (still shared
+infrastructure, just with one consumer instead of two).
+
+**Real physics, without a new opcode.** §21 had deliberately simplified
+this to "blocks never move, the projectile pierces straight through" —
+a real V0 scope cut, reasoned through and user-approved at the time —
+on the belief that real inter-entity physics needed a primitive this VM
+doesn't have (`MOVE_SOLID` only resolves entity-vs-*tile*). Revisiting
+it found that belief wrong: the engine already runs a generic pairwise
+overlap scan every tick and calls `on_collide(a,b)` once per overlapping
+pair with full read/write access to both entities — precisely the
+primitive needed, just never used this way before.
+
+- **Gravity is uniform.** BLOCK, the BLOCK variant, and TARGET all fall
+  every tick (same `GRAVITY`/`MAX_FALL_SPEED` as the projectile) and use
+  `MOVE_SOLID` to rest against the tilemap, identically to the
+  platformer's player.
+- **Resting on another entity** — the case `MOVE_SOLID` can't see, since
+  it only checks tiles — is resolved in `on_collide`: when two
+  non-projectile entities overlap, whichever has the smaller y (higher
+  on screen) snaps to sit exactly on the other's top surface (using
+  each type's real half-height) and its `vel_y` zeroes. A stack catches
+  itself tower-block-by-tower-block, bottom-up, for free — that's just
+  the order gravity naturally produces (the lowest block always reaches
+  the ground first). Knock the bottom block away and nothing above has
+  anything to rest on.
+- **The projectile is solid against BLOCK/TARGET.** `on_collide` picks
+  whichever axis the ball's incoming velocity is dominant on (compared
+  via squared components — no ABS opcode needed, squares are never
+  negative), reflects and damps that component (a real bounce, not a
+  pass-through), snaps the ball back outside the entity along that axis,
+  and shoves the entity with a fraction of the ball's original velocity
+  — a hard hit now visibly topples a block off a stack, not just chips
+  its HP. Damage/instant-kill still rides along in the same branch
+  (cooldown-gated for multi-hit blocks, immediate for one-hit targets).
+
+**Two real bugs found via testing, not eyeballing** (this genre's third
+and fourth — §21 found terrain-wall unreachability and a soft-lock;
+§23 found the friction-driven reachability envelope):
+
+1. **A stack-management bug that silently corrupted velocity to
+   `undefined`.** The "deadzone" clamp added so a damped bounce can
+   reach exactly `vel_y === 0` (needed because `tick_proj`'s "shot is
+   over" check requires exact equality, not a threshold) computed the
+   new velocity, then did `DUP; MUL` to get its square for the
+   threshold test — but `MUL` consumes *both* copies, leaving nothing
+   on the stack for the subsequent store. Depending on the branch
+   taken, `STORE_A`/`STORE_B` then popped an empty stack, writing
+   `undefined` into `vel_y` — which the next tick's `GRAVITY` addition
+   turned into `NaN`, which `Math.floor(NaN/8)` turned into `NaN` tile
+   coordinates that bypassed `getTileAt`'s bounds check entirely
+   (`NaN < 0` and `NaN >= length` are both `false`), crashing on the
+   very next tile lookup. Caught immediately by a smoke test (a shot
+   that touches any block at all), not by chance. Fixed by duplicating
+   the value *twice* before squaring — one copy survives to be stored,
+   the other is safely consumed by the comparison.
+2. **Knockback could tunnel a block through the level edge and off the
+   map forever.** The castle's level is only 192px wide; a hard
+   knockback hit can give a block enough `vel_x` to cross the remaining
+   distance to the edge in a single tick, faster than `MOVE_SOLID`'s
+   discrete per-tick edge probe can catch it — found by running a shot
+   to completion for thousands of ticks (not just until the ball's own
+   shot resolved) and watching for any entity's position going
+   out of the expected range: one settled into freefall at `y≈39627`,
+   `MAX_FALL_SPEED` terminal velocity, forever. Fixed two ways: an
+   always-correct hard position clamp in `tick_block`/`tick_target`
+   (belt-and-suspenders, independent of getting any constant "right"),
+   and a reduced `KNOCKBACK_SCALE` (0.6 → 0.45) so it's less likely to
+   need the clamp's help in the first place.
+
+**A third finding was a testing bug, not an engine bug, but earns its
+place alongside §22's rAF trap and §23's double-charge trap**: an
+adaptive "greedy best-shot" search cloned the live `World` with a
+shallow `Object.assign` to try candidate shots without committing them.
+The clone's `ctxBase`/`ctxScratch` — built once in the constructor,
+closing over the *original* instance for several helpers (`findEntity`,
+`spawn`, `getTile`, and critically the raw `globals` array reference) —
+still pointed at the real, live world. "Trial" shots fired against the
+clone were silently mutating the actual game (`targets_left` went to
+-92; `won` flipped true on a shot count of zero). The fix was to
+construct a genuine new `World` (own constructor call, own `on_init`,
+own self-bound closures) and copy entities/globals *values* into it,
+not to shortcut construction and copy top-level fields.
+
+**Verification, in order**: a smoke test confirmed blocks settle at
+real resting heights instead of floating at spawn position (§23's
+tokens describe *heights*, not final rest positions — physics now
+decides the latter); a long-run stability check confirmed the
+support-resting snap converges to an exact, non-jittering rest (an
+earlier version, snapping to the exact touching boundary, oscillated
+forever between `vel_y = 0` and `vel_y = GRAVITY` because an exact
+touch sits precisely on the strict-inequality edge the collision scan
+uses — fixed with a deliberate 1px overlap margin); a 72-trial
+angle/charge fuzz sweep over a full shot confirmed no cart faults and
+no entity escaping the level bounds; and the corrected adaptive-search
+test cleared all 4 targets in 2 of 16 available shots on a genuine
+continuous playthrough — real margin, not a hopeful guess.
+
+## 25. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
