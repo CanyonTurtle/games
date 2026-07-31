@@ -43,6 +43,8 @@ jobs:
           cp url-console/DESIGN.md _site/spec/DESIGN.md
           cp url-console/v0/README.md _site/spec/v0-README.md
           cp url-console/examples/*.md _site/spec/examples/
+          cp url-console/v0/kernel.js _site/spec/kernel.js
+          cp url-console/v0/fixtures.md _site/spec/fixtures.md
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
