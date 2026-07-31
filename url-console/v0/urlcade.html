@@ -377,6 +377,17 @@ const CURATED_BANK = [
   //    then a sky blue and a ground green for the backdrop generator (§16)
   ['#000000','#3b2a20','#f4d35e','#ee8b2b','#1b6b2e','#3a9d4f','#a8e6b5','#ffffff',
    '#8ecae6','#4a7c3a','#000000','#000000','#000000','#000000','#000000','#000000'],
+  // 1: "dungeon" (Cave Crawler) — hand-picked rather than procedurally
+  // hue-rotated on purpose. The roguelike's procedural palette put both
+  // the player AND the monster on the same accent hue ramp (only differing
+  // in lightness), which visually blended the monster into the earthy
+  // wall/floor tones behind it — reported as "enemies blend into the
+  // background." A curated bank sidesteps that failure mode entirely:
+  // walls/floor/stairs stay in one earthy family (0-7), while player and
+  // monster each get their own fully independent, high-contrast hue
+  // (blue vs red) instead of two shades of one generated accent ramp.
+  ['#000000','#3a2a1a','#6b4a2f','#8a6540','#4a3520','#5f4530','#c9a86a','#f0e6c8',
+   '#2e86de','#54a0ff','#1b4f8a','#f6e58d','#e84118','#ff7675','#7a0c0c','#ffd700'],
 ];
 function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
 function generatePalette(cart){
@@ -1291,12 +1302,31 @@ function hexRowsToPixels(rows){
   for(const row of rows) for(const ch of row) px.push(parseInt(ch,16));
   return px;
 }
+// Nearest-neighbor upscale of hand-authored pixel art by an integer factor —
+// duplicates each character and each row, so an 8x8 design becomes a crisp,
+// blocky 16x16 (factor 2) with the exact same silhouette, no redrawing.
+// Only ever applied to *sprites* (entities): tiles are hardwired to 8x8 by
+// the tile-grid math throughout the runtime (GETTILE/SETTILE, the map
+// generators, the pre-rendered tilemap canvas) and can't grow without
+// touching all of that — sprites have no such constraint (their size is
+// just data read straight off the cart, see entityTypes/sprites).
+function scalePixelRows(rows, factor){
+  const out = [];
+  for(const row of rows){
+    let scaled = '';
+    for(const ch of row) scaled += ch.repeat(factor);
+    for(let i=0;i<factor;i++) out.push(scaled);
+  }
+  return out;
+}
 
 function buildFlappyCart(){
-  const birdPixels = hexRowsToPixels([
-    '00000000','00111000','01222110','12222211',
+  // Authored at 8x8 (a pupil dot added vs. the original design) and scaled
+  // 2x to 16x16 for a bigger, more visible sprite — see scalePixelRows.
+  const birdPixels = hexRowsToPixels(scalePixelRows([
+    '00000000','00111000','01222110','12220211',
     '12222211','01222213','00111100','00000000',
-  ]);
+  ], 2));
   const pipeBody = hexRowsToPixels([
     '44444444','45555554','45555554','45566554',
     '45555554','45555554','45555554','44444444',
@@ -1331,10 +1361,10 @@ function buildFlappyCart(){
     // same *real-time* feel; only the render smoothness changed, not the pace.
     constants: [0.175, -1.6, 1.0, 34, 16, 130, 140, 220, 160, 40, 90, 16],
     entityTypes: [
-      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0},
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
     ],
-    sprites: [ {w:8,h:8,pixels:birdPixels} ],
+    sprites: [ {w:16,h:16,pixels:birdPixels} ],
     tiles: [ {w:8,h:8,pixels:pipeBody}, {w:8,h:8,pixels:pipeCap} ],
     hooks: {},
   };
@@ -1614,11 +1644,14 @@ const RACER_HOOKS_SRC = {
 };
 
 function buildRacerCart(){
-  const carPixels = hexRowsToPixels([
-    '00888800','08dddd80','8dddddd8','8dd88dd8',
+  // Authored at 8x8 (windshield restyled from a flat dark stripe to a
+  // lighter highlighted band) and scaled 2x to 16x16 — bigger, more
+  // detailed cars, see scalePixelRows.
+  const carPixels = hexRowsToPixels(scalePixelRows([
+    '00888800','08dddd80','8dddddd8','8daaaad8',
     '8dddddd8','8dddddd8','08dddd80','00888800',
-  ]);
-  const particlePixels = hexRowsToPixels(['0110','1111','1111','0110']);
+  ], 2));
+  const particlePixels = hexRowsToPixels(scalePixelRows(['0110','1111','1111','0110'], 2));
   const grassPixels = hexRowsToPixels(new Array(8).fill('11111111'));
   const roadPixels = hexRowsToPixels([
     '33333333','32222223','32222223','32222223',
@@ -1677,10 +1710,10 @@ function buildRacerCart(){
     // cart: the sim now runs at 60Hz, rescaled to keep real-time feel fixed.
     constants: [0.075, 2, 0.015, 0.041, 0.106, 14, 3, 0.6, 20, 2, startX, startY, 0.3],
     entityTypes: [
-      {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:6, collisionH:6, extFieldCount:4},
-      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:3, collisionH:3, extFieldCount:1},
+      {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:10, collisionH:10, extFieldCount:4},
+      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:4, collisionH:4, extFieldCount:1},
     ],
-    sprites: [ {w:8,h:8,pixels:carPixels}, {w:4,h:4,pixels:particlePixels} ],
+    sprites: [ {w:16,h:16,pixels:carPixels}, {w:8,h:8,pixels:particlePixels} ],
     tiles: [
       {w:8,h:8,pixels:grassPixels}, {w:8,h:8,pixels:roadPixels},
       {w:8,h:8,pixels:rumblePixels}, {w:8,h:8,pixels:startPixels},
@@ -2111,22 +2144,32 @@ function buildRoguelikeCart(){
     '44444444','44044440','40ffff04','4fffffe4',
     '4fffffe4','40ffff04','44044440','44444444',
   ]);
-  const playerPixels = hexRowsToPixels([
+  // Blue player, scaled 2x for a bigger, more visible sprite. Indices 9/10
+  // land squarely in the new curated dungeon bank's blue range (see
+  // CURATED_BANK[1]) — this art was already shaped right, it just needed
+  // a palette that actually put distinct colors at those index numbers.
+  const playerPixels = hexRowsToPixels(scalePixelRows([
     '00099000','09aaaa90','09aaaa90','00a99a00',
     '000aa000','00a99a00','0a9009a0','00000000',
-  ]);
-  const monsterPixels = hexRowsToPixels([
-    '00000000','03333330','03633630','03333330',
-    '03303030','00333300','03000030','00000000',
-  ]);
+  ], 2));
+  // Red monster, white eyes — deliberately moved off the earthy indices
+  // (3/6) the map tiles use. That was the actual bug behind "enemies
+  // blend into the background": the monster's *art* referenced the same
+  // palette slots as the walls/floor, so no palette swap alone could have
+  // fixed it — see DESIGN.md for the postmortem.
+  const monsterPixels = hexRowsToPixels(scalePixelRows([
+    '00000000','0cccccc0','0c7cc7c0','0cccccc0',
+    '0cc0c0c0','00cccc00','0c0000c0','00000000',
+  ], 2));
 
   const gridW = 32, gridH = 20;
 
   const cart = {
     formatVersion: 1,
     cartType: 3, // advisory label only — see DESIGN.md §14
-    paletteMode: 1,
-    paletteParams: [25, 0, 15, 35, 8, 45, 150, 0],
+    paletteMode: 0, // curated bank #1 ("dungeon") — not the procedural
+                     // hue-rotation mode; see CURATED_BANK's comment for why
+    paletteParams: [1, 0, 0, 0, 0, 0, 0, 0],
     rngSeed: 7,
     modeFlags: 0,
     screenW: gridW*8,
@@ -2149,7 +2192,7 @@ function buildRoguelikeCart(){
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // PLAYER
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // MONSTER (ext 8 = move_timer)
     ],
-    sprites: [ {w:8,h:8,pixels:playerPixels}, {w:8,h:8,pixels:monsterPixels} ],
+    sprites: [ {w:16,h:16,pixels:playerPixels}, {w:16,h:16,pixels:monsterPixels} ],
     tiles: [
       {w:8,h:8,pixels:wallPixels}, {w:8,h:8,pixels:floorPixels},
       {w:8,h:8,pixels:stairsPixels}, {w:8,h:8,pixels:goldPixels},
@@ -2476,18 +2519,24 @@ function buildPlatformerCart(){
     '00000000','02220222','02220222','00000000',
     '22202220','22202220','00000000','02220222',
   ]);
-  const playerPixels = hexRowsToPixels([
+  const playerPixels = hexRowsToPixels(scalePixelRows([
     '00099000','09aaaa90','9aaaaaa9','09a99a90',
     '000aa000','00a99a00','0a9009a0','09000090',
-  ]);
-  const enemyPixels = hexRowsToPixels([
-    '00000000','03333330','03633630','03333330',
-    '33333333','30333303','03000030','00000000',
-  ]);
-  const coinPixels = hexRowsToPixels([
+  ], 2));
+  // Recolored off the base (blue/sky) bank onto the accent (warm) ramp, at
+  // a different shade than the player — the enemy's art used to reference
+  // indices 3/6, the same family the AIR/GROUND/DIRT tiles use, the exact
+  // "sprite art points at the wrong palette family" bug found and fixed
+  // for the roguelike's monster; caught here proactively rather than
+  // waiting for the same report twice.
+  const enemyPixels = hexRowsToPixels(scalePixelRows([
+    '00000000','0dddddd0','0d0dd0d0','0dddddd0',
+    'dddddddd','d0dddd0d','0d0000d0','00000000',
+  ], 2));
+  const coinPixels = hexRowsToPixels(scalePixelRows([
     '00000000','00ffff00','0fbbbbf0','fbbbbbbf',
     'fbbbbbbf','0fbbbbf0','00ffff00','00000000',
-  ]);
+  ], 2));
 
   const T = PLATFORM_TOKENS;
   const tokens = [
@@ -2543,7 +2592,7 @@ function buildPlatformerCart(){
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // COIN
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // ENEMY (ext 8 = facing)
     ],
-    sprites: [ {w:8,h:8,pixels:playerPixels}, {w:8,h:8,pixels:enemyPixels}, {w:8,h:8,pixels:coinPixels} ],
+    sprites: [ {w:16,h:16,pixels:playerPixels}, {w:16,h:16,pixels:enemyPixels}, {w:16,h:16,pixels:coinPixels} ],
     tiles: [
       {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
       {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:brickPixels},
