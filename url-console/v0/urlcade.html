@@ -1302,31 +1302,143 @@ function hexRowsToPixels(rows){
   for(const row of rows) for(const ch of row) px.push(parseInt(ch,16));
   return px;
 }
-// Nearest-neighbor upscale of hand-authored pixel art by an integer factor —
-// duplicates each character and each row, so an 8x8 design becomes a crisp,
-// blocky 16x16 (factor 2) with the exact same silhouette, no redrawing.
-// Only ever applied to *sprites* (entities): tiles are hardwired to 8x8 by
-// the tile-grid math throughout the runtime (GETTILE/SETTILE, the map
-// generators, the pre-rendered tilemap canvas) and can't grow without
-// touching all of that — sprites have no such constraint (their size is
-// just data read straight off the cart, see entityTypes/sprites).
-function scalePixelRows(rows, factor){
-  const out = [];
-  for(const row of rows){
-    let scaled = '';
-    for(const ch of row) scaled += ch.repeat(factor);
-    for(let i=0;i<factor;i++) out.push(scaled);
+// Sprites are painted procedurally with real geometry (ellipses, rounded
+// blobs) rather than hand-typed as low-res hex art and nearest-neighbor
+// scaled up — a first pass did the latter (each 8x8 pixel doubled into a
+// flat 2x2 block) and it looked exactly like what it was: a blown-up
+// thumbnail, not bigger art. Computing the shape at the sprite's actual
+// resolution gives genuinely smooth, non-blocky edges instead. `fn(x,y)`
+// is called once per pixel with the pixel's *center* coordinates (so a
+// 16-wide sprite sees x from 0.5 to 15.5) and returns a palette index,
+// 0 = transparent (see buildBitmap's `idx===0` special case for sprites).
+function paintSprite(w, h, fn){
+  const px = [];
+  for(let y=0;y<h;y++) for(let x=0;x<w;x++) px.push(fn(x+0.5, y+0.5));
+  return px;
+}
+// Signed distance from an ellipse boundary centered at (cx,cy) with radii
+// (rx,ry), in "radii units": negative inside, 0 on the edge, positive
+// outside. The one primitive nearly every painter below builds on — body
+// silhouettes, outline rings (a thin band near d=0), eyes, and limb nubs
+// are all just ellipses at different places and sizes.
+function ellipseDist(x,y,cx,cy,rx,ry){
+  const dx=(x-cx)/rx, dy=(y-cy)/ry;
+  return Math.sqrt(dx*dx+dy*dy) - 1;
+}
+
+/* ============================================================
+   7b. Sprite painters — see paintSprite/ellipseDist above.
+   Palette indices below are per-cart (CURATED_BANK[0] for the bird,
+   CURATED_BANK[1] "dungeon" for the roguelike, procedural accent/base
+   bands for the racer and platformer) — each painter is defined next to
+   the cart that uses it, but grouped here since they're all sprite art,
+   not gameplay logic.
+   ============================================================ */
+// Flappy Bird: round body, wedge beak, one round eye with a pupil, an
+// inset wing patch. CURATED_BANK[0]: 1=brown(outline), 2=yellow(body),
+// 3=orange(beak/wing), 7=white(eye).
+function paintBird(x,y){
+  const cx=7.6, cy=8.3, rx=6.3, ry=6.4;
+  const body = ellipseDist(x,y,cx,cy,rx,ry);
+  const beak = (x>=12.4 && x<=15.6 && Math.abs(y-7.9) <= (16-x)*0.85);
+  if(beak) return 3;
+  if(body > 0) return 0;
+  const eye = ellipseDist(x,y, 10.1,5.3, 1.8,1.8);
+  if(eye <= 0){
+    const pupil = ellipseDist(x,y, 10.9,5.4, 0.9,0.9);
+    return pupil <= 0 ? 1 : 7;
   }
-  return out;
+  const wing = ellipseDist(x,y, 6.0,10.4, 3.3,2.2);
+  if(wing <= 0) return 3;
+  if(body > -0.24) return 1; // outline band near the edge
+  return 2;
+}
+// Race car, nose toward +x (rotateFlag rotates the whole sprite to match
+// heading): rounded body, four wheel-bump nubs, a windshield band, a roof
+// highlight stripe. Accent-bank indices: 8=darkest (tires/outline),
+// 10='a'=windshield glass, 12='c'=body fill, 13='d'=roof highlight.
+function paintCar(x,y){
+  const cx=8, cy=8, rx=6.3, ry=4.6;
+  const wheel = (((x>=3.0&&x<=5.2)||(x>=10.8&&x<=13.0)) &&
+                 ((y>=0.4&&y<=2.8) || (y>=13.2&&y<=15.6)));
+  if(wheel) return 8;
+  const body = ellipseDist(x,y,cx,cy,rx,ry);
+  if(body > 0) return 0;
+  const windshield = (x>=8.3 && x<=11.6 && y>=5.2 && y<=10.8);
+  if(windshield) return 10;
+  if(Math.abs(y-8) <= 1.3 && x>=3.2 && x<=8.2) return 13;
+  if(body > -0.32) return 8;
+  return 12;
+}
+// The racer's small round collision-debris particle. Base-bank indices:
+// 1=rim (dark), 2=highlight center.
+function paintParticle(x,y){
+  const d = ellipseDist(x,y, 4,4, 3.2,3.2);
+  if(d > 0) return 0;
+  if(d > -0.35) return 1;
+  return 2;
+}
+// Cave Crawler's blue player and red-eyed monster, and Run & Jump's
+// player/enemy, are all the same "round head + round body + two foot
+// nubs" blob shape — a shared painter parameterized by which palette
+// indices to use, rather than four near-identical hand-tuned functions.
+function paintBlobCharacter(x, y, {bodyIdx, outlineIdx}){
+  const head = ellipseDist(x,y, 8,4.3, 3.3,3.1);
+  const body = ellipseDist(x,y, 8,10.4, 4.5,4.1);
+  const footL = ellipseDist(x,y, 5.7,14.5, 1.6,1.15);
+  const footR = ellipseDist(x,y, 10.3,14.5, 1.6,1.15);
+  if(head <= 0) return (head > -0.5) ? outlineIdx : bodyIdx;
+  if(body <= 0) return (body > -0.55) ? outlineIdx : bodyIdx;
+  if(footL <= 0 || footR <= 0) return outlineIdx;
+  return 0;
+}
+// Cave Crawler's monster: same blob silhouette as the player (via a wider,
+// single-mass body ellipse instead of head+body) but with two white
+// eyes+pupils, so it reads as a creature rather than a recolored player.
+function paintRogueMonster(x,y){
+  const d = ellipseDist(x,y, 8,8.7, 6.1,5.5);
+  if(d > 0){
+    const legL = ellipseDist(x,y, 5.2,14.6, 1.6,1.2);
+    const legR = ellipseDist(x,y, 10.8,14.6, 1.6,1.2);
+    return (legL<=0 || legR<=0) ? 12 : 0;
+  }
+  const eyeL = ellipseDist(x,y, 5.7,6.6, 1.7,1.7);
+  const eyeR = ellipseDist(x,y, 10.3,6.6, 1.7,1.7);
+  if(eyeL <= 0 || eyeR <= 0){
+    const pupilL = ellipseDist(x,y, 5.7,7.0, 0.75,0.75);
+    const pupilR = ellipseDist(x,y, 10.3,7.0, 0.75,0.75);
+    return (pupilL<=0 || pupilR<=0) ? 14 : 7;
+  }
+  if(d > -0.65) return 14;
+  return 12;
+}
+// Run & Jump's enemy: same silhouette family as paintRogueMonster (single
+// body mass + eyes) but on the platformer's own accent-bank indices.
+function paintPlatformEnemy(x,y){
+  const d = ellipseDist(x,y, 8,9, 6.2,5.4);
+  if(d > 0){
+    const legL = ellipseDist(x,y, 5.1,14.8, 1.6,1.1);
+    const legR = ellipseDist(x,y, 10.9,14.8, 1.6,1.1);
+    return (legL<=0 || legR<=0) ? 13 : 0;
+  }
+  const eyeL = ellipseDist(x,y, 5.8,7.0, 1.5,1.5);
+  const eyeR = ellipseDist(x,y, 10.2,7.0, 1.5,1.5);
+  if(eyeL <= 0 || eyeR <= 0) return 8;
+  if(d > -0.6) return 8;
+  return 13;
+}
+// Run & Jump's coin: a bright ring with an inset shine highlight, offset
+// toward the upper-left like a light source hitting a coin.
+function paintCoin(x,y){
+  const d = ellipseDist(x,y, 8,8, 5.7,5.7);
+  if(d > 0) return 0;
+  if(d > -0.6) return 15;
+  const shine = ellipseDist(x,y, 5.8,5.8, 2.3,2.3);
+  return shine <= 0 ? 15 : 11;
 }
 
 function buildFlappyCart(){
-  // Authored at 8x8 (a pupil dot added vs. the original design) and scaled
-  // 2x to 16x16 for a bigger, more visible sprite — see scalePixelRows.
-  const birdPixels = hexRowsToPixels(scalePixelRows([
-    '00000000','00111000','01222110','12220211',
-    '12222211','01222213','00111100','00000000',
-  ], 2));
+  const birdPixels = paintSprite(16, 16, paintBird);
   const pipeBody = hexRowsToPixels([
     '44444444','45555554','45555554','45566554',
     '45555554','45555554','45555554','44444444',
@@ -1644,14 +1756,8 @@ const RACER_HOOKS_SRC = {
 };
 
 function buildRacerCart(){
-  // Authored at 8x8 (windshield restyled from a flat dark stripe to a
-  // lighter highlighted band) and scaled 2x to 16x16 — bigger, more
-  // detailed cars, see scalePixelRows.
-  const carPixels = hexRowsToPixels(scalePixelRows([
-    '00888800','08dddd80','8dddddd8','8daaaad8',
-    '8dddddd8','8dddddd8','08dddd80','00888800',
-  ], 2));
-  const particlePixels = hexRowsToPixels(scalePixelRows(['0110','1111','1111','0110'], 2));
+  const carPixels = paintSprite(16, 16, paintCar);
+  const particlePixels = paintSprite(8, 8, paintParticle);
   const grassPixels = hexRowsToPixels(new Array(8).fill('11111111'));
   const roadPixels = hexRowsToPixels([
     '33333333','32222223','32222223','32222223',
@@ -2144,23 +2250,16 @@ function buildRoguelikeCart(){
     '44444444','44044440','40ffff04','4fffffe4',
     '4fffffe4','40ffff04','44044440','44444444',
   ]);
-  // Blue player, scaled 2x for a bigger, more visible sprite. Indices 9/10
-  // land squarely in the new curated dungeon bank's blue range (see
-  // CURATED_BANK[1]) — this art was already shaped right, it just needed
-  // a palette that actually put distinct colors at those index numbers.
-  const playerPixels = hexRowsToPixels(scalePixelRows([
-    '00099000','09aaaa90','09aaaa90','00a99a00',
-    '000aa000','00a99a00','0a9009a0','00000000',
-  ], 2));
-  // Red monster, white eyes — deliberately moved off the earthy indices
-  // (3/6) the map tiles use. That was the actual bug behind "enemies
-  // blend into the background": the monster's *art* referenced the same
-  // palette slots as the walls/floor, so no palette swap alone could have
-  // fixed it — see DESIGN.md for the postmortem.
-  const monsterPixels = hexRowsToPixels(scalePixelRows([
-    '00000000','0cccccc0','0c7cc7c0','0cccccc0',
-    '0cc0c0c0','00cccc00','0c0000c0','00000000',
-  ], 2));
+  // Blue player. Indices 9/10 land squarely in the new curated dungeon
+  // bank's blue range (see CURATED_BANK[1]).
+  const playerPixels = paintSprite(16, 16, (x,y) => paintBlobCharacter(x,y,{bodyIdx:9, outlineIdx:10}));
+  // Red monster, white eyes — deliberately painted with its own indices
+  // (12/14), not the earthy ones (3/6) the map tiles use. That was the
+  // actual bug behind "enemies blend into the background": the monster's
+  // *art* referenced the same palette slots as the walls/floor, so no
+  // palette swap alone could have fixed it — see DESIGN.md for the
+  // postmortem.
+  const monsterPixels = paintSprite(16, 16, paintRogueMonster);
 
   const gridW = 32, gridH = 20;
 
@@ -2519,24 +2618,14 @@ function buildPlatformerCart(){
     '00000000','02220222','02220222','00000000',
     '22202220','22202220','00000000','02220222',
   ]);
-  const playerPixels = hexRowsToPixels(scalePixelRows([
-    '00099000','09aaaa90','9aaaaaa9','09a99a90',
-    '000aa000','00a99a00','0a9009a0','09000090',
-  ], 2));
-  // Recolored off the base (blue/sky) bank onto the accent (warm) ramp, at
-  // a different shade than the player — the enemy's art used to reference
-  // indices 3/6, the same family the AIR/GROUND/DIRT tiles use, the exact
-  // "sprite art points at the wrong palette family" bug found and fixed
-  // for the roguelike's monster; caught here proactively rather than
-  // waiting for the same report twice.
-  const enemyPixels = hexRowsToPixels(scalePixelRows([
-    '00000000','0dddddd0','0d0dd0d0','0dddddd0',
-    'dddddddd','d0dddd0d','0d0000d0','00000000',
-  ], 2));
-  const coinPixels = hexRowsToPixels(scalePixelRows([
-    '00000000','00ffff00','0fbbbbf0','fbbbbbbf',
-    'fbbbbbbf','0fbbbbf0','00ffff00','00000000',
-  ], 2));
+  const playerPixels = paintSprite(16, 16, (x,y) => paintBlobCharacter(x,y,{bodyIdx:9, outlineIdx:10}));
+  // On the accent (warm) ramp, a different shade than the player — the
+  // enemy's art used to reference indices 3/6, the same family the AIR/
+  // GROUND/DIRT tiles use, the exact "sprite art points at the wrong
+  // palette family" bug found and fixed for the roguelike's monster;
+  // caught here proactively rather than waiting for the same report twice.
+  const enemyPixels = paintSprite(16, 16, paintPlatformEnemy);
+  const coinPixels = paintSprite(16, 16, paintCoin);
 
   const T = PLATFORM_TOKENS;
   const tokens = [
