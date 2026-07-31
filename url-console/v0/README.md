@@ -306,6 +306,33 @@ and it's exercised on every play, not just asserted.
   otherwise. All three bugs predate this pass; none had been walked or
   swept exhaustively before.
 
+- **Deployed to GitHub Pages, and a discoverable spec.** The runtime is
+  a single file with no build step, so "deploy" is just "publish that
+  file" — a GitHub Actions workflow does it on every push to `main`.
+  `DESIGN.md`, this file, and the worked examples are published alongside
+  it under `/spec/` as raw markdown (agent-fetchable with no rendering
+  step in the way) plus an `llms.txt` index at the site root, rather than
+  left as repo-only files a human would have to go clone to read.
+- **A Cart Inspector — decompiling a cart back into something readable,
+  not just playable** (`DESIGN.md` §19). A third top-level view, next to
+  the shelf and the player, that decodes *any* cart (pasted as a URL, a
+  fragment, or just the payload — not only the four shipped ones) and
+  tabs between its palette, rendered sprites/tiles, map, entity types,
+  and — the new part — every hook's bytecode as both a labeled
+  disassembly listing and a hand-rolled SVG control-flow-graph flowchart.
+  Both the disassembler and the CFG extractor work from raw bytecode plus
+  the shared opcode table alone, with no dependence on any cart's own
+  symbol names, which is what makes "paste an arbitrary cart" possible
+  rather than "inspect one of these four hardcoded carts." No diagramming
+  library either — consistent with the runtime's own no-dependency
+  policy for gameplay code, and validated as the right call here too:
+  these hooks are short, mostly-linear programs, so a simple vertical
+  block stack with bezier "bow right for forward branches, bow left for
+  loops" edges reads as clearly as a full graph-layout algorithm would,
+  for far less code. Verified against a hand-traced hook (the roguelike's
+  `on_tick` retry loop) — the disassembler reconstructed it exactly,
+  including the one instruction that makes it a loop.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

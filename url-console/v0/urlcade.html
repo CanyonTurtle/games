@@ -71,6 +71,11 @@
     color:#141110;text-decoration:none;padding:9px 16px;border-radius:2px;font-weight:700;
     font-size:13px;letter-spacing:.04em;border:1px solid rgba(0,0,0,.2);}
   a.playbtn:hover{transform:translateX(2px);}
+  a.inspectbtn{display:inline-flex;align-items:center;gap:6px;background:transparent;
+    color:var(--ink-dim);text-decoration:none;padding:9px 12px;border-radius:2px;
+    font-weight:700;font-size:12px;letter-spacing:.04em;border:1px solid var(--rule);
+    margin-left:8px;}
+  a.inspectbtn:hover{color:var(--ink);border-color:var(--ink-dim);}
   .spec{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:16px 0 0;
     font-size:12px;color:var(--ink-dim);font-variant-numeric:tabular-nums;}
   .spec dt{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px;
@@ -84,6 +89,63 @@
     word-break:break-all;font-size:10.5px;line-height:1.5;max-height:6.5em;overflow-y:auto;}
   #menu > footer{margin-top:40px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
     padding-top:16px;}
+
+  .inspect-loader{margin-top:32px;padding-top:22px;border-top:1px solid var(--rule);}
+  p.lede-small{color:var(--ink-dim);font-size:13px;line-height:1.6;max-width:60ch;margin:0 0 12px;}
+  #inspectForm{display:flex;gap:8px;}
+  #inspectInput{flex:1;min-width:0;background:var(--bg-card);border:1px solid var(--rule);
+    color:var(--ink);font-family:var(--mono);font-size:13px;padding:9px 12px;border-radius:2px;}
+  #inspectInput:focus-visible{outline:2px solid var(--focus);}
+  #inspectForm button{background:var(--accent);color:#141110;border:1px solid rgba(0,0,0,.2);
+    font-family:var(--mono);font-weight:700;font-size:13px;letter-spacing:.04em;
+    padding:9px 16px;border-radius:2px;cursor:pointer;}
+  .inspect-error{color:#ff6b5e;font-size:12.5px;margin:8px 0 0;min-height:1em;}
+
+  /* Cart Inspector view — its own top-level view (siblings of #menu/
+     #gameWrap), a mobile-first horizontally-scrollable tab strip over a
+     scrollable body, reusing the same palette variables as everything
+     else on the page. */
+  #inspectWrap{display:none;position:fixed;inset:0;overflow:hidden;background:var(--bg);
+    flex-direction:column;}
+  #inspectWrap.active{display:flex;}
+  .inspect-topbar{flex:0 0 auto;display:flex;align-items:center;gap:12px;
+    padding:calc(12px + var(--safe-t)) 16px 12px calc(16px + var(--safe-l));
+    border-bottom:1px solid var(--rule);}
+  .inspect-topbar button{background:var(--bg-card);color:var(--ink);border:1px solid var(--rule);
+    padding:7px 12px;border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:12px;}
+  .inspect-topbar button:hover{border-color:var(--accent);color:var(--accent);}
+  #inspectTitle{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .inspect-tabs{flex:0 0 auto;display:flex;overflow-x:auto;gap:2px;padding:0 12px;
+    border-bottom:1px solid var(--rule);-webkit-overflow-scrolling:touch;}
+  .inspect-tab{flex:0 0 auto;background:none;border:none;border-bottom:2px solid transparent;
+    color:var(--ink-dim);font-family:var(--mono);font-size:12.5px;letter-spacing:.03em;
+    text-transform:uppercase;padding:12px 12px;cursor:pointer;white-space:nowrap;}
+  .inspect-tab:hover{color:var(--ink);}
+  .inspect-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .inspect-body{flex:1;overflow-y:auto;padding:18px 16px calc(40px + var(--safe-b));}
+  .inspect-empty{color:var(--ink-dim);font-size:13px;}
+  .inspect-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:14px;}
+  .inspect-tile{text-align:center;}
+  .inspect-tile canvas{image-rendering:pixelated;border:1px solid var(--rule);
+    background:var(--bg-card);width:100%;height:auto;}
+  .inspect-tile p{margin:6px 0 0;font-size:11px;color:var(--ink-dim);}
+  table.inspect-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:18px;}
+  table.inspect-table th, table.inspect-table td{text-align:left;padding:6px 10px;
+    border-bottom:1px solid var(--rule);}
+  table.inspect-table th{color:var(--ink-dim);text-transform:uppercase;font-size:10.5px;
+    letter-spacing:.06em;}
+  .inspect-section-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-dim);margin:22px 0 10px;}
+  .inspect-section-title:first-child{margin-top:0;}
+  .hook-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
+  .hook-tab{background:var(--bg-card);border:1px solid var(--rule);color:var(--ink-dim);
+    font-family:var(--mono);font-size:11.5px;padding:6px 10px;border-radius:2px;cursor:pointer;}
+  .hook-tab.active{color:var(--accent);border-color:var(--accent);}
+  .hook-tab.empty{opacity:.4;}
+  pre.disasm{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
+    padding:12px;font-size:11px;line-height:1.5;overflow-x:auto;max-height:340px;overflow-y:auto;}
+  .cfg-scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--bg-card);
+    padding:10px;}
 
   /* Edge-to-edge: the canvas is the whole viewport (no frame/box/bezel
      around it); everything else is a floating overlay with just enough
@@ -164,6 +226,17 @@
   the recipient gets the exact game, no install, no account.
   See the <a href="spec/">spec &amp; design docs</a> for what these carts stress-tested.</p>
   <div id="cartList"></div>
+  <div class="inspect-loader">
+    <p class="lede-small">Paste any Urlcade link (or just its <code>#</code> fragment) to
+    inspect it — sprites, tiles, palette, entities, and every hook's bytecode
+    decompiled to a labeled listing and a flowchart. Works on any cart, not
+    only the four above.</p>
+    <form id="inspectForm">
+      <input id="inspectInput" type="text" placeholder="Paste a cart link or fragment…" autocomplete="off" spellcheck="false" />
+      <button type="submit">Inspect</button>
+    </form>
+    <p id="inspectError" class="inspect-error"></p>
+  </div>
   <footer>Raw, uncompressed encoding (V0 scope cut — see the <a href="spec/">spec</a>).
   Byte-packed encoding and the preset-dictionary compressor are future work.</footer>
 </div>
@@ -177,6 +250,15 @@
   <div class="controls" id="controlsText"></div>
   <div id="faultBanner">CART FAULT — step budget exceeded</div>
   <div id="touchControls" class="touch-controls"></div>
+</div>
+
+<div id="inspectWrap" class="view">
+  <div class="inspect-topbar">
+    <button id="inspectBackBtn">&larr; shelf</button>
+    <div id="inspectTitle"></div>
+  </div>
+  <div class="inspect-tabs" id="inspectTabs"></div>
+  <div class="inspect-body" id="inspectBody"></div>
 </div>
 
 <script>
@@ -2919,12 +3001,416 @@ registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12
 registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
 
 /* ============================================================
-   11. UI wiring — menu, game loop, HUD, input
+   11. Cart Inspector — a generic disassembler (reverses assemble() back
+   into a labeled mnemonic listing) and a control-flow-graph extractor,
+   rendered as a hand-rolled SVG flowchart rather than pulled in from a
+   diagramming library — this runtime doesn't take on dependencies for
+   its own gameplay code, and an inspector *of* that code shouldn't be
+   the first exception. Both operate purely on raw bytecode + the shared
+   OPS table, with no dependence on any cart's own symbol names (the
+   FLAPPY_SYM/RACER_SYM/etc. maps below are authoring-time only and never
+   round-trip through the binary format) — so this works identically on
+   any decoded cart, not just the four shipped ones. See section 12b for
+   the Inspector UI that puts this to use.
+   ============================================================ */
+function disassembleHook(bytecode){
+  const instrs = [];
+  let ip = 0;
+  function u8(){ return bytecode[ip++]; }
+  function i16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; let v=lo|(hi<<8); if(v & 0x8000) v -= 0x10000; return v; }
+  function u16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; return lo|(hi<<8); }
+  while(ip < bytecode.length){
+    const addr = ip;
+    const op = bytecode[ip++];
+    const opInfo = OPS[op];
+    if(!opInfo){ instrs.push({addr, mnem:'DB', operands:[{type:'u8',value:op}], nextAddr:ip}); continue; }
+    const [mnem, spec] = opInfo;
+    const operands = [];
+    for(const type of spec){
+      if(type === 'u8') operands.push({type, value:u8()});
+      else if(type === 'i16') operands.push({type, value:i16()});
+      else if(type === 'addr') operands.push({type, value:u16()});
+    }
+    instrs.push({addr, mnem, operands, nextAddr:ip});
+  }
+  return instrs;
+}
+// Basic-block split + edge extraction, shared by the flat disassembly
+// listing (labels blocks instead of raw byte offsets) and the flowchart.
+// Leaders: the entry point, every jump target, and whatever instruction
+// follows a branch/HALT (control flow can't just fall through those).
+function buildCFG(bytecode){
+  const instrs = disassembleHook(bytecode);
+  if(instrs.length === 0) return {instrs, blocks:[], edges:[]};
+  const validAddr = new Set(instrs.map(ins=>ins.addr));
+  const leaders = new Set([instrs[0].addr]);
+  const isBranch = mnem => mnem==='JMP'||mnem==='JZ'||mnem==='JNZ';
+  for(const ins of instrs){
+    if(isBranch(ins.mnem)){
+      const target = ins.operands[0].value;
+      if(validAddr.has(target)) leaders.add(target);
+      if(ins.nextAddr < bytecode.length) leaders.add(ins.nextAddr);
+    } else if(ins.mnem === 'HALT' && ins.nextAddr < bytecode.length){
+      leaders.add(ins.nextAddr);
+    }
+  }
+  const sorted = [...leaders].sort((a,b)=>a-b);
+  const blocks = sorted.map((addr,i) => ({
+    id: i, startAddr: addr,
+    endAddr: (i+1<sorted.length) ? sorted[i+1] : bytecode.length,
+    instrs: [],
+  }));
+  for(const ins of instrs){
+    const b = blocks.find(b => ins.addr >= b.startAddr && ins.addr < b.endAddr);
+    if(b) b.instrs.push(ins);
+  }
+  const blockAtAddr = addr => blocks.find(b => addr >= b.startAddr && addr < b.endAddr);
+  const edges = [];
+  for(const b of blocks){
+    if(b.instrs.length === 0) continue;
+    const last = b.instrs[b.instrs.length-1];
+    if(last.mnem === 'JMP'){
+      const t = blockAtAddr(last.operands[0].value);
+      if(t) edges.push({from:b.id, to:t.id, kind:'jump'});
+    } else if(last.mnem === 'JZ' || last.mnem === 'JNZ'){
+      const t = blockAtAddr(last.operands[0].value);
+      if(t) edges.push({from:b.id, to:t.id, kind:'taken'});
+      const ft = blockAtAddr(last.nextAddr);
+      if(ft) edges.push({from:b.id, to:ft.id, kind:'fallthrough'});
+    } else if(last.mnem !== 'HALT'){
+      const ft = blockAtAddr(last.nextAddr);
+      if(ft) edges.push({from:b.id, to:ft.id, kind:'fallthrough'});
+    }
+  }
+  return {instrs, blocks, edges};
+}
+// Flat, labeled disassembly text — block boundaries from the same CFG
+// split double as label points, so "B3:" here is literally the same
+// block drawn as a box in the flowchart (see renderCFGSvg).
+function formatDisassembly(bytecode){
+  const {blocks} = buildCFG(bytecode);
+  if(blocks.length === 0) return '(empty)';
+  const lines = [];
+  for(const b of blocks){
+    lines.push(`B${b.id}:`);
+    for(const ins of b.instrs){
+      const operandStrs = ins.operands.map(op =>
+        op.type === 'addr' ? ('B' + (blocks.find(bb=>bb.startAddr===op.value)?.id ?? '?')) : String(op.value));
+      lines.push('    ' + ins.mnem + (operandStrs.length ? ' ' + operandStrs.join(' ') : ''));
+    }
+  }
+  return lines.join('\n');
+}
+const EDGE_COLOR = {jump:'#e0a030', taken:'#4a9d5f', fallthrough:'#8a7a5f'};
+// Vertical-stack flowchart: blocks in address order top-to-bottom (this
+// VM's hooks are short, mostly-linear-with-branches programs, so a full
+// layered-DAG auto-layout would be a lot of machinery for little extra
+// clarity over "read down the page, follow the arrows"). Edges to an
+// adjacent next block draw as a short straight line; anything else bows
+// out to the right (forward) or left (loop-back) as a bezier so it
+// doesn't cut through intervening boxes.
+function renderCFGSvg(bytecode){
+  const {blocks, edges} = buildCFG(bytecode);
+  if(blocks.length === 0) return '<p class="inspect-empty">(empty hook)</p>';
+  const boxW = 240, padX = 70, padY = 10, lineH = 13, headerH = 20;
+  const boxX = padX;
+  let y = padY;
+  const positioned = blocks.map(b => {
+    const h = headerH + b.instrs.length*lineH + 10;
+    const box = {...b, x:boxX, y, w:boxW, h};
+    y += h + 28;
+    return box;
+  });
+  const totalH = y;
+  const totalW = boxX + boxW + padX + 60;
+  const byId = new Map(positioned.map(b=>[b.id,b]));
+  let svg = `<svg viewBox="0 0 ${totalW} ${totalH}" width="100%" style="max-width:${totalW}px" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">`;
+  svg += `<defs>` + Object.entries(EDGE_COLOR).map(([k,c]) =>
+    `<marker id="arrow-${k}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${c}"/></marker>`).join('') + `</defs>`;
+  for(const e of edges){
+    const from = byId.get(e.from), to = byId.get(e.to);
+    if(!from || !to) continue;
+    const color = EDGE_COLOR[e.kind];
+    const dash = e.kind==='jump' && to.id <= from.id ? 'stroke-dasharray="4 3"' : '';
+    let d;
+    if(to.id === from.id+1 && e.kind !== 'taken'){
+      const x = from.x + boxW/2;
+      d = `M${x},${from.y+from.h} L${x},${to.y}`;
+    } else if(to.id > from.id){ // forward, non-adjacent: bow right
+      const x0 = from.x+boxW, y0 = from.y+from.h/2;
+      const x1 = to.x+boxW, y1 = to.y+ (to.id===from.id ? to.h/2 : 6);
+      const bow = x0 + 40;
+      d = `M${x0},${y0} C${bow},${y0} ${bow},${y1} ${x1},${y1}`;
+    } else { // backward: loop, bow left
+      const x0 = from.x, y0 = from.y+from.h/2;
+      const x1 = to.x, y1 = to.y+6;
+      const bow = x0 - 50;
+      d = `M${x0},${y0} C${bow},${y0} ${bow},${y1} ${x1},${y1}`;
+    }
+    svg += `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" ${dash} marker-end="url(#arrow-${e.kind})"/>`;
+  }
+  for(const b of positioned){
+    svg += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="4" fill="var(--bg-card,#1c1712)" stroke="var(--rule,#3a3025)"/>`;
+    svg += `<text x="${b.x+10}" y="${b.y+14}" font-size="11" font-weight="700" fill="var(--accent,#e0a030)">B${b.id}</text>`;
+    b.instrs.forEach((ins,i) => {
+      const operandStrs = ins.operands.map(op =>
+        op.type === 'addr' ? ('B' + (positioned.find(bb=>bb.startAddr===op.value)?.id ?? '?')) : String(op.value));
+      const text = ins.mnem + (operandStrs.length ? ' '+operandStrs.join(' ') : '');
+      svg += `<text x="${b.x+10}" y="${b.y+headerH+i*lineH+8}" font-size="10" fill="var(--ink,#efe6d2)">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</text>`;
+    });
+  }
+  svg += `</svg>`;
+  return svg;
+}
+
+/* ============================================================
+   11b. Inspector UI — a third top-level view (alongside the shelf and
+   the player) that tabs between a decoded cart's sprites/tiles/palette/
+   map/entities/hooks. Works on any cart URL, not just the four on the
+   shelf: it re-decodes and rebuilds a real (never-stepped) World purely
+   to reuse its existing buildBitmap/mapCanvas output instead of
+   duplicating that rendering logic a second time for the inspector.
+   ============================================================ */
+const INSPECT_TABS = ['Overview','Palette','Sprites','Tiles','Map','Entities','Hooks'];
+const MAP_GEN_NAMES = {0:'none', 1:'track (turtle-grammar)', 2:'cave (cellular automata)', 3:'platform (heightmap turtle-grammar)'};
+const TOUCH_TEMPLATE_NAMES = {0:'none', 1:'single button', 2:'steer + action', 3:'d-pad + action', 4:'d-pad only'};
+let inspectWorld = null, inspectCartInfo = null, inspectTab = 'Overview', inspectHookTab = 'on_init';
+
+// Accepts a full pasted URL, a bare fragment, or a raw payload string —
+// takes whatever comes after the last '#' if there is one, else the
+// whole trimmed string.
+function extractPayloadFromInput(raw){
+  let s = raw.trim();
+  const hashIdx = s.lastIndexOf('#');
+  if(hashIdx >= 0) s = s.slice(hashIdx+1);
+  if(s.startsWith('inspect:')) s = s.slice('inspect:'.length);
+  return s;
+}
+
+function startInspect(payload){
+  let cart, bytes;
+  try{
+    bytes = b64urlDecode(payload);
+    cart = decodeCart(bytes);
+  } catch(err){
+    document.getElementById('inspectError').textContent = 'Could not decode this as an Urlcade cart: ' + err.message;
+    return false;
+  }
+  document.getElementById('inspectError').textContent = '';
+  if(inspectWorld) disposeGLTextures(inspectWorld);
+  try{
+    inspectWorld = new World(cart);
+  } catch(err){
+    document.getElementById('inspectError').textContent = 'Decoded, but the map/entity data could not be built: ' + err.message;
+    return false;
+  }
+  inspectCartInfo = {cart, payload, byteLen: bytes.length, charLen: payload.length};
+  inspectTab = 'Overview';
+  const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
+  inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
+  document.getElementById('menu').classList.remove('active');
+  document.getElementById('gameWrap').classList.remove('active');
+  const iw = document.getElementById('inspectWrap');
+  iw.classList.remove('active'); void iw.offsetWidth; iw.classList.add('active');
+  document.getElementById('inspectTitle').textContent =
+    `cart_type ${cart.cartType} · ${bytes.length}B raw / ${payload.length} chars`;
+  renderInspectTabs();
+  renderInspectBody();
+  return true;
+}
+
+function renderInspectTabs(){
+  const wrap = document.getElementById('inspectTabs');
+  wrap.innerHTML = INSPECT_TABS.map(t =>
+    `<button class="inspect-tab${t===inspectTab?' active':''}" data-tab="${t}">${t}</button>`).join('');
+  wrap.querySelectorAll('.inspect-tab').forEach(btn => btn.addEventListener('click', () => {
+    inspectTab = btn.dataset.tab;
+    renderInspectTabs();
+    renderInspectBody();
+  }));
+}
+
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+function table(rows){
+  return '<table class="inspect-table">' + rows.map(r => '<tr>' + r.map((c,i) =>
+    `<${i===0?'th':'td'}>${c}</${i===0?'th':'td'}>`).join('') + '</tr>').join('') + '</table>';
+}
+
+function renderInspectOverview(cart){
+  let html = '';
+  html += '<div class="inspect-section-title">Header</div>' + table([
+    ['field','value'],
+    ['format version', cart.formatVersion],
+    ['cart type', cart.cartType + ' <span style="color:var(--ink-dim)">(advisory label only, never a runtime dispatch key)</span>'],
+    ['screen', `${cart.screenW} × ${cart.screenH}`],
+    ['palette mode', cart.paletteMode + (cart.paletteMode===0 ? ' (curated bank)' : ' (procedural harmony)')],
+    ['palette params', esc(cart.paletteParams.join(', '))],
+    ['rng seed', cart.rngSeed],
+    ['mode flags', '0b' + cart.modeFlags.toString(2).padStart(8,'0')],
+    ['map generator', cart.mapGenerator + ' — ' + (MAP_GEN_NAMES[cart.mapGenerator] || 'unknown')],
+  ]);
+  html += '<div class="inspect-section-title">Camera</div>' + table([
+    ['field','value'],
+    ['follow global', cart.camera.followGlobal===255 ? '255 (none/static)' : cart.camera.followGlobal],
+    ['clamp x', `${cart.camera.clampMinX} – ${cart.camera.clampMaxX}`],
+    ['clamp y', `${cart.camera.clampMinY} – ${cart.camera.clampMaxY}`],
+  ]);
+  html += '<div class="inspect-section-title">Input</div>' + table([
+    ['field','value'],
+    ['active buttons', '0b' + cart.inputActiveButtons.toString(2).padStart(5,'0') + ' — ' +
+      (Object.entries(cart.inputButtonLabels).map(([bit,label])=>`${bit}=${esc(label)}`).join(', ') || '(none)')],
+    ['touch template', cart.inputTouchTemplate + ' — ' + (TOUCH_TEMPLATE_NAMES[cart.inputTouchTemplate]||'unknown')],
+  ]);
+  if(Object.keys(cart.tileSurfaceOverrides).length){
+    html += '<div class="inspect-section-title">Tile surface overrides</div>' + table([
+      ['tile id','surface id'],
+      ...Object.entries(cart.tileSurfaceOverrides),
+    ]);
+  }
+  if(cart.hudSpec.length){
+    html += '<div class="inspect-section-title">HUD spec</div>' + table([
+      ['kind','source','label'],
+      ...cart.hudSpec.map(h => [
+        ['numeric','flag','numeric-if-nonzero'][h.kind] ?? h.kind,
+        (h.sourceKind===0?'global ':'entity prop via global ') + h.srcA + (h.sourceKind===1?(' prop '+h.srcB):''),
+        esc(h.label),
+      ]),
+    ]);
+  }
+  html += '<div class="inspect-section-title">Constants</div>' + table([
+    ['#','value'],
+    ...cart.constants.map((v,i) => [i, Number.isInteger(v) ? v : v.toFixed(4)]),
+  ]);
+  return html;
+}
+
+function renderInspectPalette(cart){
+  const pal = generatePalette(cart);
+  return '<div class="inspect-grid">' + pal.map((c,i) => `
+    <div class="inspect-tile">
+      <div style="aspect-ratio:1;border-radius:3px;border:1px solid var(--rule);background:${c}"></div>
+      <p>${i}<br>${esc(c)}</p>
+    </div>`).join('') + '</div>';
+}
+
+function renderInspectSprites(body, cart){
+  let html = '<div class="inspect-grid" id="spriteGrid"></div>';
+  cart.sprites.forEach((s,i) => {
+    html += `<div class="inspect-section-title">Sprite ${i} — ${s.w}×${s.h}, ${s.kind===1?'shape list':'raw pixels'}</div>`;
+    html += `<div id="spriteSlot${i}" style="max-width:160px;margin-bottom:10px;"></div>`;
+    if(s.kind === 1){
+      html += table([
+        ['#','type','params','color'],
+        ...s.shapes.map((sh,k) => [k, sh.type===SHAPE_ELLIPSE?'ellipse':'rect',
+          sh.type===SHAPE_ELLIPSE ? `cx=${sh.cx} cy=${sh.cy} rx=${sh.rx} ry=${sh.ry}` : `x=${sh.x} y=${sh.y} w=${sh.w} h=${sh.h}`,
+          sh.color]),
+      ]);
+    }
+  });
+  body.innerHTML = html;
+  cart.sprites.forEach((s,i) => {
+    const slot = document.getElementById('spriteSlot'+i);
+    const c = inspectWorld.spriteCanvases[i];
+    c.style.width = '100%'; c.style.imageRendering = 'pixelated';
+    c.style.border = '1px solid var(--rule)'; c.style.background = 'var(--bg-card)';
+    slot.appendChild(c);
+  });
+}
+
+function renderInspectTiles(body, cart){
+  let html = '<div class="inspect-grid" id="tileGrid"></div>';
+  body.innerHTML = html;
+  const grid = document.getElementById('tileGrid');
+  cart.tiles.forEach((t,i) => {
+    const tile = document.createElement('div');
+    tile.className = 'inspect-tile';
+    const c = inspectWorld.tileCanvases[i];
+    c.style.width = '100%'; c.style.imageRendering = 'pixelated';
+    tile.appendChild(c);
+    const p = document.createElement('p');
+    p.textContent = `tile ${i} — ${t.w}×${t.h}`;
+    tile.appendChild(p);
+    grid.appendChild(tile);
+  });
+}
+
+function renderInspectMap(cart){
+  if(cart.mapGenerator === 0 || !inspectWorld.map) return '<p class="inspect-empty">No map generator (mapGenerator = 0) — backdrop only.</p>';
+  let html = '<div class="inspect-section-title">Generator params</div>';
+  if(cart.mapGenerator === 1){
+    const t = cart.track;
+    html += table([['field','value'], ['grid', `${t.gridW} × ${t.gridH}`], ['track width', t.trackWidth],
+      ['seg length', t.segLen], ['start', `${t.startGX},${t.startGY} dir ${t.startDir}`], ['tokens', t.tokens.length]]);
+  } else if(cart.mapGenerator === 2){
+    const c = cart.cave;
+    html += table([['field','value'], ['grid', `${c.gridW} × ${c.gridH}`], ['fill prob', c.fillProb],
+      ['iterations', c.iterations], ['wall threshold', c.wallThreshold], ['gold count', c.goldCount]]);
+  } else if(cart.mapGenerator === 3){
+    const p = cart.platform;
+    html += table([['field','value'], ['grid height', p.gridH], ['start/min/max groundY', `${p.startGroundY} / ${p.minGroundY} / ${p.maxGroundY}`],
+      ['tokens', p.tokens.length]]);
+  }
+  html += '<div class="inspect-section-title">Rendered map</div><div class="cfg-scroll"><div id="mapSlot"></div></div>';
+  setTimeout(() => {
+    const slot = document.getElementById('mapSlot');
+    if(!slot) return;
+    const mc = inspectWorld.mapCanvas;
+    mc.style.imageRendering = 'pixelated';
+    mc.style.maxWidth = 'none';
+    slot.appendChild(mc);
+  }, 0);
+  return html;
+}
+
+function renderInspectEntities(cart){
+  return table([
+    ['#','renderKind','assetIndex','rotate','collisionW','collisionH','extFields'],
+    ...cart.entityTypes.map((t,i) => [i, t.renderKind, t.assetIndex, t.rotateFlag, t.collisionW, t.collisionH, t.extFieldCount]),
+  ]);
+}
+
+function renderInspectHooks(body, cart){
+  const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
+  if(!liveHooks.includes(inspectHookTab)) inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
+  let html = '<div class="hook-tabs">' + HOOK_NAMES.map(n => {
+    const len = (cart.hooks[n]||[]).length;
+    return `<button class="hook-tab${n===inspectHookTab?' active':''}${len===0?' empty':''}" data-hook="${n}">${n} (${len}B)</button>`;
+  }).join('') + '</div>';
+  const bc = cart.hooks[inspectHookTab] || new Uint8Array(0);
+  if(bc.length === 0){
+    html += '<p class="inspect-empty">(empty hook)</p>';
+  } else {
+    html += '<div class="inspect-section-title">Disassembly</div>';
+    html += `<pre class="disasm">${esc(formatDisassembly(bc))}</pre>`;
+    html += '<div class="inspect-section-title">Control-flow graph</div>';
+    html += `<div class="cfg-scroll">${renderCFGSvg(bc)}</div>`;
+  }
+  body.innerHTML = html;
+  body.querySelectorAll('.hook-tab').forEach(btn => btn.addEventListener('click', () => {
+    inspectHookTab = btn.dataset.hook;
+    renderInspectHooks(body, cart);
+  }));
+}
+
+function renderInspectBody(){
+  const body = document.getElementById('inspectBody');
+  const {cart} = inspectCartInfo;
+  if(inspectTab === 'Overview') body.innerHTML = renderInspectOverview(cart);
+  else if(inspectTab === 'Palette') body.innerHTML = renderInspectPalette(cart);
+  else if(inspectTab === 'Sprites') renderInspectSprites(body, cart);
+  else if(inspectTab === 'Tiles') renderInspectTiles(body, cart);
+  else if(inspectTab === 'Map') body.innerHTML = renderInspectMap(cart);
+  else if(inspectTab === 'Entities') body.innerHTML = renderInspectEntities(cart);
+  else if(inspectTab === 'Hooks') renderInspectHooks(body, cart);
+}
+
+/* ============================================================
+   12. UI wiring — menu, game loop, HUD, input
    ============================================================ */
 const canvas = document.getElementById('screen');
 
 /* ============================================================
-   11a. GPU renderer (WebGL) — crisp pixel art, including under
+   12a. GPU renderer (WebGL) — crisp pixel art, including under
    rotation. Canvas2D's ctx.rotate() always anti-aliases a rotated
    sprite's edges (the car); a fragment shader can sample its texture
    with NEAREST filtering at any angle, so pixel art stays crisp no
@@ -3181,6 +3667,7 @@ function renderMenu(){
         <p class="eyebrow"><b>${c.genre}</b></p>
         <h2>${c.title}</h2>
         <a class="playbtn" href="#${c.payload}">&#9654; PLAY</a>
+        <a class="inspectbtn" href="#inspect:${c.payload}">INSPECT</a>
         <dl class="spec">
           <dt>raw size</dt><dd>${c.byteLen} bytes</dd>
           <dt>fragment</dt><dd>${c.charLen} chars, uncompressed</dd>
@@ -3232,6 +3719,8 @@ function backToMenu(){
   currentKey = null;
   touchBits = new Set();
   document.getElementById('gameWrap').classList.remove('active');
+  if(inspectWorld){ disposeGLTextures(inspectWorld); inspectWorld = null; inspectCartInfo = null; }
+  document.getElementById('inspectWrap').classList.remove('active');
   const m = document.getElementById('menu');
   m.classList.remove('active'); void m.offsetWidth; m.classList.add('active');
   history.replaceState(null, '', location.pathname + location.search);
@@ -3460,10 +3949,22 @@ window.addEventListener('keydown', e=>{
 });
 window.addEventListener('keyup', e=>{ keysDown.delete(e.key); });
 document.getElementById('backBtn').addEventListener('click', backToMenu);
+document.getElementById('inspectBackBtn').addEventListener('click', backToMenu);
+document.getElementById('inspectForm').addEventListener('submit', e => {
+  e.preventDefault();
+  const payload = extractPayloadFromInput(document.getElementById('inspectInput').value);
+  if(!payload) return;
+  location.hash = 'inspect:' + payload;
+});
 window.addEventListener('hashchange', boot);
 
 function boot(){
   const hash = location.hash.replace(/^#/, '');
+  if(hash.startsWith('inspect:')){
+    if(startInspect(hash.slice('inspect:'.length))) return;
+    backToMenu();
+    return;
+  }
   if(hash){
     const key = findCartByHash(hash);
     if(key){ startGame(key); return; }
@@ -3475,5 +3976,7 @@ renderMenu();
 boot();
 requestAnimationFrame(loop);
 
-window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world, isUsingGL:()=>USE_GL };
+window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world, isUsingGL:()=>USE_GL,
+  disassembleHook, buildCFG, formatDisassembly, renderCFGSvg, startInspect, extractPayloadFromInput,
+  getInspectWorld:()=>inspectWorld, getInspectCartInfo:()=>inspectCartInfo };
 </script>
