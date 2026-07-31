@@ -3,16 +3,23 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>The Urlcade — Spec &amp; Design Docs</title>
+<title>The Urlcade — Game Authoring API</title>
 <!--
-  Deliberately plain HTML linking to raw .md files rather than a rendered
-  docs site: the primary audience for "read the spec" is often an agent
-  fetching a URL, not a browser — raw markdown at a stable path is already
-  maximally readable to that audience with zero rendering step in the way.
-  This page exists for the secondary, human-browsing case: a short,
-  progressively-discoverable list of links, styled to match the runtime's
-  own look (same palette variables as urlcade.html) so the two feel like
-  one site instead of a docs tool bolted on afterward.
+  Deliberately plain HTML linking to raw .md/.js files rather than a
+  rendered docs site: the primary audience for "how do I build a cart"
+  is often an agent fetching a URL, not a browser — raw text at a
+  stable path is already maximally readable to that audience with zero
+  rendering step in the way. This page exists for the secondary,
+  human-browsing case: a short list of links, styled to match the
+  runtime's own look (same palette variables as urlcade.html) so the
+  two feel like one site instead of a docs tool bolted on afterward.
+
+  Scoped deliberately to authoring: DESIGN.md, v0/README.md, and the
+  early worked examples (project history — how this runtime got built,
+  bugs found along the way, session-by-session decisions) live in the
+  repo for maintainers but aren't linked from here. Someone trying to
+  build a game doesn't need that history, and publishing it alongside
+  the real API made it easy to mistake for the current spec.
 -->
 <style>
   :root{
@@ -47,17 +54,22 @@
 </head>
 <body>
   <a class="back" href="../">&larr; play the carts</a>
-  <h1>The Urlcade <span style="color:var(--ink-dim)">// spec &amp; design docs</span></h1>
-  <p class="lede">Every link below is raw <code>.md</code> — readable directly by a
-  browser, a human, or an agent fetching the URL, with nothing rendered
-  in the way. Start with <a href="../llms.txt">llms.txt</a> for a
-  machine-oriented index of the same list.</p>
+  <h1>The Urlcade <span style="color:var(--ink-dim)">// game authoring API</span></h1>
+  <p class="lede">Build a cart as a plain JS object, encode it, get a URL —
+  that URL <em>is</em> the game. Every link below is raw text, readable
+  directly by a browser, a human, or an agent fetching the URL, with
+  nothing rendered in the way. Start with
+  <a href="../llms.txt">llms.txt</a> for a machine-oriented index of the
+  same list.</p>
 
   <section>
-    <h2>Ground truth &mdash; read this first</h2>
+    <h2>Build a cart</h2>
     <ul>
+      <li><a href="AUTHORING.md">AUTHORING.md</a>
+        <p>How to build a cart: the object shape, every field's meaning,
+        the opcode table, the hook lifecycle, the map generators. Start here.</p></li>
       <li><a href="kernel.js">kernel.js</a>
-        <p>The exact <code>encodeCart</code>/<code>decodeCart</code>/opcode table/
+        <p>The actual <code>encodeCart</code>/<code>decodeCart</code>/opcode table/
         assembler/VM/compression, extracted verbatim from the runtime into one
         dependency-free file. Runs standalone under Node or any JS host &mdash;
         no browser, no network, no build step.</p></li>
@@ -69,31 +81,16 @@
   </section>
 
   <section>
-    <h2>Spec &amp; reference runtime</h2>
+    <h2>Play it / inspect it</h2>
     <ul>
-      <li><a href="DESIGN.md">DESIGN.md</a>
-        <p>The design history: binary cart layout, the stack-machine VM and
-        opcode table, the composable generators (palette/map/HUD/camera),
-        and open design questions, in the order they were built. Narrative,
-        not guaranteed current &mdash; see kernel.js above for the literal format.</p></li>
-      <li><a href="v0-README.md">v0-README.md</a>
-        <p>What the V0 reference runtime actually built against the spec —
-        real bugs found and fixed along the way, and deliberate scope cuts.</p></li>
+      <li><a href="../">Play</a>
+        <p>The live runtime &mdash; five playable cartridges, and an INSPECT
+        button on each that decodes and visualizes any cart (palette, sprites,
+        tiles, map, entities, disassembled hooks), including ones you paste in
+        yourself.</p></li>
     </ul>
   </section>
 
-  <section>
-    <h2>Worked examples</h2>
-    <ul>
-      <li><a href="examples/flappy-bird.md">examples/flappy-bird.md</a>
-        <p>Dogfooding the format against a Flappy Bird clone.</p></li>
-      <li><a href="examples/race-car.md">examples/race-car.md</a>
-        <p>Dogfooding the format against a top-down racer.</p></li>
-      <li><a href="examples/three-more-carts.md">examples/three-more-carts.md</a>
-        <p>Design-level sketches for a roguelike, a platformer, and an arena shooter.</p></li>
-    </ul>
-  </section>
-
-  <footer>Part of <a href="../">The Urlcade</a> — a URL-encoded virtual console.</footer>
+  <footer>Part of <a href="../">The Urlcade</a> — a self-hosted game authoring API.</footer>
 </body>
 </html>

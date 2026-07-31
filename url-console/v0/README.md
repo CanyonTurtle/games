@@ -485,6 +485,22 @@ and it's exercised on every play, not just asserted.
   file staying a single self-contained page is itself a deliberate
   property (§1) that an import would break.
 
+- **The public site is pruned down to an authoring API** (`DESIGN.md`
+  §27), on direct instruction: DESIGN.md, this file, and the early
+  worked examples no longer publish to the Pages site — they stay in
+  the repo, unchanged, as project history for whoever maintains this
+  codebase, not something a newcomer building a game needs to read.
+  Replaced by `v0/AUTHORING.md`, a new current-only reference written
+  fresh from the actual runtime rather than adapted from this file's
+  prose — writing it precisely found two things nobody had written
+  down anywhere before: track-generator tokens carry no per-token width
+  operand (platform tokens do — an easy mix-up), and `renderKind: 1`
+  entities are positioned by their top-left corner and ignore
+  `collisionW`/`collisionH` entirely, unlike every other entity.
+  `llms.txt`/`spec/index.html`/the runtime's own menu page all lead
+  with "build a cart" (AUTHORING.md → kernel.js → fixtures.md) instead
+  of "spec & design docs."
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

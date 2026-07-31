@@ -540,7 +540,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §27 below:
+New open questions this raised, folded into §28 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1645,7 +1645,39 @@ purpose — see §1), so nothing *prevents* the two from drifting apart
 except remembering to update both and re-running the sync check. That's
 a real, open cost of this fix, not a solved problem — see below.
 
-## 27. Open questions
+## 27. Pruning the public site down to an authoring API
+
+Direct instruction: pare down the public docs that aren't valuable for
+authoring games (this file named explicitly as an example), and refocus
+the published site around being a self-hosted game-authoring API rather
+than a history of the project.
+
+This file, `v0/README.md`, and the early worked examples
+(`examples/*.md`) are no longer published to the Pages site
+(`.github/workflows/pages.yml` stopped copying them into `_site`) —
+they stay in the repo, unchanged, as exactly what they've always been:
+a decision log for whoever maintains this codebase, not something a
+newcomer trying to build a game needs to read. §26 had already made the
+call that this file *can* lag the runtime and pointed at `kernel.js`
+instead; this goes a step further and stops presenting the narrative
+alongside the API at all, rather than just discouraging trusting it.
+
+What replaced it: **`v0/AUTHORING.md`** — a new, current-only reference
+(cart object shape, every field's meaning, the opcode table grouped by
+purpose, the hook lifecycle, all three map generators' token tables,
+camera/aim-line/HUD field semantics) written fresh by reading the
+actual runtime, not adapted from this file's prose. Writing it found
+two things worth fixing that had never been written down precisely
+anywhere, including in this design log: track-generator tokens carry
+*no* per-token width operand (unlike platform tokens, which do — an
+easy mix-up), and `renderKind: 1` (tile-column) entities are
+positioned by their top-left corner and ignore `collisionW`/`collisionH`
+entirely, unlike every other entity, which is centered. `llms.txt` and
+`spec/index.html` now lead with `AUTHORING.md` → `kernel.js` →
+`fixtures.md`, in that order, as "build a cart"; the runtime's own menu
+page links to it as "game authoring API" instead of "spec & design docs."
+
+## 28. Open questions
 
 **Format & encoding**
 - §26's `kernel.js` is a copy of part of `urlcade.html`, not an import —
