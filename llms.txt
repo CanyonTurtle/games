@@ -1,0 +1,21 @@
+# The Urlcade
+
+> A URL-encoded virtual console: every game cartridge is fully described by
+> the URL fragment on its link, decoded and run by a single self-contained
+> HTML runtime. No server, no build step, no install — copy a link, the
+> recipient gets the exact game.
+
+## Spec & reference runtime
+
+- [DESIGN.md](https://canyonturtle.github.io/games/spec/DESIGN.md): The full format spec — binary cart layout, the stack-machine VM and opcode table, and the composable generators (palette/map/HUD/camera) shared across cart types.
+- [v0-README.md](https://canyonturtle.github.io/games/spec/v0-README.md): What the V0 reference runtime actually built against the spec, including real bugs found and fixed and deliberate V0 scope cuts.
+
+## Worked examples
+
+- [examples/flappy-bird.md](https://canyonturtle.github.io/games/spec/examples/flappy-bird.md): Dogfooding the format against a Flappy Bird clone.
+- [examples/race-car.md](https://canyonturtle.github.io/games/spec/examples/race-car.md): Dogfooding the format against a top-down racer.
+- [examples/three-more-carts.md](https://canyonturtle.github.io/games/spec/examples/three-more-carts.md): Design-level sketches for a roguelike, a platformer, and an arena shooter.
+
+## Try it
+
+- [Play](https://canyonturtle.github.io/games/): The live runtime with four playable cartridges (Flappy Bird, a racer, a roguelike, a platformer).

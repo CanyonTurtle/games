@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §19 below:
+New open questions this raised, folded into §20 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1049,7 +1049,86 @@ with the level 2× longer and enemies more than 2× as numerous, a single
 touch anywhere ending the run stopped reading as "hard" and started
 reading as "unfair." Raised to `3` to match the larger hazard budget.
 
-## 19. Open questions
+## 19. Productionizing: a discoverable spec, and a cart Inspector
+
+Two changes aimed at "this is a real, shareable thing now," not new format
+capability:
+
+**The spec became a set of discoverable links, not just files in the
+repo.** Once the runtime was live on GitHub Pages (see the V0 README's
+deployment notes), `DESIGN.md`, the V0 findings doc, and the worked
+examples were published alongside it under `/spec/`, plus an `llms.txt`
+at the site root — a small, increasingly-common convention for exactly
+this: a short, structured index of a site's docs meant to be fetched by
+an agent, not rendered by a browser. Both are raw markdown at stable
+paths rather than rendered HTML on purpose: the primary audience for
+"read the spec" is often something fetching a URL programmatically, and
+raw markdown already serves that need with no rendering step in the way.
+A plain `spec/index.html` (styled to match the runtime, not a separate
+docs-tool look) covers the human-browsing case, and the shelf page links
+to it.
+
+**A Cart Inspector — decompiling a cart back into something readable,
+not just playable.** The binary format was always designed to be fully
+reconstructible from its bytes (every `decodeCart` is exercised on every
+`registerCart` call, at load), but "reconstructible" and "inspectable by
+a person" aren't the same claim, and nothing on the site had tested the
+second one. The Inspector is a third top-level view (alongside the shelf
+and the player) that decodes any cart — pasted as a full URL, a bare
+fragment, or just the payload, not only the four shipped ones — and tabs
+between:
+
+- **Overview** — header fields, camera, input layout, tile-surface
+  overrides, HUD spec, and the raw constants array.
+- **Palette** — all 16 swatches, generated the same way the runtime
+  itself would.
+- **Sprites** — each sprite rendered as an image, plus (for shape-list
+  sprites) the actual ellipse/rect primitive list as a table.
+- **Tiles**, **Map** (generator params + the rendered tilemap), and
+  **Entities** (the entity type table).
+- **Hooks** — bytecode length, a labeled disassembly listing, and a
+  control-flow-graph flowchart, per hook.
+
+The disassembler and CFG extractor are the two pieces of new machinery,
+and both are deliberately generic — they operate on raw bytecode plus the
+shared `OPS` table, with zero dependence on any cart's own symbol names
+(`FLAPPY_SYM`/`RACER_SYM`/etc. are authoring-time-only maps that never
+round-trip through the binary format). That's what makes "paste any cart
+URL" possible rather than "inspect one of these four hardcoded carts":
+the Inspector knows nothing about a cart it's shown that isn't already
+recoverable from the bytes themselves.
+
+`disassembleHook` re-runs the VM's own instruction-decode loop (same
+`u8`/`i16`/`u16` readers as `runHook`) without executing anything, just
+recording each instruction. `buildCFG` splits that stream into basic
+blocks — leaders are the entry point, every jump target, and whatever
+instruction follows a branch or `HALT` — and reads off edges directly
+from each block's last instruction (`JMP` → one edge, `JZ`/`JNZ` → a
+taken edge and a fallthrough edge, `HALT` → none, anything else → an
+implicit fallthrough). The flat disassembly listing and the flowchart
+share this same block split, so `B7:` in one is literally the same box
+in the other — one source of truth for "where the labels are," not two
+label schemes that could drift apart.
+
+The flowchart itself is hand-rolled SVG, not a pulled-in diagramming
+library — consistent with this runtime never taking on a dependency for
+its own gameplay code (procedural sprites over an image library, a
+hand-written VM over an existing bytecode engine, and so on); an
+inspector *of* that code shouldn't be the first exception. It also
+sidesteps needing a real graph-layout algorithm: this VM's hooks are
+short, mostly-linear programs with occasional branches and small loops,
+not sprawling call graphs, so a simple vertical stack in address order —
+short straight lines between adjacent blocks, bezier curves bowing right
+for forward branches and left for loop-backs — reads as cleanly as a
+proper layered-DAG layout would for these program sizes, for a fraction
+of the implementation cost. Verified directly against a hand-traced hook
+(the roguelike's `on_tick` retry loop, §18.3): the disassembler correctly
+reconstructed every instruction including the exact backward `JNZ` that
+makes it a loop, and the CFG drew that edge bowing left into the correct
+earlier block, both confirmed by rendering it and reading the picture
+back, not just checking edge counts.
+
+## 20. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat

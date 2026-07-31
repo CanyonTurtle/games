@@ -1,15 +1,18 @@
 name: Deploy Pages
 
 # Publishes url-console/v0/urlcade.html (a single self-contained file — no
-# build step, no dependencies) as the site root. Every "cart" for this game
-# lives in the URL fragment, so serving the one runtime file is the entire
-# deployment.
+# build step, no dependencies) as the site root, plus the design doc/spec/
+# examples as plain, stably-pathed markdown under /spec/ (agent-fetchable
+# as-is, no rendering required) and a spec/index.html for human browsing.
+# See spec/index.html's own comment for why raw .md is the primary format.
 
 on:
   push:
     branches: [main]
     paths:
-      - 'url-console/v0/urlcade.html'
+      - 'url-console/**'
+      - 'spec/index.html'
+      - 'llms.txt'
       - '.github/workflows/pages.yml'
   workflow_dispatch: {}
 
@@ -32,8 +35,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: Prepare site
         run: |
-          mkdir -p _site
+          set -e
+          mkdir -p _site/spec/examples
           cp url-console/v0/urlcade.html _site/index.html
+          cp llms.txt _site/llms.txt
+          cp spec/index.html _site/spec/index.html
+          cp url-console/DESIGN.md _site/spec/DESIGN.md
+          cp url-console/v0/README.md _site/spec/v0-README.md
+          cp url-console/examples/*.md _site/spec/examples/
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
