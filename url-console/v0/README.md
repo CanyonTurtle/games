@@ -444,6 +444,27 @@ and it's exercised on every play, not just asserted.
   escaping the map, and a corrected adaptive-search playthrough clears
   all 4 targets in 2 of 16 shots — real margin.
 
+- **Real, shipped compression** (`DESIGN.md` §25) — §20 only measured
+  the idea against a Node script; this pass ships it, in the browser,
+  for real: `CompressionStream`/`DecompressionStream` with
+  `'deflate-raw'`, no bundled library, tagged (`z.` compressed / `r.`
+  raw, chosen per-cart by whichever is actually shorter) so every
+  untagged link this runtime ever emitted keeps decoding unchanged.
+  Cuts every current cart's fragment by 39-47%, matching §20's earlier
+  "no dictionary" numbers almost exactly on an independent, in-browser
+  measurement months later. Concretely: 3 of 5 carts drop a full
+  `DESIGN.md` §2 size tier, and Castle Crusher's *uncompressed*
+  fragment (2,688 chars) didn't even fit the documented "full" ceiling
+  (≤2000) at all — compression is what gets it under that ceiling, not
+  a bonus on top of an already-working link. Required threading `async`
+  through cart registration and both play/inspect entry points, since
+  browsers expose no synchronous compression primitive — confined to
+  the URL-transport layer; the binary cart format itself is untouched.
+  A real preset dictionary (§3's fuller idea, worth another 5-10 points
+  per §20) is still unshipped: the standard Compression Streams API has
+  no dictionary hook, so building it means hand-rolling a DEFLATE
+  encoder — real scope for later, not a gap in this pass.
+
 These are scope cuts to get something working, not spec revisions.
 Each one is a reasonable next step, not a design admission of defeat:
 

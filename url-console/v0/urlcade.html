@@ -510,6 +510,61 @@ function b64urlDecode(str){
   return bytes;
 }
 
+// Compression (DESIGN.md §3): raw DEFLATE via the browser's native
+// CompressionStream/DecompressionStream — no bundled library, matching
+// this runtime's "no dependencies" rule for its own gameplay code. §3's
+// full vision is a *preset dictionary* trained across carts (measured
+// in §20 as worth another 5-10 points over generic compression alone),
+// but the standard Compression Streams API has no dictionary hook —
+// that would mean hand-rolling a DEFLATE encoder, real scope for a
+// follow-up, not this pass. 'deflate-raw' (no zlib/gzip header or
+// checksum, just the DEFLATE stream itself) is the leanest of the three
+// formats the API offers, since every byte here travels in a URL.
+const HAS_COMPRESSION = typeof CompressionStream !== 'undefined' && typeof DecompressionStream !== 'undefined';
+async function runThroughStream(streamCtor, format, bytes){
+  const stream = new streamCtor(format);
+  const writer = stream.writable.getWriter();
+  writer.write(bytes);
+  writer.close();
+  const chunks = [];
+  let total = 0;
+  const reader = stream.readable.getReader();
+  for(;;){
+    const {done, value} = await reader.read();
+    if(done) break;
+    chunks.push(value);
+    total += value.length;
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for(const c of chunks){ out.set(c, off); off += c.length; }
+  return out;
+}
+async function deflateRawCompress(bytes){ return runThroughStream(CompressionStream, 'deflate-raw', bytes); }
+async function deflateRawDecompress(bytes){ return runThroughStream(DecompressionStream, 'deflate-raw', bytes); }
+
+// URL-fragment envelope: a short tag distinguishes a compressed payload
+// ("z.") from a raw one ("r."), matching DESIGN.md §2/§3's u1/u1r split
+// without an outer format-version tag (format_version already lives in
+// the binary header itself, §4). A bare payload with *no* recognized
+// tag is treated as raw, for zero-disruption compatibility with every
+// link this runtime ever emitted before compression existed. Compressed
+// is only ever chosen when it's actually smaller — DEFLATE's fixed
+// per-stream overhead can lose to raw base64 on the very smallest carts
+// — so this never regresses a fragment's length, only ever shrinks it
+// or leaves it alone.
+async function encodePayload(bytes){
+  const raw = 'r.' + b64urlEncode(bytes);
+  if(!HAS_COMPRESSION) return raw;
+  const compressed = 'z.' + b64urlEncode(await deflateRawCompress(bytes));
+  return compressed.length < raw.length ? compressed : raw;
+}
+async function decodePayloadToBytes(str){
+  if(str.startsWith('z.')) return deflateRawDecompress(b64urlDecode(str.slice(2)));
+  if(str.startsWith('r.')) return b64urlDecode(str.slice(2));
+  return b64urlDecode(str); // untagged: legacy raw fragment
+}
+
 class ByteWriter {
   constructor(){ this.bytes = []; }
   u8(v){ this.bytes.push(v & 0xFF); }
@@ -4002,25 +4057,29 @@ function describeControls(cart){
   if(cart.inputActiveButtons & 16) parts.push('space = ' + (cart.inputButtonLabels[16] || 'action'));
   return parts.join(', ');
 }
-function registerCart(key, title, genre, accentIdx, builder){
+async function registerCart(key, title, genre, accentIdx, builder){
   const authored = builder();
   const encoded = encodeCart(authored);
-  const payload = b64urlEncode(encoded);
+  const rawPayload = 'r.' + b64urlEncode(encoded); // for the menu's "savings" display, see renderMenu
+  const payload = await encodePayload(encoded);
   const decoded = decodeCart(encoded);
   const palette = generatePalette(decoded);
   const accent = palette[accentIdx] ? cssColorToHex(palette[accentIdx]) : '#e0a030';
   const controlsText = describeControls(decoded);
-  CARTS[key] = { title, controlsText, genre, accent, payload, byteLen: encoded.length, charLen: payload.length, decoded };
+  CARTS[key] = { title, controlsText, genre, accent, payload, byteLen: encoded.length, charLen: payload.length,
+    rawCharLen: rawPayload.length, compressed: payload.startsWith('z.'), decoded };
 }
 function cssColorToHex(col){
   const [r,g,b] = cssColorToRGB(col);
   return '#' + [r,g,b].map(x=>x.toString(16).padStart(2,'0')).join('');
 }
-registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
-registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
-registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
-registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
-registerCart('castle', 'Castle Crusher', 'cart_type 5 · destruction/arcade', 10, buildCastleCrusherCart);
+async function registerAllCarts(){
+  await registerCart('flappy', 'Flappy Bird', 'cart_type 63 · generic/raw', 2, buildFlappyCart);
+  await registerCart('racer', 'Race Car', 'cart_type 2 · racer/golf', 13, buildRacerCart);
+  await registerCart('roguelike', 'Cave Crawler', 'cart_type 3 · roguelike/dungeon', 12, buildRoguelikeCart);
+  await registerCart('platformer', 'Run & Jump', 'cart_type 4 · platformer', 11, buildPlatformerCart);
+  await registerCart('castle', 'Castle Crusher', 'cart_type 5 · destruction/arcade', 10, buildCastleCrusherCart);
+}
 
 /* ============================================================
    11. Cart Inspector — a generic disassembler (reverses assemble() back
@@ -4209,10 +4268,10 @@ function extractPayloadFromInput(raw){
   return s;
 }
 
-function startInspect(payload){
+async function startInspect(payload){
   let cart, bytes;
   try{
-    bytes = b64urlDecode(payload);
+    bytes = await decodePayloadToBytes(payload);
     cart = decodeCart(bytes);
   } catch(err){
     document.getElementById('inspectError').textContent = 'Could not decode this as an Urlcade cart: ' + err.message;
@@ -4692,7 +4751,9 @@ function renderMenu(){
         <a class="inspectbtn" href="#inspect:${c.payload}">INSPECT</a>
         <dl class="spec">
           <dt>raw size</dt><dd>${c.byteLen} bytes</dd>
-          <dt>fragment</dt><dd>${c.charLen} chars, uncompressed</dd>
+          <dt>fragment</dt><dd>${c.charLen} chars${c.compressed
+            ? ` (was ${c.rawCharLen} uncompressed, -${Math.round((1-c.charLen/c.rawCharLen)*100)}%)`
+            : ', uncompressed (compression didn’t win on a cart this small)'}</dd>
         </dl>
         <details class="payload">
           <summary>fragment payload</summary>
@@ -4712,7 +4773,7 @@ function findCartByHash(hash){
   return null;
 }
 
-function startGame(key){
+async function startGame(key){
   currentKey = key;
   const cartInfo = CARTS[key];
   document.getElementById('menu').classList.remove('active');
@@ -4725,9 +4786,11 @@ function startGame(key){
   canvas.width = cartInfo.decoded.screenW;
   canvas.height = cartInfo.decoded.screenH;
   disposeGLTextures(world); // free the previous cart's GPU textures, if any
-  // decode a FRESH copy straight from the URL bytes so the running game
-  // is provably reconstructed from the fragment, not the authoring object.
-  world = new World(decodeCart(b64urlDecode(cartInfo.payload)));
+  // decode a FRESH copy straight from the URL bytes (decompressing first
+  // if the fragment's envelope tag says it's compressed) so the running
+  // game is provably reconstructed from the fragment, not the authoring
+  // object.
+  world = new World(decodeCart(await decodePayloadToBytes(cartInfo.payload)));
   setupTouchControls(world.cart);
   running = true;
   lastTime = null;
@@ -5018,25 +5081,29 @@ document.getElementById('inspectForm').addEventListener('submit', e => {
 });
 window.addEventListener('hashchange', boot);
 
-function boot(){
+async function boot(){
   const hash = location.hash.replace(/^#/, '');
   if(hash.startsWith('inspect:')){
-    if(startInspect(hash.slice('inspect:'.length))) return;
+    if(await startInspect(hash.slice('inspect:'.length))) return;
     backToMenu();
     return;
   }
   if(hash){
     const key = findCartByHash(hash);
-    if(key){ startGame(key); return; }
+    if(key){ await startGame(key); return; }
   }
   backToMenu();
 }
 
-renderMenu();
-boot();
-requestAnimationFrame(loop);
+(async () => {
+  await registerAllCarts();
+  renderMenu();
+  await boot();
+  requestAnimationFrame(loop);
+})();
 
 window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world, isUsingGL:()=>USE_GL,
   disassembleHook, buildCFG, formatDisassembly, renderCFGSvg, startInspect, extractPayloadFromInput,
+  encodePayload, decodePayloadToBytes, deflateRawCompress, deflateRawDecompress, hasCompression:()=>HAS_COMPRESSION,
   getInspectWorld:()=>inspectWorld, getInspectCartInfo:()=>inspectCartInfo, forceRender:(a)=>render(a===undefined?1:a) };
 </script>
