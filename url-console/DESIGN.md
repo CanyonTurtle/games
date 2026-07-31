@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §20 below:
+New open questions this raised, folded into §21 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1128,7 +1128,54 @@ makes it a loop, and the CFG drew that edge bowing left into the correct
 earlier block, both confirmed by rendering it and reading the picture
 back, not just checking edge counts.
 
-## 20. Open questions
+## 20. Compression: measuring §3's preset-dictionary hypothesis against real carts
+
+§3 argues a preset dictionary should beat generic compression for this
+domain because carts share structure a lone file's own compressor never
+sees. That was a design-time argument, not a measurement — worth
+checking against the four carts that now actually exist, especially
+since the V0 README already ships with "no compression" listed as a cut
+scope. Ran each cart's raw encoded bytes (before base64url, since that's
+what the eventual dictionary compressor would operate on) through
+generic gzip, deflate, and brotli at max quality, then compared against
+a crude stand-in for the real thing: raw DEFLATE primed with a
+dictionary built from the *other three* carts' bytes (never this cart's
+own — a fair test of whether cross-cart structure is real, not just
+this-file-compresses-itself-well):
+
+| cart | raw fragment (chars) | deflate, no dict | brotli, no dict | deflate + cross-cart dict |
+|---|---|---|---|---|
+| Flappy Bird | 847 | 516 (−39.1%) | 511 (−39.7%) | 438 (**−48.3%**) |
+| Race Car | 1470 | 780 (−46.9%) | 748 (−49.1%) | 738 (**−49.8%**) |
+| Cave Crawler | 1734 | 991 (−42.8%) | 912 (−47.4%) | 776 (**−55.2%**) |
+| Run & Jump | 1680 | 915 (−45.5%) | 867 (−48.4%) | 712 (**−57.6%**) |
+
+Generic compression alone is already worth roughly 40-49% off the
+current uncompressed fragment — carts are small, structured, and
+repetitive enough (opcode bytes, entity-type table shapes, HUD-spec
+boilerplate) that even brotli's built-in static dictionary helps a lot at
+these sizes. But the hypothesis holds specifically: a dictionary built
+from *other carts* beats brotli's generic one on every single cart here,
+by 4-9 more points, landing around 48-58% total reduction (53.5% overall
+across all four). That's the real signal — it isn't just "compression
+helps," it's "the cross-cart structure §3 predicted is really there,"
+confirmed on genuinely independent bytes rather than a file compressing
+against itself.
+
+This is still a rough stand-in, not the shipped design: a real preset
+dictionary would be trained on a much larger corpus than four carts (and
+the four measured here are *in* that corpus, which flatters the result
+somewhat — the honest next test is measuring a cart against a dictionary
+trained on carts it had no part in), and §3's own versioning concern
+(the dictionary must be pinned to `formatVersion`, or a dictionary update
+silently corrupts old links) is unaffected by any of this — it's a
+constraint on shipping the feature, not on whether the feature is worth
+shipping. But the headline number answers the open question directly:
+building the real thing is worth roughly another 5-10 points beyond
+what plain gzip/brotli would already buy for free, on top of compression
+already being worth doing at all.
+
+## 21. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
