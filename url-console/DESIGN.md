@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §22 below:
+New open questions this raised, folded into §23 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1263,7 +1263,64 @@ base hue with this field, full stop. Landed on green (`offset:85`,
 accent hue 120) instead, which turned out to fit better anyway (a green
 "pig" against brown wood is very on-theme for the genre).
 
-## 22. Open questions
+## 22. A sixth composable generator (aim line), and giving the destruction genre real identity
+
+Direct feedback on §21, verbatim: the two carts felt too similar, aiming
+had no visual affordance at all ("needs a power and angle line"), and
+the "castles" were just squares with nothing special about them. All
+three were real gaps, not taste — fixed as follows.
+
+**Aim line — a fifth composable generator, alongside palette/map/HUD/
+camera.** Charging a shot previously had zero feedback: no way to see
+the current angle or how much power had built up. The fix follows the
+same shape as every other generator in this runtime: the cart declares
+a small parameter block (`aimLine`: which globals hold the anchor
+position, angle, power, an active flag, plus a max-power constant index
+and a color/length), and the renderer draws a plain line from that
+anchor, in that direction, scaled by power — genuinely generic, with no
+per-cart drawing code. Unlike `camera` (always present, defaulting to
+"none" via a sentinel), this is properly optional — most carts have no
+aiming mechanic at all — so it's gated by a presence byte in the binary
+format instead. The one new implementation-level idea: `glDrawColorQuad`
+already existed (used for the backdrop's ground-fill rectangle) but
+never plumbed through the rotation uniform the shared shader already
+supports; adding that one parameter made the line renderer 4 lines of
+GL code, not a new draw path. Both renderers use the identical
+angle-to-direction formula the destruction genre's own launch-velocity
+math uses (`rot = -angleDeg * Math.PI/180`), so the line drawn is
+provably the direction a shot fired *right now* would travel, not a
+separately-computed approximation that could drift out of sync with it.
+
+*A testing note worth recording:* the very first version of this looked
+completely broken in every screenshot — until forcing a synchronous
+`render()` call and screenshotting in the same tick revealed it had
+worked correctly all along. Screenshots taken after any `waitForTimeout`
+were catching stale frames, an artifact of headless Chromium's
+`requestAnimationFrame` throttling, not a bug in the feature. Worth
+knowing for testing any timing-sensitive visual in this runtime going
+forward: when a screenshot looks wrong but the underlying state and
+draw-call arguments both check out correctly, suspect the test's own
+timing before the feature.
+
+**Two carts need to actually look different, not just be tinted
+differently.** Both had flat terrain (§21) with structure pieces that
+were all one repeated square sprite — genuinely just scattered boxes,
+not a shack or a castle. Fixed by giving each cart a second block
+silhouette — a wide plank alongside Slingshot's tall crate, a taller
+battlement/turret alongside Castle Crusher's plain wall block — spawned
+on alternating block checkpoints (`g_i mod 2`) so the skyline actually
+varies. This needed a fourth entity type per cart (`BLOCK` and a new
+`BLOCK` variant, same fields, different `assetIndex`), which meant
+`on_tick` and `on_collide`'s existing type dispatch (§21) had to widen
+from "type == 1" to "type == 1 or type == 3" in a few places — a
+mechanical change, not a new mechanic. Also gave the two carts more
+distinct color identities while fixing this (green "pig" ball/target
+against warm wood for Slingshot vs. a dark ball/red target against cool
+stone-grey for Castle Crusher) — a good example of the destruction
+genre's own §21 postmortem repeating itself: a `paletteParams` accent
+hue chosen without checking what it actually renders to.
+
+## 23. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat

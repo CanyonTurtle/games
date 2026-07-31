@@ -659,6 +659,29 @@ function encodeCart(cart){
   w.u16(cam.clampMinX); w.u16(cam.clampMinY);
   w.u16(cam.clampMaxX); w.u16(cam.clampMaxY);
 
+  // Aim line: a fifth composable generator (alongside palette/map/HUD/
+  // camera) — an aiming/power indicator drawn as a plain line from a
+  // declared anchor position, in a declared direction and length, read
+  // entirely off cart-declared globals. Unlike camera this is genuinely
+  // optional (most carts have no aiming mechanic at all), so it's gated
+  // by a presence byte rather than always-present-with-a-sentinel. Born
+  // from direct feedback on the destruction genre (§21): no visual
+  // affordance for the current aim meant charging a shot was a total
+  // guess. The runtime draws it the same generic way as everything else
+  // here — nothing about *how* to compute an aim line lives in a
+  // cart-specific hook; the cart only supplies which globals hold the
+  // angle/power/anchor and how to scale/color the line.
+  if(cart.aimLine){
+    w.u8(1);
+    const al = cart.aimLine;
+    w.u8(al.anchorXGlobal); w.u8(al.anchorYGlobal);
+    w.u8(al.angleGlobal); w.u8(al.powerGlobal);
+    w.u8(al.maxPowerConstIdx); w.u8(al.activeGlobal);
+    w.u8(al.colorIdx); w.u8(al.maxLengthPx);
+  } else {
+    w.u8(0);
+  }
+
   for(const name of HOOK_NAMES){
     const bc = cart.hooks[name] || new Uint8Array(0);
     w.u16(bc.length);
@@ -768,6 +791,13 @@ function decodeCart(bytes){
     clampMinX: r.u16(), clampMinY: r.u16(),
     clampMaxX: r.u16(), clampMaxY: r.u16(),
   };
+
+  cart.aimLine = r.u8() ? {
+    anchorXGlobal: r.u8(), anchorYGlobal: r.u8(),
+    angleGlobal: r.u8(), powerGlobal: r.u8(),
+    maxPowerConstIdx: r.u8(), activeGlobal: r.u8(),
+    colorIdx: r.u8(), maxLengthPx: r.u8(),
+  } : null;
 
   cart.hooks = {};
   for(const name of HOOK_NAMES){
@@ -1044,7 +1074,7 @@ class World {
     this.entities = [];
     this.boxPool = []; // reused AABB scratch objects for collision detection, see getBoxInto()
     this.nextId = 1;
-    this.globals = new Array(16).fill(0);
+    this.globals = new Array(24).fill(0); // room to grow past the original 16 — LOADG/STOREG operands are already u8 (0-255), this was always just an array-size choice, not a format limit
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
     this.input = 0;
     this.cartFault = false;
@@ -3020,6 +3050,7 @@ const DESTRUCT_GLOBAL_NAMES = {
   g_active_proj:0, g_angle:1, g_power:2, g_launched:3, g_shots_left:4,
   g_targets_left:5, g_won:6, g_lost:7, g_anchor_x:8, g_anchor_y:9,
   g_prev_input:10, g_scratch:11, g_i:12, g_cx:13, g_cy:14, g_proj_done:15,
+  g_aiming:16,
 };
 const DESTRUCT_SYM = {constants:DESTRUCT_CONST_NAMES, globals:DESTRUCT_GLOBAL_NAMES};
 
@@ -3054,6 +3085,8 @@ const DESTRUCT_HOOKS_SRC = {
     STOREG g_power
     PUSHI 0
     STOREG g_launched
+    PUSHI 1
+    STOREG g_aiming
     PUSHI 0
     STOREG g_proj_done
     PUSHC NUM_SHOTS
@@ -3072,7 +3105,17 @@ const DESTRUCT_HOOKS_SRC = {
     GET_CHECKPOINT
     STOREG g_cy
     STOREG g_cx
+    LOADG g_i
+    PUSHI 2
+    MOD
+    PUSHI 0
+    CMPEQ
+    JZ spawn_block_variant
     SPAWN 1
+    JMP spawned_block
+    spawn_block_variant:
+    SPAWN 3
+    spawned_block:
     STOREG g_scratch
     LOADG g_cx
     STOREE g_scratch 0
@@ -3207,6 +3250,8 @@ const DESTRUCT_HOOKS_SRC = {
     PUSHI 1
     STOREG g_launched
     PUSHI 0
+    STOREG g_aiming
+    PUSHI 0
     STOREG g_power
 
     store_prev:
@@ -3259,6 +3304,8 @@ const DESTRUCT_HOOKS_SRC = {
     STOREE g_active_proj 3
     PUSHI 0
     STOREG g_launched
+    PUSHI 1
+    STOREG g_aiming
 
     done:
     HALT
@@ -3270,6 +3317,10 @@ const DESTRUCT_HOOKS_SRC = {
     JNZ tick_proj
     LOAD_SELF 4
     PUSHI 1
+    CMPEQ
+    JNZ tick_block
+    LOAD_SELF 4
+    PUSHI 3
     CMPEQ
     JNZ tick_block
     LOAD_SELF 4
@@ -3395,11 +3446,19 @@ const DESTRUCT_HOOKS_SRC = {
     LOAD_B 4
     PUSHI 1
     CMPEQ
+    LOAD_B 4
+    PUSHI 3
+    CMPEQ
+    OR
     AND
     JNZ ab_block
     LOAD_A 4
     PUSHI 1
     CMPEQ
+    LOAD_A 4
+    PUSHI 3
+    CMPEQ
+    OR
     LOAD_B 4
     PUSHI 0
     CMPEQ
@@ -3492,6 +3551,16 @@ function buildSlingshotCart(){
     {type:SHAPE_RECT, x:2.5,y:2.5,w:11,h:2.5, color:5},
     {type:SHAPE_RECT, x:2.5,y:2.5,w:2.5,h:11, color:5},
   ];
+  // Second block silhouette (§21 follow-up: the structure read as
+  // scattered identical squares, not a shack) — a wide, short plank/
+  // beam instead of the crate's tall square, spawned on alternating
+  // block checkpoints (see on_init's block_loop) so the shack silhouette
+  // actually varies instead of repeating one shape.
+  const plankShapes = [
+    {type:SHAPE_RECT, x:0.5,y:5,w:15,h:6, color:1},
+    {type:SHAPE_RECT, x:2,y:6,w:12,h:4, color:3},
+    {type:SHAPE_RECT, x:2,y:6,w:12,h:1, color:5},
+  ];
   const targetShapes = blobMonsterShapes(11, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
@@ -3551,6 +3620,20 @@ function buildSlingshotCart(){
       clampMaxX: Math.max(0, levelWpx - screenW),
       clampMaxY: Math.max(0, levelHpx - screenH),
     },
+    // Aim line (§21 follow-up, DESIGN.md's new "5th composable generator"):
+    // draws while g_aiming is set (before a shot launches, cleared again
+    // once it does), growing from a stub to maxLengthPx as g_power climbs
+    // toward MAX_POWER — the missing "what am I about to do" feedback
+    // that made charging a shot pure guesswork before this.
+    aimLine: {
+      anchorXGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_x,
+      anchorYGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_y,
+      angleGlobal: DESTRUCT_GLOBAL_NAMES.g_angle,
+      powerGlobal: DESTRUCT_GLOBAL_NAMES.g_power,
+      maxPowerConstIdx: DESTRUCT_CONST_NAMES.MAX_POWER,
+      activeGlobal: DESTRUCT_GLOBAL_NAMES.g_aiming,
+      colorIdx: 0, maxLengthPx: 40,
+    },
     inputActiveButtons: 1|2|4,
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
     inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
@@ -3569,8 +3652,9 @@ function buildSlingshotCart(){
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0}, // PROJECTILE
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:13, collisionH:13, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0}, // TARGET
+      {renderKind:0, assetIndex:3, rotateFlag:0, collisionW:13, collisionH:9, extFieldCount:3}, // BLOCK variant (plank) — same fields as BLOCK, just a different sprite/shape
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:crateShapes}, {kind:1, w:16, h:16, shapes:targetShapes} ],
+    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:crateShapes}, {kind:1, w:16, h:16, shapes:targetShapes}, {kind:1, w:16, h:16, shapes:plankShapes} ],
     tiles: [
       {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
       {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:woodPixels},
@@ -3614,6 +3698,18 @@ function buildCastleCrusherCart(){
     {type:SHAPE_RECT, x:2,y:2,w:12,h:12, color:2},
     {type:SHAPE_RECT, x:2,y:2,w:12,h:2.5, color:4},
   ];
+  // Second block silhouette (§21 follow-up: the "castle" was just
+  // scattered identical squares) — a battlement/turret with two merlons
+  // poking above the main wall body, spawned on alternating block
+  // checkpoints (on_init's block_loop) so the skyline actually reads as
+  // wall-plus-towers instead of one repeated shape.
+  const towerShapes = [
+    {type:SHAPE_RECT, x:1.5,y:3,w:13,h:12.5, color:0},
+    {type:SHAPE_RECT, x:3,y:4.5,w:10,h:9.5, color:2},
+    {type:SHAPE_RECT, x:3,y:4.5,w:10,h:2, color:4},
+    {type:SHAPE_RECT, x:3,y:0.5,w:3,h:3.5, color:0},
+    {type:SHAPE_RECT, x:10,y:0.5,w:3,h:3.5, color:0},
+  ];
   const targetShapes = blobMonsterShapes(12, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
@@ -3649,6 +3745,15 @@ function buildCastleCrusherCart(){
       clampMaxX: Math.max(0, levelWpx - screenW),
       clampMaxY: Math.max(0, levelHpx - screenH),
     },
+    aimLine: {
+      anchorXGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_x,
+      anchorYGlobal: DESTRUCT_GLOBAL_NAMES.g_anchor_y,
+      angleGlobal: DESTRUCT_GLOBAL_NAMES.g_angle,
+      powerGlobal: DESTRUCT_GLOBAL_NAMES.g_power,
+      maxPowerConstIdx: DESTRUCT_CONST_NAMES.MAX_POWER,
+      activeGlobal: DESTRUCT_GLOBAL_NAMES.g_aiming,
+      colorIdx: 0, maxLengthPx: 40,
+    },
     inputActiveButtons: 1|2|4,
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
     inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
@@ -3667,8 +3772,9 @@ function buildCastleCrusherCart(){
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:14, collisionH:14, extFieldCount:3}, // BLOCK (ext 8/9 = orig_x/orig_y, 10 = hit_cooldown)
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:12, collisionH:12, extFieldCount:0},
+      {renderKind:0, assetIndex:3, rotateFlag:0, collisionW:13, collisionH:12, extFieldCount:3}, // BLOCK variant (turret) — same fields as BLOCK, just a different sprite/shape
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:blockShapes}, {kind:1, w:16, h:16, shapes:targetShapes} ],
+    sprites: [ {kind:1, w:16, h:16, shapes:ballShapes}, {kind:1, w:16, h:16, shapes:blockShapes}, {kind:1, w:16, h:16, shapes:targetShapes}, {kind:1, w:16, h:16, shapes:towerShapes} ],
     tiles: [
       {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
       {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:stonePixels},
@@ -4267,9 +4373,9 @@ function glDrawTexturedQuad(tex, x, y, w, h, rotationRad){
   gl.uniform1i(glUniforms.tex, 0);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 }
-function glDrawColorQuad(x, y, w, h, r, g, b, a){
+function glDrawColorQuad(x, y, w, h, r, g, b, a, rotationRad){
   gl.uniform4f(glUniforms.dst, x, y, w, h);
-  gl.uniform1f(glUniforms.rotation, 0);
+  gl.uniform1f(glUniforms.rotation, rotationRad || 0);
   gl.uniform1f(glUniforms.useTex, 0);
   gl.uniform4f(glUniforms.color, r, g, b, a===undefined?1:a);
   gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -4527,6 +4633,28 @@ function render(alpha){
   renderHUD();
 }
 
+// Shared aim-line math for both renderers (§21 follow-up: an aiming
+// mechanic with no visual feedback for its own angle/power reads as
+// broken, not just unpolished). Returns null when there's nothing to
+// draw (no aimLine declared, or its activeGlobal is falsy this frame —
+// e.g. the destruction genre only wants this visible while still
+// choosing an angle/charging, not once a shot is already in flight).
+// Angle convention matches the destruction genre's own launch-velocity
+// math (vx=cos(a)*power*scale, vy=-sin(a)*power*scale): the line points
+// the same direction a shot fired right now actually would.
+function computeAimLine(){
+  const al = world.cart.aimLine;
+  if(!al) return null;
+  if(!world.globals[al.activeGlobal]) return null;
+  const anchorX = world.globals[al.anchorXGlobal] - world.cameraX;
+  const anchorY = world.globals[al.anchorYGlobal] - world.cameraY;
+  const angleDeg = world.globals[al.angleGlobal];
+  const power = world.globals[al.powerGlobal];
+  const maxPower = world.cart.constants[al.maxPowerConstIdx] || 1;
+  const length = Math.max(4, (power/maxPower) * al.maxLengthPx);
+  const rot = -angleDeg * Math.PI/180;
+  return {anchorX, anchorY, length, rot, color: world.palette[al.colorIdx] || '#fff'};
+}
 function renderSceneCanvas(alpha){
   const cart = world.cart;
   if(world.map){
@@ -4543,6 +4671,15 @@ function renderSceneCanvas(alpha){
     }
   }
   for(const e of world.entities) drawEntityCanvas(e, alpha);
+  const aim = computeAimLine();
+  if(aim){
+    ctx2d.save();
+    ctx2d.translate(aim.anchorX, aim.anchorY);
+    ctx2d.rotate(aim.rot);
+    ctx2d.fillStyle = aim.color;
+    ctx2d.fillRect(0, -1, aim.length, 2);
+    ctx2d.restore();
+  }
 }
 
 function renderSceneGL(alpha){
@@ -4568,6 +4705,13 @@ function renderSceneGL(alpha){
     }
   }
   for(const e of world.entities) drawEntityGL(e, alpha);
+  const aim = computeAimLine();
+  if(aim){
+    const [ar,ag,ab] = cssColorToRGB(aim.color);
+    const cx = aim.anchorX + Math.cos(aim.rot)*(aim.length/2);
+    const cy = aim.anchorY + Math.sin(aim.rot)*(aim.length/2);
+    glDrawColorQuad(cx - aim.length/2, cy - 1, aim.length, 2, ar/255, ag/255, ab/255, 1, aim.rot);
+  }
 }
 
 function drawEntityGL(e, alpha){
@@ -4702,5 +4846,5 @@ requestAnimationFrame(loop);
 
 window.__urlcadeDebug = { CARTS, World, decodeCart, encodeCart, b64urlEncode, b64urlDecode, getWorld:()=>world, isUsingGL:()=>USE_GL,
   disassembleHook, buildCFG, formatDisassembly, renderCFGSvg, startInspect, extractPayloadFromInput,
-  getInspectWorld:()=>inspectWorld, getInspectCartInfo:()=>inspectCartInfo };
+  getInspectWorld:()=>inspectWorld, getInspectCartInfo:()=>inspectCartInfo, forceRender:(a)=>render(a===undefined?1:a) };
 </script>
