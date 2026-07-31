@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §23 below:
+New open questions this raised, folded into §24 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1320,7 +1320,78 @@ stone-grey for Castle Crusher) — a good example of the destruction
 genre's own §21 postmortem repeating itself: a `paletteParams` accent
 hue chosen without checking what it actually renders to.
 
-## 23. Open questions
+## 23. Real vertical structure (stacked castle), and a second reachability bug
+
+§22's block variety only fixed the *sprites* — the actual layout was
+still one flat line of ground-level positions, each holding either a
+block (fixed height offset `-3`) or a target (fixed offset `-1`). That
+reads as "one block above each enemy on a flat line," not a castle or a
+shack, and the user called it out directly. The real fix needed genuine
+stacking: multiple blocks/targets at the *same* horizontal position, at
+different heights.
+
+**Positioned tokens.** `buildPlatformLevel`'s token grammar (map_generator=3,
+shared with the platformer) gained `COIN_AT`/`ENEMY_AT`, each taking a
+row-offset operand instead of using the old hardcoded `-3`/`-1`. Neither
+branch advances the walk's column cursor, so a run of `COIN_AT`/`ENEMY_AT`
+tokens between two `FLAT`s places all of them at the *same* x, stacked
+at whatever heights their offsets say — the mechanism a real skyline
+needs. (Had to also add `PLATFORM_OPERAND_TOKENS`, a superset of
+`PLATFORM_WIDTH_TOKENS`, so the generator's gridW pre-pass skips these
+tokens' operand bytes too — otherwise a row-offset like `1` gets
+misread by the pre-pass as if it were token id `1` (`STEP_UP`) with its
+own operand, corrupting the width count.) Terrain itself stays fully
+flat under all of this, same as §21 — only entities move vertically,
+never the tilemap, which is what keeps the piercing-projectile
+reachability guarantee intact in principle.
+
+**In practice it didn't stay intact on the first attempt.** Both carts'
+tokens were rewritten into real silhouettes — Slingshot a 2-story shack,
+Castle Crusher two 3-tall towers flanking a walled gate — and the
+reachability sweep (the same fresh-`World`, full angle×power grid from
+§21) came back clean for Slingshot but found 3 of Castle Crusher's 4
+targets structurally unreachable. The cause wasn't the stacking, it was
+scale: the wider castle (58 columns, versus the ~40 that had been
+tuned-by-luck earlier) placed its far tower and the top of its near
+tower outside the projectile's *actual* reachable envelope. That
+envelope is smaller and stranger-shaped than a textbook parabola,
+because `GROUND_FRICTION` (0.985) is applied to the projectile's
+horizontal velocity **every tick, airborne or not** — not just once
+grounded — so horizontal reach decays continuously in flight, not just
+after landing. A fine-grained sweep recording the highest point actually
+touched at every column out from the anchor showed the reachable height
+peaking around column 6–12 out and collapsing back to "ground level
+only" by roughly column 27 — a hump, not the wide symmetric range naive
+projectile-range math would suggest. The earlier ~40-column carts had
+stayed inside this envelope by accident; the new 58-column castle didn't.
+
+Fixed by measuring the real envelope once (a script that fires the same
+angle/power sweep the reachability test uses and records, per column,
+the maximum height actually reached by any trajectory) and redesigning
+Castle Crusher's tokens to keep every stack within it with margin —
+same structure (two towers, connecting wall, gated middle with two
+targets), compressed from 58 to 24 columns. Re-ran the reachability
+sweep clean (0 unreachable), then separately verified *winnability*
+(not just reachability) with a fresh-`World` search for the best
+angle/charge-tick combo per target, fired as one continuous playthrough
+on the live cart: 4 near-direct hits cleared all 4 targets in 4 of the
+14 available shots, confirming the shot budget has real margin for a
+player who isn't hitting pixel-perfect aim on the first try.
+
+**A test-methodology trap along the way, worth recording alongside
+§22's rAF one**: an earlier pass at "find the best combo per target"
+set `world.globals[angle]`/`[power]` directly to a candidate value and
+then *also* ran the normal charge-tick loop on top — double-applying
+power on every trial. That produced bogus near-perfect-looking combos
+that didn't reproduce when actually played back (the projectile just
+rolled to a stop on flat ground, nowhere near the target it supposedly
+almost hit). The fix was to only ever drive angle/power through real
+input ticks (`LEFT`/`RIGHT`/held `FIRE`, exactly what a player does),
+never by writing the globals directly — same lesson as always in this
+project: simulate the actual input path, don't shortcut it and assume
+the shortcut is equivalent.
+
+## 24. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
