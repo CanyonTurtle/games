@@ -17,18 +17,32 @@
    have drifted (see DESIGN.md, which explicitly documents that its own
    prose can lag the runtime).
 
-   Sync policy: kept in sync with urlcade.html by copying, on purpose,
-   not by import — urlcade.html stays a single self-contained file
-   (that's a deliberate design property, not an oversight), so this
-   can't be a shared module the runtime also loads. Any change to the
-   binary format, the opcode table, or the VM in urlcade.html must be
-   copied here too. `test/check-kernel-sync.js` diffs this file's output
-   against urlcade.html's own (via Playwright — that half needs a real
-   browser, since that's the only place urlcade.html's functions run;
-   this file itself has no such dependency) for a battery of real carts,
-   and fails loudly if they've drifted. Run it after touching either
-   file. It's a maintainer/verification tool, not part of what ships to
-   players — this file stays dependency-free either way.
+   Sync policy: this used to say "kept in sync with urlcade.html by
+   copying, not by import" — that was true back when the runtime was one
+   ~5000-line self-contained HTML file and this was a hand-maintained
+   verbatim copy of its cart-format guts, checked for drift by
+   `test/check-kernel-sync.js` (a Playwright diff). As of the runtime's
+   module split, that's no longer the arrangement: this file is now
+   *the* single source of truth for the cart format, loaded directly —
+   via a plain `<script src="kernel.js">` tag, not copied — by the
+   player runtime (`runtime.js`), the Cart Inspector (`inspector.js`),
+   every example cart, and the standalone `/compile` authoring tool.
+   There is nothing left to drift, so there is nothing left to check;
+   `check-kernel-sync.js` has been retired (see `test/smoke.js`). This
+   file still has zero DOM/canvas/window dependency and still runs
+   identically under Node or a browser — that property was always about
+   being usable outside a browser (by an agent, a script, a CLI), not
+   about avoiding an import, and it's unchanged.
+
+   Beyond the opcode table/VM/binary format, this file also carries
+   everything else about a cart that's pure data-in-data-out with no
+   DOM dependency: palette generation, the three map generators
+   (track/cave/platform), the sprite shape-list renderer, and the
+   disassembler + control-flow-graph extractor the Inspector and
+   `/compile` both use to decompile bytecode back to readable mnemonics.
+   Only things that genuinely need a `document`/`canvas`/`WebGLContext`
+   (building actual bitmaps, running the game loop, drawing) live in
+   `runtime.js` instead.
 
    Usage:
      const K = require('./kernel.js');
@@ -76,21 +90,28 @@ OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
 /* ============================================================
    2. Assembler — mnemonic source -> Uint8Array bytecode
    ============================================================ */
+// Errors always name the 1-based source line number (in the array of
+// lines the caller passed in) as well as the line text — load-bearing for
+// the /compile tool, whose whole job is pointing an agent or a human at
+// exactly which line of hand- or model-written assembly is wrong, not
+// just that assembly *somewhere* is wrong.
 function assemble(lines, sym){
   sym = sym || {constants:{}, globals:{}};
-  const cleaned = lines.map(l=>l.split(';')[0].trim()).filter(l=>l.length>0);
+  const cleaned = lines
+    .map((l,i)=>({text: l.split(';')[0].trim(), lineNo: i+1}))
+    .filter(x=>x.text.length>0);
   const labelOffsets = {};
   const parsed = [];
   let offset = 0;
   function operandBytes(spec){ let n=0; for(const t of spec) n += (t==='u8')?1:2; return n; }
-  for(const line of cleaned){
+  for(const {text: line, lineNo} of cleaned){
     if(line.endsWith(':')){ labelOffsets[line.slice(0,-1)] = offset; continue; }
     const parts = line.split(/\s+/);
     const mnem = parts[0];
     const args = parts.slice(1);
-    if(!(mnem in OPINDEX)) throw new Error('assemble: unknown opcode "'+mnem+'" in line: '+line);
+    if(!(mnem in OPINDEX)) throw new Error('assemble: line '+lineNo+': unknown opcode "'+mnem+'" — "'+line+'"');
     const spec = OPS[OPINDEX[mnem]][1];
-    parsed.push({mnem,args,spec,offset,line});
+    parsed.push({mnem,args,spec,offset,line,lineNo});
     offset += 1 + operandBytes(spec);
   }
   const buf = [];
@@ -101,10 +122,10 @@ function assemble(lines, sym){
     for(let i=0;i<spec.length;i++){
       const type = spec[i];
       const tok = instr.args[i];
-      if(tok === undefined) throw new Error('assemble: missing operand for '+instr.mnem+' in line: '+instr.line);
+      if(tok === undefined) throw new Error('assemble: line '+instr.lineNo+': missing operand for '+instr.mnem+' — "'+instr.line+'"');
       let val;
       if(type === 'addr'){
-        if(!(tok in labelOffsets)) throw new Error('assemble: unknown label "'+tok+'" in line: '+instr.line);
+        if(!(tok in labelOffsets)) throw new Error('assemble: line '+instr.lineNo+': unknown label "'+tok+'" — "'+instr.line+'"');
         val = labelOffsets[tok];
       } else if(instr.mnem === 'PUSHC' && tok in sym.constants){
         val = sym.constants[tok];
@@ -114,10 +135,15 @@ function assemble(lines, sym){
         val = sym.globals[tok];
       } else {
         val = Number(tok);
-        if(Number.isNaN(val)) throw new Error('assemble: bad operand "'+tok+'" for '+instr.mnem+' in line: '+instr.line);
+        if(Number.isNaN(val)) throw new Error('assemble: line '+instr.lineNo+': bad operand "'+tok+'" for '+instr.mnem+' — "'+instr.line+'"');
       }
-      if(type === 'u8'){ buf.push(val & 0xFF); }
-      else { let v = val; if(v<0) v = 0x10000+v; buf.push(v & 0xFF, (v>>8)&0xFF); }
+      if(type === 'u8'){
+        if(val < -128 || val > 255) throw new Error('assemble: line '+instr.lineNo+': operand '+val+' out of u8 range (0-255) for '+instr.mnem+' — "'+instr.line+'"');
+        buf.push(val & 0xFF);
+      } else {
+        if(val < -32768 || val > 65535) throw new Error('assemble: line '+instr.lineNo+': operand '+val+' out of 16-bit range for '+instr.mnem+' — "'+instr.line+'"');
+        let v = val; if(v<0) v = 0x10000+v; buf.push(v & 0xFF, (v>>8)&0xFF);
+      }
     }
   }
   return new Uint8Array(buf);
@@ -306,12 +332,23 @@ class ByteWriter {
   bytesRaw(arr){ for(const x of arr) this.bytes.push(x & 0xFF); }
   toUint8Array(){ return new Uint8Array(this.bytes); }
 }
+// Bounds-checked on every read: a hand-edited or truncated fragment used
+// to silently decode into garbage (reads past the end of the buffer just
+// return `undefined`, which then poisons everything downstream as NaN) —
+// exactly the failure mode a self-serve tool can't afford, since its
+// whole point is telling an agent or a human *why* a cart is invalid
+// instead of handing back a corrupt-looking cart with no explanation.
 class ByteReader {
   constructor(bytes){ this.bytes = bytes; this.p = 0; }
-  u8(){ return this.bytes[this.p++]; }
-  u16(){ const lo=this.bytes[this.p++], hi=this.bytes[this.p++]; return lo|(hi<<8); }
-  f32(){ const b = this.bytes.slice(this.p, this.p+4); this.p += 4; return new DataView(b.buffer).getFloat32(0, true); }
-  bytesN(n){ const r = this.bytes.slice(this.p, this.p+n); this.p += n; return r; }
+  _need(n){
+    if(this.p + n > this.bytes.length){
+      throw new Error('truncated cart data: need '+n+' more byte(s) at offset '+this.p+', only '+(this.bytes.length-this.p)+' remain ('+this.bytes.length+' total)');
+    }
+  }
+  u8(){ this._need(1); return this.bytes[this.p++]; }
+  u16(){ this._need(2); const lo=this.bytes[this.p++], hi=this.bytes[this.p++]; return lo|(hi<<8); }
+  f32(){ this._need(4); const b = this.bytes.slice(this.p, this.p+4); this.p += 4; return new DataView(b.buffer).getFloat32(0, true); }
+  bytesN(n){ this._need(n); const r = this.bytes.slice(this.p, this.p+n); this.p += n; return r; }
 }
 
 const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
@@ -440,10 +477,14 @@ function encodeCart(cart){
   return w.toUint8Array();
 }
 
+const SUPPORTED_FORMAT_VERSIONS = [1];
 function decodeCart(bytes){
   const r = new ByteReader(bytes);
   const cart = {};
   cart.formatVersion = r.u8();
+  if(!SUPPORTED_FORMAT_VERSIONS.includes(cart.formatVersion)){
+    throw new Error('unsupported cart format_version '+cart.formatVersion+' (this kernel understands: '+SUPPORTED_FORMAT_VERSIONS.join(', ')+') — either a corrupted fragment or a newer/older format than this runtime');
+  }
   cart.cartType = r.u8();
   cart.paletteMode = r.u8();
   cart.rngSeed = r.u8();
@@ -554,7 +595,516 @@ function decodeCart(bytes){
     const len = r.u16();
     cart.hooks[name] = r.bytesN(len);
   }
+  if(r.p !== bytes.length){
+    throw new Error('trailing data after decoding cart: '+(bytes.length-r.p)+' unread byte(s) left over ('+r.p+' of '+bytes.length+' consumed) — likely a corrupted or concatenated fragment');
+  }
   return cart;
+}
+
+/* ============================================================
+   6. Palette generation — DESIGN.md §6
+   ============================================================ */
+const CURATED_BANK = [
+  // 0: "sky/grass" — outline, body, beak, pipe edge/fill/highlight, white,
+  //    then a sky blue and a ground green for the backdrop generator (§16)
+  ['#000000','#3b2a20','#f4d35e','#ee8b2b','#1b6b2e','#3a9d4f','#a8e6b5','#ffffff',
+   '#8ecae6','#4a7c3a','#000000','#000000','#000000','#000000','#000000','#000000'],
+  // 1: "dungeon" (Cave Crawler) — hand-picked rather than procedurally
+  // hue-rotated on purpose. See DESIGN.md §14/§15.1 for why: a generated
+  // palette put player and monster on the same accent hue ramp, so a
+  // curated bank keeps walls/floor/stairs in one earthy family (0-7)
+  // while player and monster each get their own independent hue.
+  ['#000000','#3a2a1a','#6b4a2f','#8a6540','#4a3520','#5f4530','#c9a86a','#f0e6c8',
+   '#2e86de','#54a0ff','#1b4f8a','#f6e58d','#e84118','#ff7675','#7a0c0c','#ffd700'],
+];
+function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
+function generatePalette(cart){
+  if(cart.paletteMode === 0){
+    return CURATED_BANK[cart.paletteParams[0]] || CURATED_BANK[0];
+  }
+  // procedural harmony mode
+  const [baseHue,,satMin,satMax,lightMin,lightMax,accentOffset] = cart.paletteParams;
+  const pal = new Array(16);
+  for(let i=0;i<8;i++){
+    const t = i/7;
+    pal[i] = hsl(baseHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
+  }
+  const accentHue = baseHue + accentOffset;
+  for(let i=0;i<8;i++){
+    const t = i/7;
+    pal[8+i] = hsl(accentHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
+  }
+  return pal;
+}
+
+/* ============================================================
+   7. Map generators — DESIGN.md §12/§14/§15/§16. Three independent
+   algorithms selected by cart.mapGenerator (1/2/3); 0 = none. Each takes
+   its own cart-declared parameter block and returns {grid, checkpoints,
+   ...}. Pure data in, data out — no DOM, no randomness except an
+   injected `rng` (the cave generator's own seeded PRNG, supplied by the
+   caller so this stays deterministic without owning the seed itself).
+   ============================================================ */
+const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4 };
+const TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
+// Convention, not a hardcoded special case: tile id 1 is whatever a
+// generator considers its "solid/boundary" tile, returned for any
+// off-grid query. Every map generator so far happens to put that tile
+// first in its own bank (racer's grass, the cave's rock wall) — this is
+// generic on purpose, unlike tileSurface used to be (see its own comment).
+const MAP_EDGE_TILE = 1;
+function buildTrack(track){
+  const grid = [];
+  for(let y=0;y<track.gridH;y++) grid.push(new Array(track.gridW).fill(MAP_EDGE_TILE));
+  const DIRV = [[1,0],[0,1],[-1,0],[0,-1]];
+  let gx = track.startGX, gy = track.startGY, dir = track.startDir;
+  const checkpoints = [];
+  function setTile(x,y,v){ if(x>=0&&y>=0&&x<track.gridW&&y<track.gridH) grid[y][x]=v; }
+  function stampPerp(cx,cy,dir,width,marker){
+    const perp = DIRV[(dir+1)%4];
+    const half = Math.floor(width/2);
+    for(let o=-half;o<=half;o++){
+      const px = cx+perp[0]*o, py = cy+perp[1]*o;
+      const isEdge = (o===-half || o===half);
+      setTile(px,py, marker || (isEdge?TILE_RUMBLE:TILE_ROAD));
+    }
+  }
+  for(const tok of track.tokens){
+    if(tok === TRACK_TOKENS.STRAIGHT){
+      for(let s=0;s<track.segLen;s++){
+        stampPerp(gx,gy,dir,track.trackWidth);
+        gx += DIRV[dir][0]; gy += DIRV[dir][1];
+      }
+    } else if(tok === TRACK_TOKENS.CURVE_R90 || tok === TRACK_TOKENS.CURVE_L90){
+      const half = Math.floor(track.trackWidth/2);
+      for(let dx=-half;dx<=half;dx++) for(let dy=-half;dy<=half;dy++) setTile(gx+dx,gy+dy,TILE_ROAD);
+      dir = (dir + (tok===TRACK_TOKENS.CURVE_R90?1:3)) % 4;
+      gx += DIRV[dir][0]; gy += DIRV[dir][1];
+    } else if(tok === TRACK_TOKENS.START_FINISH || tok === TRACK_TOKENS.CHECKPOINT){
+      stampPerp(gx,gy,dir,track.trackWidth, TILE_STARTLINE);
+      checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
+    }
+  }
+  return {grid, checkpoints, startGX:track.startGX, startGY:track.startGY, startDir:track.startDir};
+}
+
+const CAVE_WALL=1, CAVE_FLOOR=2, CAVE_STAIRS=3, CAVE_GOLD=4;
+function buildCave(cave, rng){
+  const {gridW, gridH, fillProb, iterations, wallThreshold} = cave;
+  let grid = [];
+  for(let y=0;y<gridH;y++){
+    const row = [];
+    for(let x=0;x<gridW;x++){
+      const border = (x===0||y===0||x===gridW-1||y===gridH-1);
+      row.push(border ? CAVE_WALL : (rng() < fillProb/255 ? CAVE_WALL : CAVE_FLOOR));
+    }
+    grid.push(row);
+  }
+  function countWallNeighbors(g,x,y){
+    let c=0;
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){
+      if(dx===0&&dy===0) continue;
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||ny<0||nx>=gridW||ny>=gridH||g[ny][nx]===CAVE_WALL) c++;
+    }
+    return c;
+  }
+  for(let it=0; it<iterations; it++){
+    const next = grid.map(row=>row.slice());
+    for(let y=1;y<gridH-1;y++) for(let x=1;x<gridW-1;x++){
+      next[y][x] = countWallNeighbors(grid,x,y) >= wallThreshold ? CAVE_WALL : CAVE_FLOOR;
+    }
+    grid = next;
+  }
+
+  let startX=-1, startY=-1;
+  outer: for(let y=1;y<gridH-1;y++) for(let x=1;x<gridW-1;x++){
+    if(grid[y][x]===CAVE_FLOOR){ startX=x; startY=y; break outer; }
+  }
+  if(startX<0){
+    startX = Math.floor(gridW/2); startY = Math.floor(gridH/2);
+    for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++) grid[startY+dy][startX+dx]=CAVE_FLOOR;
+  }
+  const dist = Array.from({length:gridH}, () => new Array(gridW).fill(-1));
+  dist[startY][startX] = 0;
+  const queue = [[startX,startY]];
+  let qi = 0, farX = startX, farY = startY, farDist = 0;
+  const N4 = [[1,0],[-1,0],[0,1],[0,-1]];
+  while(qi < queue.length){
+    const [x,y] = queue[qi++];
+    const d = dist[y][x];
+    if(d > farDist){ farDist = d; farX = x; farY = y; }
+    for(const [dx,dy] of N4){
+      const nx=x+dx, ny=y+dy;
+      if(nx<0||ny<0||nx>=gridW||ny>=gridH) continue;
+      if(grid[ny][nx]===CAVE_WALL) continue;
+      if(dist[ny][nx]!==-1) continue;
+      dist[ny][nx] = d+1;
+      queue.push([nx,ny]);
+    }
+  }
+  const reached = [];
+  for(let y=0;y<gridH;y++) for(let x=0;x<gridW;x++){
+    if(grid[y][x]!==CAVE_WALL){
+      if(dist[y][x]===-1) grid[y][x]=CAVE_WALL;
+      else reached.push({x,y});
+    }
+  }
+  grid[farY][farX] = CAVE_STAIRS;
+
+  const goldCandidates = reached.filter(c => !(c.x===startX&&c.y===startY) && !(c.x===farX&&c.y===farY));
+  for(let i=goldCandidates.length-1;i>0;i--){
+    const j = Math.floor(rng()*(i+1));
+    [goldCandidates[i],goldCandidates[j]] = [goldCandidates[j],goldCandidates[i]];
+  }
+  const goldCount = Math.min(cave.goldCount, goldCandidates.length);
+  for(let i=0;i<goldCount;i++) grid[goldCandidates[i].y][goldCandidates[i].x] = CAVE_GOLD;
+
+  return {
+    grid,
+    checkpoints: [
+      {x:(startX+0.5)*8, y:(startY+0.5)*8}, // [0] = player start
+      {x:(farX+0.5)*8, y:(farY+0.5)*8},     // [1] = stairs down
+    ],
+  };
+}
+
+const PLATFORM_TOKENS = { FLAT:0, STEP_UP:1, STEP_DOWN:2, GAP:3, BLOCK:4, COIN:5, ENEMY:6, COIN_AT:7, ENEMY_AT:8 };
+const PLATFORM_WIDTH_TOKENS = new Set([0,1,2,3,4]);
+const PLATFORM_OPERAND_TOKENS = new Set([0,1,2,3,4,7,8]);
+const PLATFORM_AIR=1, PLATFORM_GROUND=2, PLATFORM_DIRT=3, PLATFORM_BRICK=4;
+function buildPlatformLevel(level){
+  const gridH = level.gridH;
+  let gridW = 0;
+  for(let i=0;i<level.tokens.length;i++){
+    if(PLATFORM_WIDTH_TOKENS.has(level.tokens[i])) gridW += level.tokens[++i];
+    else if(PLATFORM_OPERAND_TOKENS.has(level.tokens[i])) i++;
+  }
+  const grid = [];
+  for(let y=0;y<gridH;y++) grid.push(new Array(gridW).fill(PLATFORM_AIR));
+  function fillColumn(x, topY){
+    if(x<0||x>=gridW) return;
+    for(let y=topY;y<gridH;y++) grid[y][x] = (y===topY) ? PLATFORM_GROUND : PLATFORM_DIRT;
+  }
+  let gx = 0, groundY = level.startGroundY;
+  const coinCps = [], enemyCps = [];
+  for(let i=0;i<level.tokens.length;i++){
+    const t = level.tokens[i];
+    if(t === PLATFORM_TOKENS.FLAT){
+      const w = level.tokens[++i];
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.STEP_UP){
+      const w = level.tokens[++i];
+      groundY = Math.max(level.minGroundY, groundY-1);
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.STEP_DOWN){
+      const w = level.tokens[++i];
+      groundY = Math.min(level.maxGroundY, groundY+1);
+      for(let k=0;k<w;k++){ fillColumn(gx, groundY); gx++; }
+    } else if(t === PLATFORM_TOKENS.GAP){
+      const w = level.tokens[++i];
+      const pitY = Math.min(gridH-1, groundY+5);
+      for(let k=0;k<w;k++){
+        if(gx>=0 && gx<gridW) grid[pitY][gx] = PLATFORM_GROUND;
+        gx++;
+      }
+    } else if(t === PLATFORM_TOKENS.BLOCK){
+      const w = level.tokens[++i];
+      for(let k=0;k<w;k++){ fillColumn(gx+k, groundY); }
+      const by = Math.max(0, groundY-4);
+      for(let k=0;k<Math.min(3,w);k++){ const x=gx+k; if(x>=0&&x<gridW) grid[by][x]=PLATFORM_BRICK; }
+      gx += w;
+    } else if(t === PLATFORM_TOKENS.COIN){
+      coinCps.push({x:(gx+0.5)*8, y:(groundY-3+0.5)*8});
+    } else if(t === PLATFORM_TOKENS.ENEMY){
+      enemyCps.push({x:(gx+0.5)*8, y:(groundY-1)*8});
+    } else if(t === PLATFORM_TOKENS.COIN_AT){
+      const rowOffset = level.tokens[++i];
+      coinCps.push({x:(gx+0.5)*8, y:(groundY-rowOffset+0.5)*8});
+    } else if(t === PLATFORM_TOKENS.ENEMY_AT){
+      const rowOffset = level.tokens[++i];
+      enemyCps.push({x:(gx+0.5)*8, y:(groundY-rowOffset)*8});
+    }
+  }
+  const startCp = {x:16, y:(level.startGroundY-1)*8};
+  return {
+    grid,
+    checkpoints: [startCp, ...coinCps, ...enemyCps],
+    numCoins: coinCps.length,
+    numEnemies: enemyCps.length,
+  };
+}
+
+/* ============================================================
+   8. Sprite shape lists — DESIGN.md §17 (sprites as generated art, not
+   raw pixel dumps or hand-written draw code). A sprite is either raw
+   per-pixel indices (kind 0 — see decodeCart) or a small ordered list
+   of primitive shapes (kind 1), each ~6 bytes, that the runtime paints
+   into a flat pixel array at *load* time via renderShapeList — from
+   decoded cart data, not from re-running any cart-specific code. Only
+   two primitives, deliberately (see DESIGN.md for why that's enough).
+   ============================================================ */
+function renderShapeList(w, h, shapes){
+  const px = new Array(w*h).fill(0);
+  for(const sh of shapes){
+    if(sh.type === SHAPE_ELLIPSE){
+      const x0 = Math.max(0, Math.floor(sh.cx-sh.rx)), x1 = Math.min(w-1, Math.ceil(sh.cx+sh.rx));
+      const y0 = Math.max(0, Math.floor(sh.cy-sh.ry)), y1 = Math.min(h-1, Math.ceil(sh.cy+sh.ry));
+      for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++){
+        const dx=(x+0.5-sh.cx)/sh.rx, dy=(y+0.5-sh.cy)/sh.ry;
+        if(dx*dx+dy*dy <= 1) px[y*w+x] = sh.color;
+      }
+    } else { // SHAPE_RECT
+      const x0 = Math.max(0, Math.round(sh.x)), x1 = Math.min(w-1, Math.round(sh.x+sh.w)-1);
+      const y0 = Math.max(0, Math.round(sh.y)), y1 = Math.min(h-1, Math.round(sh.y+sh.h)-1);
+      for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) px[y*w+x] = sh.color;
+    }
+  }
+  return px;
+}
+// Authoring-time sugar for the two blob-silhouette families reused across
+// carts (DRY for the cart-*authoring* code only — the encoded cart gets
+// the resulting plain shape array either way, never a reference to these
+// functions). Lives in carts/shared-sprites.js, not here, since it's cart
+// convenience rather than part of the format itself.
+
+/* ============================================================
+   9. Disassembler + control-flow-graph extractor — reverses assemble()
+   back into a labeled mnemonic listing, purely from raw bytecode + the
+   shared OPS table, with no dependence on any cart's own symbol names
+   (authoring-time CONST_NAMES/GLOBAL_NAMES maps never round-trip through
+   the binary format). This is what makes decompiling *any* cart's
+   bytecode — not just the ones this repo ships — possible: the Cart
+   Inspector and the `/compile` tool both call this, never a copy of it.
+   ============================================================ */
+function disassembleHook(bytecode){
+  const instrs = [];
+  let ip = 0;
+  function u8(){ return bytecode[ip++]; }
+  function i16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; let v=lo|(hi<<8); if(v & 0x8000) v -= 0x10000; return v; }
+  function u16(){ const lo=bytecode[ip++], hi=bytecode[ip++]; return lo|(hi<<8); }
+  while(ip < bytecode.length){
+    const addr = ip;
+    const op = bytecode[ip++];
+    const opInfo = OPS[op];
+    if(!opInfo){ instrs.push({addr, mnem:'DB', operands:[{type:'u8',value:op}], nextAddr:ip}); continue; }
+    const [mnem, spec] = opInfo;
+    const operands = [];
+    for(const type of spec){
+      if(type === 'u8') operands.push({type, value:u8()});
+      else if(type === 'i16') operands.push({type, value:i16()});
+      else if(type === 'addr') operands.push({type, value:u16()});
+    }
+    instrs.push({addr, mnem, operands, nextAddr:ip});
+  }
+  return instrs;
+}
+// Basic-block split + edge extraction, shared by the flat disassembly
+// listing (labels blocks instead of raw byte offsets) and the flowchart.
+function buildCFG(bytecode){
+  const instrs = disassembleHook(bytecode);
+  if(instrs.length === 0) return {instrs, blocks:[], edges:[]};
+  const validAddr = new Set(instrs.map(ins=>ins.addr));
+  const leaders = new Set([instrs[0].addr]);
+  const isBranch = mnem => mnem==='JMP'||mnem==='JZ'||mnem==='JNZ';
+  for(const ins of instrs){
+    if(isBranch(ins.mnem)){
+      const target = ins.operands[0].value;
+      if(validAddr.has(target)) leaders.add(target);
+      if(ins.nextAddr < bytecode.length) leaders.add(ins.nextAddr);
+    } else if(ins.mnem === 'HALT' && ins.nextAddr < bytecode.length){
+      leaders.add(ins.nextAddr);
+    }
+  }
+  const sorted = [...leaders].sort((a,b)=>a-b);
+  const blocks = sorted.map((addr,i) => ({
+    id: i, startAddr: addr,
+    endAddr: (i+1<sorted.length) ? sorted[i+1] : bytecode.length,
+    instrs: [],
+  }));
+  for(const ins of instrs){
+    const b = blocks.find(b => ins.addr >= b.startAddr && ins.addr < b.endAddr);
+    if(b) b.instrs.push(ins);
+  }
+  const blockAtAddr = addr => blocks.find(b => addr >= b.startAddr && addr < b.endAddr);
+  const edges = [];
+  for(const b of blocks){
+    if(b.instrs.length === 0) continue;
+    const last = b.instrs[b.instrs.length-1];
+    if(last.mnem === 'JMP'){
+      const t = blockAtAddr(last.operands[0].value);
+      if(t) edges.push({from:b.id, to:t.id, kind:'jump'});
+    } else if(last.mnem === 'JZ' || last.mnem === 'JNZ'){
+      const t = blockAtAddr(last.operands[0].value);
+      if(t) edges.push({from:b.id, to:t.id, kind:'taken'});
+      const ft = blockAtAddr(last.nextAddr);
+      if(ft) edges.push({from:b.id, to:ft.id, kind:'fallthrough'});
+    } else if(last.mnem !== 'HALT'){
+      const ft = blockAtAddr(last.nextAddr);
+      if(ft) edges.push({from:b.id, to:ft.id, kind:'fallthrough'});
+    }
+  }
+  return {instrs, blocks, edges};
+}
+// Flat, labeled disassembly text — block boundaries from the same CFG
+// split double as label points, so "B3:" here is literally the same
+// block drawn as a box in the flowchart (see renderCFGSvg). This is also
+// exactly the reverse direction of assemble()'s own label syntax — text
+// formatDisassembly() emits re-assembles unchanged via assemble(), which
+// is what makes /compile's disassembly pane round-trip.
+function formatDisassembly(bytecode){
+  const {blocks} = buildCFG(bytecode);
+  if(blocks.length === 0) return '(empty)';
+  const lines = [];
+  for(const b of blocks){
+    lines.push(`B${b.id}:`);
+    for(const ins of b.instrs){
+      const operandStrs = ins.operands.map(op =>
+        op.type === 'addr' ? ('B' + (blocks.find(bb=>bb.startAddr===op.value)?.id ?? '?')) : String(op.value));
+      lines.push('    ' + ins.mnem + (operandStrs.length ? ' ' + operandStrs.join(' ') : ''));
+    }
+  }
+  return lines.join('\n');
+}
+const EDGE_COLOR = {jump:'#e0a030', taken:'#4a9d5f', fallthrough:'#8a7a5f'};
+// Vertical-stack flowchart, blocks in address order top-to-bottom — plain
+// SVG string-building, no DOM/canvas dependency, so this runs in Node too.
+function renderCFGSvg(bytecode){
+  const {blocks, edges} = buildCFG(bytecode);
+  if(blocks.length === 0) return '<p class="inspect-empty">(empty hook)</p>';
+  const boxW = 240, padX = 70, padY = 10, lineH = 13, headerH = 20;
+  const boxX = padX;
+  let y = padY;
+  const positioned = blocks.map(b => {
+    const h = headerH + b.instrs.length*lineH + 10;
+    const box = {...b, x:boxX, y, w:boxW, h};
+    y += h + 28;
+    return box;
+  });
+  const totalH = y;
+  const totalW = boxX + boxW + padX + 60;
+  const byId = new Map(positioned.map(b=>[b.id,b]));
+  let svg = `<svg viewBox="0 0 ${totalW} ${totalH}" width="100%" style="max-width:${totalW}px" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace">`;
+  svg += `<defs>` + Object.entries(EDGE_COLOR).map(([k,c]) =>
+    `<marker id="arrow-${k}" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto"><path d="M0,0 L6,3 L0,6 Z" fill="${c}"/></marker>`).join('') + `</defs>`;
+  for(const e of edges){
+    const from = byId.get(e.from), to = byId.get(e.to);
+    if(!from || !to) continue;
+    const color = EDGE_COLOR[e.kind];
+    const dash = e.kind==='jump' && to.id <= from.id ? 'stroke-dasharray="4 3"' : '';
+    let d;
+    if(to.id === from.id+1 && e.kind !== 'taken'){
+      const x = from.x + boxW/2;
+      d = `M${x},${from.y+from.h} L${x},${to.y}`;
+    } else if(to.id > from.id){
+      const x0 = from.x+boxW, y0 = from.y+from.h/2;
+      const x1 = to.x+boxW, y1 = to.y+ (to.id===from.id ? to.h/2 : 6);
+      const bow = x0 + 40;
+      d = `M${x0},${y0} C${bow},${y0} ${bow},${y1} ${x1},${y1}`;
+    } else {
+      const x0 = from.x, y0 = from.y+from.h/2;
+      const x1 = to.x, y1 = to.y+6;
+      const bow = x0 - 50;
+      d = `M${x0},${y0} C${bow},${y0} ${bow},${y1} ${x1},${y1}`;
+    }
+    svg += `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.6" ${dash} marker-end="url(#arrow-${e.kind})"/>`;
+  }
+  for(const b of positioned){
+    svg += `<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="4" fill="var(--bg-card,#1c1712)" stroke="var(--rule,#3a3025)"/>`;
+    svg += `<text x="${b.x+10}" y="${b.y+14}" font-size="11" font-weight="700" fill="var(--accent,#e0a030)">B${b.id}</text>`;
+    b.instrs.forEach((ins,i) => {
+      const operandStrs = ins.operands.map(op =>
+        op.type === 'addr' ? ('B' + (positioned.find(bb=>bb.startAddr===op.value)?.id ?? '?')) : String(op.value));
+      const text = ins.mnem + (operandStrs.length ? ' '+operandStrs.join(' ') : '');
+      svg += `<text x="${b.x+10}" y="${b.y+headerH+i*lineH+8}" font-size="10" fill="var(--ink,#efe6d2)">${text.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</text>`;
+    });
+  }
+  svg += `</svg>`;
+  return svg;
+}
+
+/* ============================================================
+   10. describeControls — derives the keyboard/touch hint text purely
+   from a cart's own declared input layout (DESIGN.md §14/§15.1: no
+   "both left+right means steering" special case — that was a
+   racer-shaped assumption baked into supposedly generic UI text, wrong
+   the moment a second cart used the same two bits for cardinal movement).
+   ============================================================ */
+function describeControls(cart){
+  const parts = [];
+  if(cart.inputActiveButtons & 1) parts.push('← = ' + (cart.inputButtonLabels[1] || 'left'));
+  if(cart.inputActiveButtons & 2) parts.push('→ = ' + (cart.inputButtonLabels[2] || 'right'));
+  if(cart.inputActiveButtons & 4) parts.push('↑ = ' + (cart.inputButtonLabels[4] || 'up'));
+  if(cart.inputActiveButtons & 8) parts.push('↓ = ' + (cart.inputButtonLabels[8] || 'down'));
+  if(cart.inputActiveButtons & 16) parts.push('space = ' + (cart.inputButtonLabels[16] || 'action'));
+  return parts.join(', ');
+}
+
+/* ============================================================
+   11. Cart authoring/compiling helper — turns a plain "cart source"
+   object (the same shape every carts/*.js builder function already
+   returns: header fields as plain values, `hooks.<name>` as an array of
+   assembly-mnemonic strings instead of bytecode) into a fully encoded,
+   ready-to-play fragment. This is the one new piece of surface area the
+   `/compile` tool needed that didn't already exist as a runtime-internal
+   convention — every example cart was already "author a plain object,
+   assemble its hook sources, encodeCart, encodePayload" by hand inside
+   registerCart(); this just makes that sequence itself a reusable,
+   Node-and-browser function with specific, line-numbered errors at
+   every stage instead of a silent throw partway through.
+   ============================================================ */
+function defaultCartFields(){
+  return {
+    tileSurfaceOverrides: {}, camera: {followGlobal:255, clampMinX:0, clampMinY:0, clampMaxX:0, clampMaxY:0},
+    aimLine: null, hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [],
+    mapGenerator: 0, inputButtonLabels: {},
+  };
+}
+// `source` is a plain object like the carts/*.js builders return, except
+// `source.hooks[name]` may be either an array of assembly-source lines
+// (compiled here via assemble()) or an already-assembled Uint8Array
+// (passed through as-is — useful for round-tripping a decompiled cart
+// unmodified). `source.constNames`/`source.globalNames` (optional) are
+// authoring-time-only name->index maps, exactly like every shipped
+// cart's own FOO_CONST_NAMES/FOO_GLOBAL_NAMES, used only to resolve
+// PUSHC/LOADG/STOREG/LOADE/STOREE mnemonic operands; they never affect
+// the encoded bytes and are stripped before encodeCart sees the cart.
+function compileCartSource(source){
+  if(!source || typeof source !== 'object') throw new Error('compile: cart source must be an object');
+  const cart = Object.assign(defaultCartFields(), source);
+  delete cart.constNames; delete cart.globalNames;
+  const sym = {constants: source.constNames || {}, globals: source.globalNames || {}};
+  const hooks = {};
+  for(const name of HOOK_NAMES){
+    const h = source.hooks && source.hooks[name];
+    if(!h){ hooks[name] = new Uint8Array(0); continue; }
+    if(h instanceof Uint8Array){ hooks[name] = h; continue; }
+    if(!Array.isArray(h)) throw new Error('compile: hooks.'+name+' must be an array of assembly lines or a Uint8Array, got '+typeof h);
+    try{
+      hooks[name] = assemble(h, sym);
+    } catch(err){
+      throw new Error('compile: in hook "'+name+'": '+err.message);
+    }
+  }
+  cart.hooks = hooks;
+  let bytes;
+  try{
+    bytes = encodeCart(cart);
+  } catch(err){
+    throw new Error('compile: encodeCart failed: '+err.message);
+  }
+  // Round-trip through decodeCart immediately: catches shape mistakes
+  // (wrong-length arrays, out-of-range indices) that encodeCart itself
+  // is too permissive to reject but that would fail every consumer
+  // downstream (the runtime, the Inspector) with a much more confusing
+  // error, far from the cart source that actually caused it.
+  let decoded;
+  try{
+    decoded = decodeCart(bytes);
+  } catch(err){
+    throw new Error('compile: cart encoded but failed to round-trip through decodeCart (' + err.message + ') — this is a bug in the source data, not a transport issue');
+  }
+  return {cart: decoded, bytes};
 }
 
 return {
@@ -564,6 +1114,14 @@ return {
   ByteWriter, ByteReader, HOOK_NAMES, BUTTON_BITS,
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION, TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
   SHAPE_ELLIPSE, SHAPE_RECT, writeString, readString,
-  encodeCart, decodeCart,
+  encodeCart, decodeCart, SUPPORTED_FORMAT_VERSIONS,
+  CURATED_BANK, hsl, generatePalette,
+  TRACK_TOKENS, TILE_ROAD, TILE_RUMBLE, TILE_STARTLINE, MAP_EDGE_TILE, buildTrack,
+  CAVE_WALL, CAVE_FLOOR, CAVE_STAIRS, CAVE_GOLD, buildCave,
+  PLATFORM_TOKENS, PLATFORM_WIDTH_TOKENS, PLATFORM_OPERAND_TOKENS,
+  PLATFORM_AIR, PLATFORM_GROUND, PLATFORM_DIRT, PLATFORM_BRICK, buildPlatformLevel,
+  renderShapeList,
+  disassembleHook, buildCFG, formatDisassembly, renderCFGSvg, EDGE_COLOR,
+  describeControls, defaultCartFields, compileCartSource,
 };
 });

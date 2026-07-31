@@ -1,0 +1,278 @@
+<title>The Urlcade — V0</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<style>
+  :root{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060;
+    --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+    --safe-t: env(safe-area-inset-top, 0px);
+    --safe-b: env(safe-area-inset-bottom, 0px);
+    --safe-l: env(safe-area-inset-left, 0px);
+    --safe-r: env(safe-area-inset-right, 0px);
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+      --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+      --accent:#a8571a; --focus:#8a4614;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060;
+  }
+  :root[data-theme="light"]{
+    --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+    --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+    --accent:#a8571a; --focus:#8a4614;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);overflow-x:hidden;overscroll-behavior:none;
+    height:100%;height:100dvh;}
+  body{width:100%;}
+  a{color:inherit;}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+  @media (prefers-reduced-motion: no-preference){
+    .cart, .playbtn{transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;}
+    .view.active{animation:viewIn .22s ease both;}
+  }
+  @keyframes viewIn{from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none}}
+
+  #menu{display:none;max-width:760px;margin:0 auto;padding:calc(28px + var(--safe-t)) 18px 60px;}
+  #menu.active{display:block;}
+  .faceplate{border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:22px;}
+  .faceplate .model{font-size:11px;letter-spacing:.18em;color:var(--ink-dim);
+    text-transform:uppercase;margin:0 0 6px;}
+  #menu h1{font-size:clamp(28px,5vw,40px);margin:0 0 10px;letter-spacing:.02em;
+    font-weight:800;text-wrap:balance;}
+  #menu h1 .dim{color:var(--ink-dim);font-weight:500;}
+  #menu > p{max-width:62ch;color:var(--ink-dim);line-height:1.6;font-size:14.5px;}
+  #menu code{color:var(--accent);}
+  #menu p a{color:var(--accent);text-decoration-color:var(--rule);}
+
+  #cartList{display:grid;gap:20px;grid-template-columns:1fr;margin-top:28px;}
+  @media (min-width:620px){ #cartList{grid-template-columns:1fr 1fr;} }
+  .cart{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
+    overflow:hidden;position:relative;}
+  .cart:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.25);
+    border-color:var(--cart-accent, var(--accent));}
+  .cart-stripe{height:6px;background:linear-gradient(90deg,var(--cart-accent,var(--accent)),
+    transparent 140%);}
+  .cart-body{padding:18px 18px 16px;}
+  .eyebrow{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-dim);
+    margin:0 0 8px;}
+  .eyebrow b{color:var(--cart-accent,var(--accent));}
+  .cart h2{margin:0 0 14px;font-size:20px;letter-spacing:.01em;}
+  a.playbtn{display:inline-flex;align-items:center;gap:8px;background:var(--cart-accent,var(--accent));
+    color:#141110;text-decoration:none;padding:9px 16px;border-radius:2px;font-weight:700;
+    font-size:13px;letter-spacing:.04em;border:1px solid rgba(0,0,0,.2);}
+  a.playbtn:hover{transform:translateX(2px);}
+  a.inspectbtn{display:inline-flex;align-items:center;gap:6px;background:transparent;
+    color:var(--ink-dim);text-decoration:none;padding:9px 12px;border-radius:2px;
+    font-weight:700;font-size:12px;letter-spacing:.04em;border:1px solid var(--rule);
+    margin-left:8px;}
+  a.inspectbtn:hover{color:var(--ink);border-color:var(--ink-dim);}
+  .spec{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;margin:16px 0 0;
+    font-size:12px;color:var(--ink-dim);font-variant-numeric:tabular-nums;}
+  .spec dt{text-transform:uppercase;letter-spacing:.08em;font-size:10.5px;
+    color:var(--ink-dim);opacity:.75;align-self:center;}
+  .spec dd{margin:0;color:var(--ink);}
+  details.payload{margin-top:14px;border-top:1px dashed var(--rule);padding-top:10px;}
+  details.payload summary{cursor:pointer;font-size:11px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--ink-dim);}
+  details.payload summary:hover{color:var(--ink);}
+  details.payload code{display:block;margin-top:8px;color:var(--cart-accent,var(--accent));
+    word-break:break-all;font-size:10.5px;line-height:1.5;max-height:6.5em;overflow-y:auto;}
+  #menu > footer{margin-top:40px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
+    padding-top:16px;}
+
+  .inspect-loader{margin-top:32px;padding-top:22px;border-top:1px solid var(--rule);}
+  p.lede-small{color:var(--ink-dim);font-size:13px;line-height:1.6;max-width:60ch;margin:0 0 12px;}
+  #inspectForm{display:flex;gap:8px;}
+  #inspectInput{flex:1;min-width:0;background:var(--bg-card);border:1px solid var(--rule);
+    color:var(--ink);font-family:var(--mono);font-size:13px;padding:9px 12px;border-radius:2px;}
+  #inspectInput:focus-visible{outline:2px solid var(--focus);}
+  #inspectForm button{background:var(--accent);color:#141110;border:1px solid rgba(0,0,0,.2);
+    font-family:var(--mono);font-weight:700;font-size:13px;letter-spacing:.04em;
+    padding:9px 16px;border-radius:2px;cursor:pointer;}
+  .inspect-error{color:#ff6b5e;font-size:12.5px;margin:8px 0 0;min-height:1em;}
+
+  /* Cart Inspector view — its own top-level view (siblings of #menu/
+     #gameWrap), a mobile-first horizontally-scrollable tab strip over a
+     scrollable body, reusing the same palette variables as everything
+     else on the page. */
+  #inspectWrap{display:none;position:fixed;inset:0;overflow:hidden;background:var(--bg);
+    flex-direction:column;}
+  #inspectWrap.active{display:flex;}
+  .inspect-topbar{flex:0 0 auto;display:flex;align-items:center;gap:12px;
+    padding:calc(12px + var(--safe-t)) 16px 12px calc(16px + var(--safe-l));
+    border-bottom:1px solid var(--rule);}
+  .inspect-topbar button{background:var(--bg-card);color:var(--ink);border:1px solid var(--rule);
+    padding:7px 12px;border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:12px;}
+  .inspect-topbar button:hover{border-color:var(--accent);color:var(--accent);}
+  #inspectTitle{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .inspect-tabs{flex:0 0 auto;display:flex;overflow-x:auto;gap:2px;padding:0 12px;
+    border-bottom:1px solid var(--rule);-webkit-overflow-scrolling:touch;}
+  .inspect-tab{flex:0 0 auto;background:none;border:none;border-bottom:2px solid transparent;
+    color:var(--ink-dim);font-family:var(--mono);font-size:12.5px;letter-spacing:.03em;
+    text-transform:uppercase;padding:12px 12px;cursor:pointer;white-space:nowrap;}
+  .inspect-tab:hover{color:var(--ink);}
+  .inspect-tab.active{color:var(--accent);border-bottom-color:var(--accent);}
+  .inspect-body{flex:1;overflow-y:auto;padding:18px 16px calc(40px + var(--safe-b));}
+  .inspect-empty{color:var(--ink-dim);font-size:13px;}
+  .inspect-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:14px;}
+  .inspect-tile{text-align:center;}
+  .inspect-tile canvas{image-rendering:pixelated;border:1px solid var(--rule);
+    background:var(--bg-card);width:100%;height:auto;}
+  .inspect-tile p{margin:6px 0 0;font-size:11px;color:var(--ink-dim);}
+  table.inspect-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:18px;}
+  table.inspect-table th, table.inspect-table td{text-align:left;padding:6px 10px;
+    border-bottom:1px solid var(--rule);}
+  table.inspect-table th{color:var(--ink-dim);text-transform:uppercase;font-size:10.5px;
+    letter-spacing:.06em;}
+  .inspect-section-title{font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--ink-dim);margin:22px 0 10px;}
+  .inspect-section-title:first-child{margin-top:0;}
+  .hook-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;}
+  .hook-tab{background:var(--bg-card);border:1px solid var(--rule);color:var(--ink-dim);
+    font-family:var(--mono);font-size:11.5px;padding:6px 10px;border-radius:2px;cursor:pointer;}
+  .hook-tab.active{color:var(--accent);border-color:var(--accent);}
+  .hook-tab.empty{opacity:.4;}
+  pre.disasm{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
+    padding:12px;font-size:11px;line-height:1.5;overflow-x:auto;max-height:340px;overflow-y:auto;}
+  .cfg-scroll{overflow-x:auto;border:1px solid var(--rule);border-radius:3px;background:var(--bg-card);
+    padding:10px;}
+
+  /* Edge-to-edge: the canvas is the whole viewport (no frame/box/bezel
+     around it); everything else is a floating overlay with just enough
+     scrim to stay legible on top of whatever the cart is rendering. */
+  #gameWrap{
+    display:none;
+    position:fixed; inset:0; overflow:hidden;
+    background:var(--bg);
+    /* Inherited by every overlay text node (HUD, controls hint, fault
+       banner, back button) — pointer-events:none on .topbar/.controls
+       *should* already keep taps from ever hitting this text, but that's
+       an inconsistently-enforced guarantee across mobile browsers for
+       native text-selection/callout gestures specifically. A stray
+       selection (with its magnifier loupe / copy-callout UI) landing on
+       "SCORE: 0" mid-tap would burn real main-thread time right when a
+       touch fires — belt and suspenders, not relying on pointer-events alone. */
+    user-select:none; -webkit-user-select:none; -webkit-touch-callout:none;
+  }
+  #gameWrap.active{display:block;}
+  #screen{
+    position:absolute; inset:0; width:100%; height:100%;
+    object-fit:contain; /* letterboxed on a mismatched aspect, never cropped or boxed */
+    image-rendering:pixelated; background:#0c0c0c;
+    touch-action:none; -webkit-user-select:none; user-select:none;
+  }
+
+  .topbar{position:absolute; top:0; left:0; right:0; z-index:3;
+    display:flex; align-items:center; gap:10px;
+    padding:calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) 20px calc(10px + var(--safe-l));
+    background:linear-gradient(to bottom, rgba(0,0,0,.5), transparent);
+    pointer-events:none;}
+  #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
+    text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;padding-right:74px;}
+  #backBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
+    border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
+    font-family:var(--mono);font-size:12px;letter-spacing:.03em;
+    /* no backdrop-filter: it forces a re-sample of whatever's behind it on every
+       composite, and the canvas behind it repaints every frame — a real,
+       avoidable GPU cost on mobile, found while chasing a reported touch
+       stutter. A flatter, more opaque background reads almost identically. */
+    touch-action:manipulation;}
+  #backBtn:hover{border-color:var(--accent);color:var(--accent);}
+
+  #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
+    z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
+    text-shadow:0 1px 3px rgba(0,0,0,.7);}
+  .controls{position:absolute;left:0;right:0;bottom:calc(104px + var(--safe-b));z-index:2;
+    color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:11px;letter-spacing:.03em;
+    text-transform:uppercase;text-align:center;pointer-events:none;}
+
+  .touch-controls{position:absolute;left:0;right:0;bottom:0;z-index:3;
+    display:none;align-items:flex-end;justify-content:space-between;
+    gap:16px;padding:6px 4px calc(4px + var(--safe-b));min-height:88px;
+    background:linear-gradient(to top, rgba(0,0,0,.45), transparent);}
+  .touch-controls.active{display:flex;}
+  .touch-controls .side{display:flex;gap:10px;}
+  .touch-btn{
+    -webkit-user-select:none;user-select:none;-webkit-touch-callout:none;touch-action:none;
+    width:64px;height:64px;border-radius:50%;border:1px solid var(--rule);
+    background:var(--bg-elevated);color:var(--ink);font-family:var(--mono);
+    font-size:22px;line-height:1;display:flex;align-items:center;justify-content:center;
+    cursor:pointer;opacity:.92;
+  }
+  .touch-btn.wide{width:auto;padding:0 26px;border-radius:32px;font-size:14px;
+    letter-spacing:.05em;font-weight:700;text-transform:uppercase;}
+  .touch-btn.active{background:var(--accent);color:#141110;border-color:var(--accent);
+    transform:scale(.94);}
+  @media (min-width:620px){ .touch-btn{width:56px;height:56px;font-size:19px;} }
+</style>
+
+<div id="menu" class="view">
+  <div class="faceplate">
+    <p class="model">Model V0 &middot; static runtime, no server</p>
+    <h1>The Urlcade <span class="dim">// cartridge shelf</span></h1>
+  </div>
+  <p>Every cart below is fully described by the URL fragment on its link — the
+  runtime on this page is the only thing that isn't in the URL. Copy a link,
+  the recipient gets the exact game, no install, no account.
+  Want to build your own? See the <a href="spec/">game authoring API</a>.</p>
+  <div id="cartList"></div>
+  <div class="inspect-loader">
+    <p class="lede-small">Paste any Urlcade link (or just its <code>#</code> fragment) to
+    inspect it — sprites, tiles, palette, entities, and every hook's bytecode
+    decompiled to a labeled listing and a flowchart. Works on any cart, not
+    only the four above.</p>
+    <form id="inspectForm">
+      <input id="inspectInput" type="text" placeholder="Paste a cart link or fragment…" autocomplete="off" spellcheck="false" />
+      <button type="submit">Inspect</button>
+    </form>
+    <p id="inspectError" class="inspect-error"></p>
+  </div>
+  <footer>Raw, uncompressed encoding (V0 scope cut — see the <a href="spec/">spec</a>).
+  Byte-packed encoding and the preset-dictionary compressor are future work.</footer>
+</div>
+
+<div id="gameWrap" class="view">
+  <div class="topbar">
+    <button id="backBtn">&larr; shelf</button>
+    <div id="hud"></div>
+  </div>
+  <div class="canvas-area"><canvas id="screen"></canvas></div>
+  <div class="controls" id="controlsText"></div>
+  <div id="faultBanner">CART FAULT — step budget exceeded</div>
+  <div id="touchControls" class="touch-controls"></div>
+</div>
+
+<div id="inspectWrap" class="view">
+  <div class="inspect-topbar">
+    <button id="inspectBackBtn">&larr; shelf</button>
+    <div id="inspectTitle"></div>
+  </div>
+  <div class="inspect-tabs" id="inspectTabs"></div>
+  <div class="inspect-body" id="inspectBody"></div>
+</div>
+
+<!--
+  Module layout (was one ~5000-line self-contained urlcade.html):
+    kernel.js    — cart format: opcodes, VM, binary encode/decode,
+                   palette/map generators, disassembler+CFG. Loaded as a
+                   classic script (not a module) so it's usable exactly
+                   as documented in llms.txt/AUTHORING.md — `window.
+                   UrlcadeKernel` here, `require('./kernel.js')` in Node,
+                   same file either way, no build step either way.
+    color-utils.js, runtime.js, inspector.js, carts/*.js, main.js
+                 — ES modules (native browser support, still zero build
+                   step: no bundler, no transpiler, just <script type=
+                   module>). See each file's own header comment.
+-->
+<script src="kernel.js"></script>
+<script type="module" src="main.js"></script>

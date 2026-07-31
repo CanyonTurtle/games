@@ -1,0 +1,311 @@
+<title>The Urlcade — Compile</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060; --bad:#ff6b5e; --good:#7dc46a;
+    --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{
+      --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+      --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+      --accent:#a8571a; --focus:#8a4614; --bad:#b3261e; --good:#2f6f3e;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060; --bad:#ff6b5e; --good:#7dc46a;
+  }
+  :root[data-theme="light"]{
+    --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9;
+    --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac;
+    --accent:#a8571a; --focus:#8a4614; --bad:#b3261e; --good:#2f6f3e;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;background:var(--bg);color:var(--ink);
+    font-family:var(--mono);}
+  a{color:var(--accent);}
+  :focus-visible{outline:2px solid var(--focus);outline-offset:2px;}
+  #app{max-width:1200px;margin:0 auto;padding:28px 18px 60px;}
+  header{border-bottom:1px solid var(--rule);padding-bottom:16px;margin-bottom:20px;}
+  header .model{font-size:11px;letter-spacing:.18em;color:var(--ink-dim);
+    text-transform:uppercase;margin:0 0 6px;}
+  h1{font-size:clamp(24px,4vw,34px);margin:0 0 10px;letter-spacing:.02em;font-weight:800;}
+  h1 .dim{color:var(--ink-dim);font-weight:500;}
+  header p{max-width:74ch;color:var(--ink-dim);line-height:1.6;font-size:13.5px;}
+  header p code{color:var(--accent);}
+  h2{font-size:13px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-dim);margin:0;}
+  .panes{display:grid;grid-template-columns:1fr;gap:18px;}
+  @media (min-width:900px){ .panes{grid-template-columns:1fr 1fr;} }
+  .pane{background:var(--bg-card);border:1px solid var(--rule);border-radius:4px;padding:14px;
+    display:flex;flex-direction:column;gap:10px;}
+  .pane-head{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+  .pane-head select, .pane-head button{background:var(--bg-elevated);color:var(--ink);
+    border:1px solid var(--rule);font-family:var(--mono);font-size:11.5px;padding:5px 9px;
+    border-radius:3px;cursor:pointer;}
+  textarea{width:100%;background:var(--bg);color:var(--ink);border:1px solid var(--rule);
+    border-radius:3px;font-family:var(--mono);font-size:12.5px;line-height:1.5;padding:10px;
+    resize:vertical;}
+  #sourceInput{height:520px;}
+  #fragmentInput{height:120px;}
+  .info{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px;
+    color:var(--ink-dim);margin:0;font-variant-numeric:tabular-nums;}
+  .info dt{text-transform:uppercase;letter-spacing:.06em;font-size:10.5px;opacity:.8;}
+  .info dd{margin:0;color:var(--ink);}
+  .links{display:flex;gap:10px;flex-wrap:wrap;}
+  .links a{display:inline-flex;align-items:center;gap:6px;background:var(--accent);color:#141110;
+    text-decoration:none;padding:8px 14px;border-radius:2px;font-weight:700;font-size:12.5px;
+    letter-spacing:.03em;}
+  .links a.secondary{background:transparent;color:var(--ink-dim);border:1px solid var(--rule);}
+  #status{margin-top:16px;font-size:12.5px;min-height:1.4em;}
+  #status.ok{color:var(--good);}
+  #status.err{color:var(--bad);white-space:pre-wrap;font-weight:600;}
+  #status.err::before{content:"✕ ";}
+  #status.ok::before{content:"✓ ";}
+  details.opcodes{margin-top:24px;border-top:1px solid var(--rule);padding-top:14px;}
+  details.opcodes summary{cursor:pointer;font-size:12.5px;letter-spacing:.04em;
+    text-transform:uppercase;color:var(--ink-dim);}
+  details.opcodes summary:hover{color:var(--ink);}
+  table.ops{border-collapse:collapse;width:100%;font-size:11.5px;margin-top:12px;}
+  table.ops th, table.ops td{text-align:left;padding:4px 8px;border-bottom:1px solid var(--rule);}
+  table.ops th{color:var(--ink-dim);text-transform:uppercase;font-size:10px;letter-spacing:.05em;}
+  footer{margin-top:30px;color:var(--ink-dim);font-size:12px;border-top:1px solid var(--rule);
+    padding-top:16px;}
+</style>
+
+<div id="app">
+  <header>
+    <p class="model">Model V0 &middot; self-serve compiler</p>
+    <h1>Compile <span class="dim">// cart source &#8646; fragment</span></h1>
+    <p>Write a cart as a plain object (see <a href="/AUTHORING.md">AUTHORING.md</a> for every
+    field's meaning and the full opcode table) in the left pane — it compiles automatically, with
+    specific errors if anything's wrong, and the right pane fills in with a playable fragment.
+    Paste an existing link or fragment into the right pane instead and the left pane decompiles it
+    back to source, including a disassembly listing for every hook. Both panes stay in sync either
+    direction. Nothing here touches a server: nothing you type ever leaves this page except into the
+    URL you copy out.</p>
+  </header>
+
+  <div class="panes">
+    <section class="pane">
+      <div class="pane-head">
+        <h2>Cart source</h2>
+        <select id="templatePicker">
+          <option value="">Load a starter template&hellip;</option>
+          <option value="bouncer">Minimal: one entity, wraps around the screen</option>
+        </select>
+      </div>
+      <textarea id="sourceInput" spellcheck="false" autocapitalize="off" autocomplete="off"></textarea>
+    </section>
+    <section class="pane">
+      <div class="pane-head"><h2>Fragment</h2></div>
+      <textarea id="fragmentInput" spellcheck="false" autocapitalize="off" autocomplete="off"
+        placeholder="Paste a cart link or fragment here to decompile it&hellip;"></textarea>
+      <dl class="info" id="infoPanel"></dl>
+      <div class="links">
+        <a id="playLink" href="#" target="_blank" rel="noopener">&#9654; Play</a>
+        <a id="inspectLink" href="#" target="_blank" rel="noopener" class="secondary">Inspect</a>
+      </div>
+    </section>
+  </div>
+
+  <p id="status"></p>
+
+  <details class="opcodes">
+    <summary>Opcode reference (from kernel.js's own OPS table — always current, never hand-copied)</summary>
+    <table class="ops" id="opsTable"></table>
+  </details>
+
+  <footer>
+    Runs entirely client-side against <a href="/kernel.js">kernel.js</a> — the same file the
+    player runtime, the Cart Inspector, and Node/agent scripts all load. See
+    <a href="/fixtures.md">fixtures.md</a> for known-good cart&#8594;bytes&#8594;fragment examples,
+    and the <a href="../">cartridge shelf</a> to play the five example carts.
+  </footer>
+</div>
+
+<script src="/kernel.js"></script>
+<script>
+"use strict";
+const K = window.UrlcadeKernel;
+const RUNTIME_BASE = '/index.html';
+
+const sourceEl = document.getElementById('sourceInput');
+const fragmentEl = document.getElementById('fragmentInput');
+const statusEl = document.getElementById('status');
+const infoEl = document.getElementById('infoPanel');
+const playLink = document.getElementById('playLink');
+const inspectLink = document.getElementById('inspectLink');
+
+function setStatus(msg, kind){
+  statusEl.textContent = msg;
+  statusEl.className = kind || '';
+}
+
+function sizeClassLabel(charLen){
+  // DESIGN.md §2's three fragment-length classes.
+  if(charLen <= 280) return 'micro (≤280)';
+  if(charLen <= 1000) return 'standard (≤~1000)';
+  if(charLen <= 2000) return 'full (≤~2000)';
+  return 'over "full" — DESIGN.md §2\'s ~2000-char ceiling';
+}
+
+function renderInfo(bytes, fragment){
+  const compressed = fragment.startsWith('z.');
+  infoEl.innerHTML = `
+    <dt>raw size</dt><dd>${bytes.length} bytes</dd>
+    <dt>fragment</dt><dd>${fragment.length} chars (${compressed ? 'compressed' : 'uncompressed'})</dd>
+    <dt>size class</dt><dd>${sizeClassLabel(fragment.length)}</dd>
+  `;
+  playLink.href = RUNTIME_BASE + '#' + fragment;
+  inspectLink.href = RUNTIME_BASE + '#inspect:' + fragment;
+}
+
+function clearInfo(){
+  infoEl.innerHTML = '';
+  playLink.removeAttribute('href');
+  inspectLink.removeAttribute('href');
+}
+
+// Cart source -> fragment. Parsing a JS object literal via `Function` is
+// the same trust model every example cart already uses (carts/*.js are
+// themselves plain JS object literals evaluated at page load) — nothing
+// here is more privileged than what registerCart() already does, and it
+// never leaves this page.
+async function compileFromSource(){
+  let parsed;
+  try{
+    parsed = new Function('"use strict"; return (\n' + sourceEl.value + '\n);')();
+  } catch(err){
+    setStatus('Cart source is not valid JS: ' + err.message, 'err');
+    clearInfo();
+    return;
+  }
+  let cart, bytes;
+  try{
+    ({cart, bytes} = K.compileCartSource(parsed));
+  } catch(err){
+    setStatus(err.message, 'err');
+    clearInfo();
+    return;
+  }
+  let fragment;
+  try{
+    fragment = await K.encodePayload(bytes);
+  } catch(err){
+    setStatus('encodePayload failed: ' + err.message, 'err');
+    clearInfo();
+    return;
+  }
+  fragmentEl.value = fragment;
+  renderInfo(bytes, fragment);
+  setStatus('Compiled — ' + bytes.length + ' bytes, ' + fragment.length + ' char fragment.', 'ok');
+}
+
+// Fragment -> cart source. formatDisassembly()'s block-labeled output
+// (B0:, B1:, ...) is deliberately assemble()-compatible (see kernel.js),
+// so the decompiled hooks paste straight back into compileCartSource
+// unmodified — that's what makes this direction round-trip.
+function extractPayload(raw){
+  let s = raw.trim();
+  const hashIdx = s.lastIndexOf('#');
+  if(hashIdx >= 0) s = s.slice(hashIdx + 1);
+  if(s.startsWith('inspect:')) s = s.slice('inspect:'.length);
+  return s;
+}
+function cartToSourceObject(cart){
+  const out = Object.assign({}, cart);
+  out.hooks = {};
+  for(const name of K.HOOK_NAMES){
+    const bc = cart.hooks[name];
+    out.hooks[name] = (bc && bc.length) ? K.formatDisassembly(bc).split('\n') : [];
+  }
+  return out;
+}
+async function decompileFromFragment(){
+  const payload = extractPayload(fragmentEl.value);
+  if(!payload){ setStatus('', ''); clearInfo(); return; }
+  let bytes, cart;
+  try{
+    bytes = await K.decodePayloadToBytes(payload);
+    cart = K.decodeCart(bytes);
+  } catch(err){
+    setStatus('Could not decode this as an Urlcade cart: ' + err.message, 'err');
+    clearInfo();
+    return;
+  }
+  sourceEl.value = JSON.stringify(cartToSourceObject(cart), null, 2);
+  renderInfo(bytes, payload);
+  setStatus('Decompiled — ' + bytes.length + ' bytes. Symbol names (constNames/globalNames) never round-trip through the binary format, so operands below are raw indices, not the original mnemonic names.', 'ok');
+}
+
+let sourceTimer = null, fragmentTimer = null;
+sourceEl.addEventListener('input', () => {
+  clearTimeout(sourceTimer);
+  sourceTimer = setTimeout(compileFromSource, 400);
+});
+fragmentEl.addEventListener('input', () => {
+  clearTimeout(fragmentTimer);
+  fragmentTimer = setTimeout(decompileFromFragment, 400);
+});
+
+const TEMPLATES = {
+  bouncer: {
+    formatVersion: 1, cartType: 63, paletteMode: 0, paletteParams: [0,0,0,0,0,0,0,0],
+    rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
+    backdropFillIndex: 8, backdropGroundHeight: 0, backdropGroundIndex: 0,
+    inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {},
+    hudSpec: [
+      {kind:0, sourceKind:0, srcA:1, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Frames'},
+    ],
+    constants: [160, 160],
+    constNames: {SCREEN_W:0, SCREEN_H:1},
+    globalNames: {g_ball:0, g_frames:1},
+    entityTypes: [
+      {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
+    ],
+    sprites: [
+      {kind:1, w:8, h:8, shapes:[{type:K.SHAPE_ELLIPSE, cx:4, cy:4, rx:3, ry:3, color:2}]},
+    ],
+    tiles: [],
+    mapGenerator: 0,
+    hooks: {
+      on_init: ['SPAWN 0','STOREG g_ball','PUSHI 1','STOREE g_ball 2','PUSHI 1','STOREE g_ball 3','HALT'],
+      on_frame: ['LOADG g_frames','PUSHI 1','ADD','STOREG g_frames','HALT'],
+      on_tick: [
+        'LOAD_SELF 0','LOAD_SELF 2','ADD','PUSHC SCREEN_W','MOD','STORE_SELF 0',
+        'LOAD_SELF 1','LOAD_SELF 3','ADD','PUSHC SCREEN_H','MOD','STORE_SELF 1','HALT',
+      ],
+    },
+  },
+};
+document.getElementById('templatePicker').addEventListener('change', (e) => {
+  const t = TEMPLATES[e.target.value];
+  if(!t) return;
+  sourceEl.value = JSON.stringify(t, null, 2);
+  e.target.value = '';
+  compileFromSource();
+});
+
+// Opcode reference, straight off kernel.js's own OPS table — this can
+// never drift from what assemble()/runHook() actually accept, since it's
+// the exact same array, not a hand-copied description of it.
+(function renderOps(){
+  const rows = K.OPS.map((o, i) => {
+    const [mnem, spec] = o;
+    return `<tr><td>${i}</td><td>${mnem}</td><td>${spec.join(', ') || '—'}</td></tr>`;
+  });
+  document.getElementById('opsTable').innerHTML =
+    '<tr><th>#</th><th>mnemonic</th><th>operands</th></tr>' + rows.join('');
+})();
+
+// Load with the starter template pre-filled and already compiled, so the
+// tool is immediately useful with zero typing — the empty-textarea state
+// otherwise has nothing to show a first-time visitor (human or agent).
+sourceEl.value = JSON.stringify(TEMPLATES.bouncer, null, 2);
+compileFromSource();
+</script>
