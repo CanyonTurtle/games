@@ -526,7 +526,7 @@ input — and nothing stops a different genre from reusing the same map
 generator for its own loop-shaped level, or a cart from combining
 generators no existing "genre" has used together yet.
 
-New open questions this raised, folded into §25 below:
+New open questions this raised, folded into §26 below:
 
 - Does the backdrop's "no tilemap → solid fill" rule need a richer
   fallback once a map generator's grid doesn't fill the whole frame (e.g.
@@ -1498,17 +1498,101 @@ no entity escaping the level bounds; and the corrected adaptive-search
 test cleared all 4 targets in 2 of 16 available shots on a genuine
 continuous playthrough — real margin, not a hopeful guess.
 
-## 25. Open questions
+## 25. Shipping §3's compression, and measuring where each cart actually posts
+
+§20 measured that generic compression alone was worth ~40-49% off the
+raw fragment, and a cross-cart preset dictionary another 5-10 points
+beyond that — but both were Node-side measurements against a script,
+never shipped in the runtime itself. This pass ships the generic half
+of that finding for real, in the browser, and answers a concrete
+question raised by having five actual carts now: where can each one's
+link actually be pasted?
+
+**What's shipped.** `deflateRawCompress`/`deflateRawDecompress` wrap the
+browser's native `CompressionStream`/`DecompressionStream` with the
+`'deflate-raw'` format — no bundled library, matching this runtime's
+existing "no dependencies for its own code" rule, and the leanest of
+the three formats the API offers (no zlib/gzip header or checksum)
+since every byte here travels in a URL. A short envelope tag
+(`z.` compressed, `r.` raw) distinguishes the two, matching §2/§3's
+original `u1`/`u1r` idea without an outer format-version tag (the real
+`format_version` already lives inside the binary header, §4). A bare
+fragment with *no* recognized tag is still treated as raw — every link
+this runtime ever emitted before this pass keeps decoding exactly as it
+always did. `encodePayload` only ever picks the compressed form when
+it's actually shorter (DEFLATE's fixed per-stream overhead can lose to
+raw base64 on the very smallest conceivable cart), so shipping this
+can't regress a fragment's length, only shrink it or leave it alone.
+
+The real preset dictionary from §3 is still unshipped: the standard
+Compression Streams API has no dictionary hook, so building it for real
+means hand-rolling a DEFLATE (or range-coder) encoder — genuine scope
+for a future pass, not a gap in this one.
+
+**Threading it through required going async**, since browsers expose no
+synchronous compression primitive: `registerCart`, `startGame`,
+`startInspect`, and `boot` all became `async`, with cart registration
+now wrapped in one `registerAllCarts()` awaited before the menu ever
+renders — a real architectural change, not just adding two functions,
+but confined entirely to the URL-transport layer. `encodeCart`/
+`decodeCart` (the binary cart format itself) are untouched.
+
+**Measured, not assumed, on all 5 currently-shipped carts:**
+
+| cart | raw bytes | uncompressed fragment | compressed fragment | reduction |
+|---|---|---|---|---|
+| Flappy Bird | 636 | 850 | 518 | −39.1% |
+| Race Car | 1,103 | 1,473 | 784 | −46.8% |
+| Cave Crawler | 1,301 | 1,737 | 993 | −42.8% |
+| Run & Jump | 1,261 | 1,684 | 917 | −45.5% |
+| Castle Crusher | 2,014 | 2,688 | 1,469 | −45.3% |
+
+These land almost exactly on §20's "deflate, no dict" column (measured
+independently, in-browser, months later, on a codebase that's grown
+substantially since) — good confirmation the earlier Node measurement
+wasn't an artifact of the tool used to take it.
+
+Against §2's own three size classes (fragment length alone, no base
+URL): three carts (Race Car, Cave Crawler, Run & Jump) move from the
+**full** tier (≤2000) down into **standard** (≤1000) once compressed.
+Castle Crusher is the sharper finding — its *uncompressed* fragment
+(2,688 chars) doesn't fit inside **full** at all, exceeding the
+project's own documented ceiling; compression is what gets it under
+that ceiling in the first place, not just a nice-to-have on top of an
+already-working link. None of the five reach **micro** (≤280) — that
+tier needs §3's real dictionary, not generic DEFLATE.
+
+**Checked against real platforms**, using the actual GitHub Pages URL
+(`https://canyonturtle.github.io/games/#<fragment>`, 38 chars of
+prefix): every cart fits Twitter/X (links auto-shorten via t.co
+regardless of length, up to a ~4096-char original-URL ceiling), old-IE's
+historical 2083-char address-bar cap, a ~1600-char practical
+concatenated-SMS ceiling, and Slack/email/GitHub markdown (all
+effectively unbounded for a single URL) — compressed *or* not. Discord's
+hard 2000-char message cap is the one real pass/fail: Castle Crusher's
+uncompressed fragment (2,726 chars as a full URL) exceeds it outright;
+compressed (1,507), it fits with room to spare. A single QR code (byte
+mode, Version 40/low-ECC's 2,953-byte ceiling — the largest the
+standard defines) fits all five either way, but compression turns
+Castle Crusher from the tightest cart on the shelf (92% of max capacity,
+forcing the densest, hardest-to-scan code) into a comfortable one (51%).
+
+## 26. Open questions
 
 **Format & encoding**
 - Is base64url-over-custom-binary actually the right density/compat
   tradeoff, or is a larger Unicode alphabet worth the copy/paste risk
   for power users who know what they're doing?
-- Should compression be mandatory, or is the `u1` vs `u1r` split (with
-  its extra envelope complexity) worth it?
-- How do we migrate the preset dictionary over time without either
-  freezing it forever or breaking old links? Is "one dictionary per
-  format_version, all kept alive in the runtime" sustainable?
+- ~~Should compression be mandatory, or is the `u1` vs `u1r` split worth
+  it?~~ Answered by §25: the tagged split (`z.`/`r.`), compression
+  picked only when it's actually smaller, never mandatory. What's still
+  open is the *dictionary* half — is it worth hand-rolling a DEFLATE
+  encoder for the real preset-dictionary scheme, given generic
+  compression alone already gets 3 of 5 carts down a full size tier?
+- How do we migrate the preset dictionary over time (once it exists)
+  without either freezing it forever or breaking old links? Is "one
+  dictionary per format_version, all kept alive in the runtime"
+  sustainable?
 - Where's the boundary between "cart data" and "runtime asset library"
   — do sprite/sound libraries need independent versioning from the
   envelope format?
