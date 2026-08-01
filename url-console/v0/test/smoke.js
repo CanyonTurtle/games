@@ -61,6 +61,31 @@ async function main(){
     if(!ok) failures++;
   }
 
+  // 0. Every local <script src>/import reference in the assembled site
+  // actually got cache-busted (build-site.sh's job — see its own comment
+  // and DESIGN.md §32: a browser or CDN serving a stale cached .js file
+  // after a deploy is exactly what made two brand-new buttons look wired
+  // up but silently do nothing). A structural check, not a behavioral
+  // one — HTTP caching itself isn't practical to simulate faithfully
+  // here, but "did the versioning actually apply" is, and regressing
+  // that silently is exactly the kind of thing worth locking in.
+  {
+    const cachebustFiles = ['index.html', 'main.js', 'runtime.js', 'inspector.js', 'carts/index.js',
+      ...fs.readdirSync(path.join(siteDir, 'carts')).filter(f => f !== 'index.js').map(f => 'carts/' + f)];
+    // An *unversioned* local .js reference — `.js` immediately followed by
+    // the closing quote, no `?v=...` in between. Checking for the absence
+    // of the bad pattern (rather than trying to fully re-match the good
+    // one, query string and all) is the robust direction here: it doesn't
+    // need to know or guess the version's exact format.
+    let allBusted = true, sample = '';
+    for(const rel of cachebustFiles){
+      const content = fs.readFileSync(path.join(siteDir, rel), 'utf8');
+      const unversioned = [...content.matchAll(/(?:src="|from ')([\w./-]+\.js)(["'])/g)];
+      if(unversioned.length){ allBusted = false; sample = `${rel}: ${unversioned[0][0]}`; }
+    }
+    check('every local script/import reference is cache-busted (?v=...)', allBusted, sample);
+  }
+
   // 1. The shelf: all five carts register and play, no console/page errors.
   const page = await browser.newPage();
   const errors = [];

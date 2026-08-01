@@ -34,3 +34,26 @@ cp "$ROOT/v0/AUTHORING.md" "$DEST/spec/AUTHORING.md"
 # tab all link to these without /spec/.
 cp "$ROOT/v0/AUTHORING.md" "$DEST/AUTHORING.md"
 cp "$ROOT/v0/fixtures.md" "$DEST/fixtures.md"
+
+# Cache-busting: append ?v=<version> to every local <script src>/import
+# reference, so a browser (or a CDN in front of a custom domain) holding
+# a stale cached copy of e.g. main.js from a previous deploy is forced to
+# fetch the new one instead of silently running old code against new
+# HTML. Found the hard way — a real deploy where the page itself updated
+# but a cached main.js didn't, so two brand-new buttons ("Debug", "+ New
+# Cart") looked wired up but silently did nothing (DESIGN.md §32).
+# `git rev-parse` guarantees a fresh value on every commit with zero
+# manual bumping to forget; a plain incrementing counter would work too
+# but only if someone remembers to move it. Falls back to the current
+# time if this isn't a git checkout (e.g. a tarball).
+VERSION="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%s)"
+CACHEBUST_FILES=(
+  "$DEST/index.html" "$DEST/main.js" "$DEST/runtime.js" "$DEST/inspector.js"
+  "$DEST/carts/index.js" "$DEST/carts"/*.js
+)
+for f in "${CACHEBUST_FILES[@]}"; do
+  sed -E -i \
+    -e "s/(src=\"[^\"]+\.js)\"/\\1?v=$VERSION\"/g" \
+    -e "s/(from '[^']+\.js)'/\\1?v=$VERSION'/g" \
+    "$f"
+done

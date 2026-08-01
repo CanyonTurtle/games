@@ -1935,7 +1935,58 @@ throws only for `'deflate-raw'`) and confirms `+ New Cart` still works
 end to end — verified against both the broken and fixed version, same
 as §29's postscript, so this doesn't just look plausible, it's checked.
 
-## 32. Open questions
+## 32. The actual cause of §31's bug report: stale cached JS, not a swallowed exception
+
+§31 shipped real hardening — the unguarded-promise-rejection class of bug
+was genuine and worth fixing regardless — but the report that prompted it
+("Debug"/"+ New Cart" do nothing on mobile) was still open afterward:
+same symptom, same device, after the fix deployed. Diagnosing further
+without device access meant asking the reporter three direct questions
+rather than guessing again: does a private/incognito tab (guaranteed no
+cache) change anything; do the *other* buttons (▶ PLAY, ← back) work;
+what device/browser. All three answers landed at once: a private tab
+fixed it, and the old buttons — present in every deploy, including
+whatever version was cached — worked fine the whole time. That's the
+signature of a stale cache, not a code path: the *page* (`index.html`)
+updated (new markup for the Debug/New-Cart buttons rendered, so they
+were visibly there to tap), but the *script* it loaded didn't — a
+browser or an intermediate CDN (this site is also served from a custom
+domain, likely behind its own caching layer in front of GitHub Pages)
+kept serving an old cached copy of `main.js` that predated those
+buttons' event listeners entirely. Tapping a real, visible button whose
+handler doesn't exist in the code that's actually running looks
+identical to "does nothing" — indistinguishable from §31's failure mode
+from the reporter's side, but a completely different fix.
+
+**The fix: cache-busted local script/module URLs, generated at deploy
+time.** Every `<script src>` and every local `import '...'` — from
+`index.html` down through `main.js`, `runtime.js`, `inspector.js`, and
+every file under `carts/` — now gets `?v=<git-sha>` appended by
+`build-site.sh` as a post-processing pass over the *assembled* `_site`
+output, not hand-maintained in the source files. A query string change
+is a genuinely different URL to a cache, so a stale cached `main.js`
+can never be served against a fresh `index.html` again: the new page
+always requests the new script's exact URL. Using the git commit SHA
+(`git rev-parse --short HEAD`, already available in the checkout
+`pages.yml` uses) rather than a manually-bumped version number was the
+deliberate choice — the alternative works too, but only if a human
+remembers to move it on every deploy that touches JS, which is exactly
+the kind of thing that's fine ninety-nine times and silently wrong the
+hundredth. `test/smoke.js` gained a structural check (every local
+`.js` reference in the assembled site actually carries `?v=...`) —
+confirmed to fail when the cache-busting pass is removed, same
+verify-the-verifier instinct as every other regression test added this
+way.
+
+Left deliberately alone: the source files themselves (`index.html`,
+`main.js`, ...) still read `./runtime.js` with no query string —
+`build-site.sh` is the only place that knows about versioning, and
+local development (opening these files directly, or via a plain static
+server pointed at the repo) needs no cache-busting at all. Versioning
+lives entirely in the deploy step, where the actual risk (a CDN or
+browser caching across deploys) actually is.
+
+## 33. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
