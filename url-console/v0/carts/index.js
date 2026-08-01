@@ -27,6 +27,7 @@ import { buildPlatformerCart } from './run-and-jump.js';
 import { buildCastleCrusherCart } from './castle-crusher.js';
 import { buildBreakoutCart } from './breakout.js';
 import { buildPlantCart } from './plant.js';
+import { buildMiniGolfCart } from './mini-golf.js';
 
 const CARTS = {};
 
@@ -60,6 +61,7 @@ async function registerAllCarts(){
   await registerCart('castle', buildCastleCrusherCart);
   await registerCart('breakout', buildBreakoutCart);
   await registerCart('plant', buildPlantCart);
+  await registerCart('golf', buildMiniGolfCart);
   for(const [key, fragment] of EXTERNAL_CARTS) registerExternalCart(key, fragment);
 }
 
