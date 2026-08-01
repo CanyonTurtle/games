@@ -1,38 +1,51 @@
 /* ============================================================
-   The Urlcade — Cart Inspector UI
+   The Urlcade — Debug view (Cart Inspector + self-serve compiler)
 
-   A third top-level view (alongside the shelf and the player) that
-   decodes any pasted Urlcade link/fragment and tabs between its
-   palette/sprites/tiles/map/entities/hooks — including a disassembly
-   listing and control-flow-graph flowchart for each lifecycle hook.
-   Works on any cart, not just this repo's five example ones.
+   A second top-level view (alongside the shelf/player) that decodes any
+   Urlcade cart — the one currently playing (via the game view's "Debug"
+   button), a pasted link, or a fresh "+ New Cart" — and tabs between its
+   palette/sprites/tiles/map/entities/hooks, plus two tabs that turn this
+   into a full authoring loop rather than a read-only decoder:
 
-   Split out on its own from the former urlcade.html monolith. Reuses
-   kernel.js's disassembler/CFG extractor (window.UrlcadeKernel — a
-   classic <script> global, not an import; see runtime.js's header for
-   why) and runtime.js's World class (to reuse its buildBitmap/mapCanvas
-   output instead of a second copy of that rendering logic).
+   - Source: the cart as an editable plain-JS-object literal (hooks as
+     assembly-source line arrays). Recompiles automatically as you type.
+   - Compile: the result — a specific, line-numbered error naming the
+     failing hook, or byte/fragment size info and a "Play this version"
+     button. A successful compile also live-updates every other tab (the
+     cart this whole view describes is always whatever Source currently
+     says, not a stale snapshot from whenever Debug was opened).
+
+   This used to be two separate things — a read-only Inspector and a
+   standalone /compile page — kept apart because each grew out of a
+   different ask at a different time. Folding decompiling and compiling
+   into the same tab strip removes a seam that never needed to exist:
+   there was never a reason "look at this cart's guts" and "edit this
+   cart's guts" should be different pages, and every tab already shares
+   the same decoded-cart state regardless.
+
+   Reuses kernel.js's disassembler/CFG extractor and compileCartSource()
+   (window.UrlcadeKernel — a classic <script> global, not an import; see
+   runtime.js's header for why) and runtime.js's World class (to reuse
+   its buildBitmap/mapCanvas output instead of a second copy of that
+   rendering logic).
    ============================================================ */
 "use strict";
 const K = window.UrlcadeKernel;
 const {
-  formatDisassembly, renderCFGSvg,
+  formatDisassembly, renderCFGSvg, compileCartSource, encodePayload,
   generatePalette, SHAPE_ELLIPSE, HOOK_NAMES, decodeCart, decodePayloadToBytes,
 } = K;
 import { World, disposeGLTextures } from './runtime.js';
 
-/* ============================================================
-   11b. Inspector UI — a third top-level view (alongside the shelf and
-   the player) that tabs between a decoded cart's sprites/tiles/palette/
-   map/entities/hooks. Works on any cart URL, not just the four on the
-   shelf: it re-decodes and rebuilds a real (never-stepped) World purely
-   to reuse its existing buildBitmap/mapCanvas output instead of
-   duplicating that rendering logic a second time for the inspector.
-   ============================================================ */
-const INSPECT_TABS = ['Overview','Palette','Sprites','Tiles','Map','Entities','Hooks'];
+const INSPECT_TABS = ['Overview','Palette','Sprites','Tiles','Map','Entities','Hooks','Source','Compile'];
 const MAP_GEN_NAMES = {0:'none', 1:'track (turtle-grammar)', 2:'cave (cellular automata)', 3:'platform (heightmap turtle-grammar)'};
 const TOUCH_TEMPLATE_NAMES = {0:'none', 1:'single button', 2:'steer + action', 3:'d-pad + action', 4:'d-pad only'};
 let inspectWorld = null, inspectCartInfo = null, inspectTab = 'Overview', inspectHookTab = 'on_init';
+// Source/Compile tab state — independent of inspectCartInfo because it
+// has to survive a *failed* compile (inspectCartInfo keeps showing the
+// last-known-good cart on every other tab while Source shows what you
+// actually typed and Compile shows why it doesn't work yet).
+let sourceText = '', compileState = null, sourceDebounceTimer = null;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
 // takes whatever comes after the last '#' if there is one, else the
@@ -41,8 +54,22 @@ function extractPayloadFromInput(raw){
   let s = raw.trim();
   const hashIdx = s.lastIndexOf('#');
   if(hashIdx >= 0) s = s.slice(hashIdx+1);
-  if(s.startsWith('inspect:')) s = s.slice('inspect:'.length);
+  if(s.startsWith('debug:') || s.startsWith('inspect:')) s = s.slice(s.indexOf(':')+1);
   return s;
+}
+
+// formatDisassembly()'s block-labeled output (B0:, B1:, ...) is
+// deliberately assemble()-compatible (see kernel.js), so a decompiled
+// hook pastes straight into compileCartSource() unmodified — that's
+// what makes the Source tab round-trip.
+function cartToSourceObject(cart){
+  const out = Object.assign({}, cart);
+  out.hooks = {};
+  for(const name of HOOK_NAMES){
+    const bc = cart.hooks[name];
+    out.hooks[name] = (bc && bc.length) ? formatDisassembly(bc).split('\n') : [];
+  }
+  return out;
 }
 
 async function startInspect(payload){
@@ -66,21 +93,38 @@ async function startInspect(payload){
   inspectTab = 'Overview';
   const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
   inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
+  sourceText = JSON.stringify(cartToSourceObject(cart), null, 2);
   document.getElementById('menu').classList.remove('active');
   document.getElementById('gameWrap').classList.remove('active');
   const iw = document.getElementById('inspectWrap');
   iw.classList.remove('active'); void iw.offsetWidth; iw.classList.add('active');
-  document.getElementById('inspectTitle').textContent =
-    `cart_type ${cart.cartType} · ${bytes.length}B raw / ${payload.length} chars`;
+  updateTitle();
   renderInspectTabs();
   renderInspectBody();
+  // Populate Compile tab / tab-strip status immediately, without
+  // requiring an edit first — what Source currently says should always
+  // compile cl​eanly right after a successful decode.
+  await compileSourceText();
   return true;
+}
+
+function updateTitle(){
+  const {cart, byteLen, charLen} = inspectCartInfo;
+  document.getElementById('inspectTitle').textContent =
+    `cart_type ${cart.cartType} · ${byteLen}B raw / ${charLen} chars`;
 }
 
 function renderInspectTabs(){
   const wrap = document.getElementById('inspectTabs');
-  wrap.innerHTML = INSPECT_TABS.map(t =>
-    `<button class="inspect-tab${t===inspectTab?' active':''}" data-tab="${t}">${t}</button>`).join('');
+  wrap.innerHTML = INSPECT_TABS.map(t => {
+    let label = t;
+    let cls = 'inspect-tab' + (t===inspectTab ? ' active' : '');
+    if(t === 'Compile' && compileState){
+      cls += compileState.ok ? ' tab-ok' : ' tab-err';
+      label = t + (compileState.ok ? ' ✓' : ' ✕');
+    }
+    return `<button class="${cls}" data-tab="${t}">${label}</button>`;
+  }).join('');
   wrap.querySelectorAll('.inspect-tab').forEach(btn => btn.addEventListener('click', () => {
     inspectTab = btn.dataset.tab;
     renderInspectTabs();
@@ -260,8 +304,153 @@ function renderInspectBody(){
   else if(inspectTab === 'Map') body.innerHTML = renderInspectMap(cart);
   else if(inspectTab === 'Entities') body.innerHTML = renderInspectEntities(cart);
   else if(inspectTab === 'Hooks') renderInspectHooks(body, cart);
+  else if(inspectTab === 'Source') renderInspectSource(body);
+  else if(inspectTab === 'Compile') renderInspectCompile(body);
 }
 
+function renderInspectSource(body){
+  body.innerHTML = `
+    <p class="inspect-help">Plain JS object — header fields as values, each hook as an array of
+    assembly-source lines (see <a href="AUTHORING.md">AUTHORING.md</a>). Recompiles automatically
+    as you edit; see the Compile tab for status.</p>
+    <textarea id="debugSourceInput" class="debug-textarea" spellcheck="false"
+      autocapitalize="off" autocomplete="off">${esc(sourceText)}</textarea>
+  `;
+  const ta = document.getElementById('debugSourceInput');
+  ta.addEventListener('input', () => {
+    sourceText = ta.value;
+    clearTimeout(sourceDebounceTimer);
+    sourceDebounceTimer = setTimeout(compileSourceText, 400);
+  });
+}
+
+function sizeClassLabel(charLen){
+  // DESIGN.md §2's three fragment-length classes — micro/standard/full.
+  if(charLen <= 280) return 'micro (≤280 chars)';
+  if(charLen <= 1000) return 'standard (≤~1000 chars)';
+  if(charLen <= 2000) return 'full (≤~2000 chars)';
+  return 'over "full" (~2000-char ceiling)';
+}
+
+function renderInspectCompile(body){
+  if(!compileState){
+    body.innerHTML = '<p class="inspect-empty">Compiling…</p>';
+    return;
+  }
+  if(!compileState.ok){
+    body.innerHTML = `
+      <div class="inspect-section-title">Compile error</div>
+      <p class="compile-error">${esc(compileState.message)}</p>
+      <p class="inspect-help">Fix it on the Source tab — this updates automatically as you edit.</p>
+    `;
+    return;
+  }
+  const {bytes, fragment} = compileState;
+  body.innerHTML = `
+    <div class="inspect-section-title">Compiled OK</div>
+    ${table([
+      ['field','value'],
+      ['raw size', bytes.length + ' bytes'],
+      ['fragment', fragment.length + ' chars (' + (fragment.startsWith('z.') ? 'compressed' : 'uncompressed') + ')'],
+      ['size class', sizeClassLabel(fragment.length)],
+    ])}
+    <div class="debug-actions">
+      <button type="button" id="playCompiledBtn" class="playbtn">&#9654; Play this version</button>
+    </div>
+    <div class="inspect-section-title">Fragment</div>
+    <code class="fragment-code">${esc(fragment)}</code>
+  `;
+  document.getElementById('playCompiledBtn').addEventListener('click', () => { location.hash = fragment; });
+}
+
+// Parses the Source tab's text, compiles it (kernel.js's
+// compileCartSource — assembles every hook, encodeCart, round-trips
+// through decodeCart), and encodes a fragment. On success, also rebuilds
+// inspectWorld/inspectCartInfo from the *edited* cart so every other tab
+// (Overview, Hooks, ...) reflects it live — this view always shows what
+// Source currently says, never a stale snapshot from whenever Debug was
+// first opened. On failure, every other tab keeps showing the last
+// known-good cart; only Source and Compile reflect the broken edit.
+async function compileSourceText(){
+  let parsed;
+  try{
+    parsed = new Function('"use strict"; return (\n' + sourceText + '\n);')();
+  } catch(err){
+    compileState = {ok: false, message: 'Source is not valid JS: ' + err.message};
+    renderInspectTabs();
+    return;
+  }
+  try{
+    const {cart, bytes} = compileCartSource(parsed);
+    const fragment = await encodePayload(bytes);
+    compileState = {ok: true, bytes, fragment};
+    if(inspectWorld) disposeGLTextures(inspectWorld);
+    try{
+      inspectWorld = new World(cart);
+      inspectCartInfo = {cart, payload: fragment, byteLen: bytes.length, charLen: fragment.length};
+      updateTitle();
+    } catch(err){
+      // Rare — compileCartSource already round-trips through decodeCart
+      // — but if the World itself still can't be built, say so and keep
+      // the previous good inspectWorld/cart rather than tearing the
+      // view down out from under whichever tab is currently showing.
+      compileState = {ok: false, message: 'Compiled, but the map/entity data could not be built: ' + err.message};
+    }
+  } catch(err){
+    compileState = {ok: false, message: err.message};
+  }
+  // Only the tab strip (for the Compile tab's ✓/✕ status) — never the
+  // body while the user's still typing in Source, or every keystroke
+  // would blow away textarea focus/cursor/selection by re-rendering it
+  // out from under itself. The body picks up fresh state next time it's
+  // actually rendered (a real tab click, including landing on Compile).
+  renderInspectTabs();
+}
+
+// Standalone entry point for "+ New Cart" (main.js) — compiles a small
+// known-good starter cart and opens it in Debug landed on the Source
+// tab, the same as pasting/decoding any other fragment (round-tripped
+// through encode→decode too, consistent with every other path into this
+// view — no separate "nothing decoded yet" state to maintain).
+const STARTER_TEMPLATE = {
+  formatVersion: 1, cartType: 63, paletteMode: 0, paletteParams: [0,0,0,0,0,0,0,0],
+  rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
+  backdropFillIndex: 8, backdropGroundHeight: 0, backdropGroundIndex: 0,
+  inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {},
+  hudSpec: [
+    {kind:0, sourceKind:0, srcA:1, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Frames'},
+  ],
+  constants: [160, 160],
+  constNames: {SCREEN_W:0, SCREEN_H:1},
+  globalNames: {g_ball:0, g_frames:1},
+  entityTypes: [
+    {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
+  ],
+  sprites: [
+    {kind:1, w:8, h:8, shapes:[{type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3, ry:3, color:2}]},
+  ],
+  tiles: [],
+  mapGenerator: 0,
+  hooks: {
+    on_init: ['SPAWN 0','STOREG g_ball','PUSHI 1','STOREE g_ball 2','PUSHI 1','STOREE g_ball 3','HALT'],
+    on_frame: ['LOADG g_frames','PUSHI 1','ADD','STOREG g_frames','HALT'],
+    on_tick: [
+      'LOAD_SELF 0','LOAD_SELF 2','ADD','PUSHC SCREEN_W','MOD','STORE_SELF 0',
+      'LOAD_SELF 1','LOAD_SELF 3','ADD','PUSHC SCREEN_H','MOD','STORE_SELF 1','HALT',
+    ],
+  },
+};
+async function startNewCart(){
+  const {bytes} = compileCartSource(STARTER_TEMPLATE);
+  const fragment = await encodePayload(bytes);
+  const ok = await startInspect(fragment);
+  if(ok){
+    inspectTab = 'Source';
+    renderInspectTabs();
+    renderInspectBody();
+  }
+  return ok;
+}
 
 // Counterpart to startInspect(), called by main.js when navigating away
 // from the Inspector view (to the shelf or into a game) — tears down
@@ -270,12 +459,15 @@ function renderInspectBody(){
 // on the player side).
 function closeInspector(){
   if(inspectWorld){ disposeGLTextures(inspectWorld); inspectWorld = null; inspectCartInfo = null; }
+  sourceText = ''; compileState = null;
+  clearTimeout(sourceDebounceTimer);
   document.getElementById('inspectWrap').classList.remove('active');
 }
 function getInspectWorld(){ return inspectWorld; }
 function getInspectCartInfo(){ return inspectCartInfo; }
+function getCompileState(){ return compileState; }
 
 export {
-  startInspect, closeInspector, extractPayloadFromInput,
-  getInspectWorld, getInspectCartInfo,
+  startInspect, startNewCart, closeInspector, extractPayloadFromInput,
+  getInspectWorld, getInspectCartInfo, getCompileState,
 };

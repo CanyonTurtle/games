@@ -2,11 +2,18 @@
    The Urlcade — top-level wiring
 
    The one thing every other module needed to stay decoupled from: which
-   view is active (shelf / game / Inspector) and how a URL hash maps to
-   one of them. Everything here is composition — reaching into runtime.js
+   view is active (shelf / game / Debug) and how a URL hash maps to one
+   of them. Everything here is composition — reaching into runtime.js
    and inspector.js's own exported entry points, never their internals
-   (see runtime.js's stopGame()/showMenu() split and inspector.js's
-   closeInspector() for why that split exists).
+   (see runtime.js's stopGame()/pauseGame()/showMenu() split and
+   inspector.js's closeInspector() for why that split exists).
+
+   Three ways into Debug, one code path: a pasted/hash fragment
+   (openDebug, used to be `#inspect:`), the game currently playing (the
+   in-game "Debug" button — same hash shape, `#debug:<fragment>`, and
+   openDebug() itself decides whether that fragment matches the live
+   game and pauses instead of stopping it), and "+ New Cart" on the
+   shelf (Inspector.startNewCart(), no fragment to route on yet).
 
    This is the only <script type="module"> index.html loads; every other
    module is reached transitively through here or through each other.
@@ -24,29 +31,48 @@ function goToMenu(){
   history.replaceState(null, '', location.pathname + location.search);
 }
 
-// Navigating away from whichever view is currently live always tears it
-// down first — fixes a latent bug in the original single-scope version,
-// where jumping straight from a live game to an `#inspect:` link left the
-// game's step/render loop running invisibly in the background (nothing
-// reset `running` on that path, only on the explicit "back to shelf"
-// button). Splitting the modules apart is what surfaced it: it's no
-// longer possible to *accidentally* reach into the other view's state,
-// so the transition has to be named explicitly here instead.
+// Debug can be reached two ways: from the game that's currently playing
+// (the in-game "Debug" button), where the point is coming back to that
+// *same* game afterward — or from anywhere else (a pasted link, "+ New
+// Cart"), where there's no live game to come back to. Distinguished by
+// whether a live game's own fragment matches what's being debugged,
+// rather than a separate piece of routing state to keep in sync.
+async function openDebug(payload){
+  const resuming = !!Runtime.getWorld() && Runtime.getCurrentFragment() === payload;
+  if(resuming) Runtime.pauseGame(); else Runtime.stopGame();
+  if(await Inspector.startInspect(payload)) return true;
+  if(resuming) Runtime.resumeGame(); else goToMenu();
+  return false;
+}
+
+// Counterpart to openDebug()'s "resuming" branch: if there's still a
+// live (paused) game underneath, resume it instead of dropping back to
+// the shelf. Uses history.replaceState, not location.hash=, so this
+// doesn't itself trigger another hashchange/boot() cycle — that would
+// re-decode the fragment via startGame() and silently replace the
+// resumed game with a fresh one, losing whatever progress it had.
+function goBackFromDebug(){
+  Inspector.closeInspector();
+  if(Runtime.getWorld() && Runtime.resumeGame()){
+    history.replaceState(null, '', location.pathname + location.search + '#' + Runtime.getCurrentFragment());
+  } else {
+    goToMenu();
+  }
+}
+
 async function boot(){
   const hash = location.hash.replace(/^#/, '');
-  if(hash.startsWith('inspect:')){
-    Runtime.stopGame();
-    if(await Inspector.startInspect(hash.slice('inspect:'.length))) return;
-    goToMenu();
+  if(hash.startsWith('debug:') || hash.startsWith('inspect:')){
+    await openDebug(hash.slice(hash.indexOf(':') + 1));
     return;
   }
   Inspector.closeInspector();
   if(hash){
     // startGame() decodes the fragment directly — it doesn't need to be
-    // one of the five shelf carts, just a validly-encoded one (any
-    // /compile output, or a link a friend shared, works exactly the same
-    // way). If it doesn't decode, fall into the Inspector's own
-    // decode-error UI instead of duplicating that messaging here.
+    // one of the five shelf carts, just a validly-encoded one (anything
+    // Debug's Source/Compile tabs produce, or a link a friend shared,
+    // works exactly the same way). If it doesn't decode, fall into
+    // Debug's own decode-error UI instead of duplicating that messaging.
     if(await Runtime.startGame(hash)) return;
     if(await Inspector.startInspect(hash)) return;
   }
@@ -54,12 +80,19 @@ async function boot(){
 }
 
 document.getElementById('backBtn').addEventListener('click', goToMenu);
-document.getElementById('inspectBackBtn').addEventListener('click', goToMenu);
+document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDebug);
+document.getElementById('debugBtn').addEventListener('click', () => {
+  location.hash = 'debug:' + Runtime.getCurrentFragment();
+});
+document.getElementById('newCartBtn').addEventListener('click', () => {
+  Runtime.stopGame();
+  Inspector.startNewCart();
+});
 document.getElementById('inspectForm').addEventListener('submit', e => {
   e.preventDefault();
   const payload = Inspector.extractPayloadFromInput(document.getElementById('inspectInput').value);
   if(!payload) return;
-  location.hash = 'inspect:' + payload;
+  location.hash = payload; // just play it — boot()'s normal routing (+ its Debug fallback) takes it from there
 });
 window.addEventListener('hashchange', boot);
 
@@ -75,11 +108,15 @@ window.addEventListener('hashchange', boot);
 // stable contract for cart authors.
 window.__urlcadeDebug = {
   CARTS, World: Runtime.World, getWorld: Runtime.getWorld, isUsingGL: Runtime.isUsingGL,
+  getCurrentFragment: Runtime.getCurrentFragment, pauseGame: Runtime.pauseGame, resumeGame: Runtime.resumeGame,
   forceRender: (a) => Runtime.render(a === undefined ? 1 : a),
-  startInspect: Inspector.startInspect, extractPayloadFromInput: Inspector.extractPayloadFromInput,
+  startInspect: Inspector.startInspect, startNewCart: Inspector.startNewCart,
+  extractPayloadFromInput: Inspector.extractPayloadFromInput,
   getInspectWorld: Inspector.getInspectWorld, getInspectCartInfo: Inspector.getInspectCartInfo,
+  getCompileState: Inspector.getCompileState,
   decodeCart: K.decodeCart, encodeCart: K.encodeCart, b64urlEncode: K.b64urlEncode, b64urlDecode: K.b64urlDecode,
   disassembleHook: K.disassembleHook, buildCFG: K.buildCFG, formatDisassembly: K.formatDisassembly, renderCFGSvg: K.renderCFGSvg,
+  compileCartSource: K.compileCartSource,
   encodePayload: K.encodePayload, decodePayloadToBytes: K.decodePayloadToBytes,
   deflateRawCompress: K.deflateRawCompress, deflateRawDecompress: K.deflateRawDecompress,
   hasCompression: () => K.HAS_COMPRESSION,

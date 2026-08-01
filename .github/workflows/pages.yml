@@ -3,8 +3,7 @@ name: Deploy Pages
 # Publishes the player runtime (kernel.js + color-utils.js + runtime.js +
 # inspector.js + main.js + carts/*.js + index.html — a module split, no
 # bundler, no build step: just <script src>/<script type=module> tags) as
-# the site root, the /compile self-serve authoring+decompiler tool under
-# /compile/, and a game-authoring API reference under /spec/ (agent-
+# the site root, and a game-authoring API reference under /spec/ (agent-
 # fetchable as-is, no rendering required) plus a spec/index.html for human
 # browsing. Deliberately does NOT publish DESIGN.md, v0/README.md, or the
 # early worked examples — those are project history, kept in the repo for
@@ -12,15 +11,16 @@ name: Deploy Pages
 # spec/index.html's own comment for why raw .md is the primary format for
 # what does get published.
 #
-# v0/*'s runtime files are copied flat to the site root (not under /v0/)
-# so every fragment link ever shared against this site (`#z.<payload>` at
-# the root) keeps working — that's the one URL shape this repo has always
-# guaranteed stays stable. /compile's own HTML references its sibling
-# runtime files with paths relative to itself (`../kernel.js`,
-# `../index.html`, ...), not root-absolute ones (`/kernel.js`) — the site
-# is also published from a subpath on at least one custom domain, where a
-# root-absolute path resolves to the wrong place entirely and silently
-# fails to load `window.UrlcadeKernel`. See /compile's own source.
+# Play, Debug (the Cart Inspector, plus Source/Compile tabs for editing
+# and recompiling a cart live), and "+ New Cart" all live on this one
+# page now — there used to be a separate /compile page, folded in once it
+# became clear "look at this cart's guts" and "edit this cart's guts"
+# never needed to be different pages (DESIGN.md §30). All paths in
+# index.html are relative to itself, not root-absolute (`/kernel.js`) —
+# this site is also published from a subpath on at least one custom
+# domain, where a root-absolute path resolves to the wrong place
+# entirely and silently fails to load `window.UrlcadeKernel` (found the
+# hard way once already, see DESIGN.md §29's postscript).
 
 on:
   push:
