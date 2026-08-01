@@ -2275,7 +2275,66 @@ behavioral check: a real Playwright-simulated drag on the plant cart,
 asserting `g_water` actually increased afterward, not just "nothing
 threw").
 
-## 37. Open questions
+## 37. Mini Golf — a genre with zero new kernel surface
+
+Notable mostly for what it *didn't* need. Unlike the two previous
+rounds (§34's name/author envelope + shelf, §36's pointer input +
+immediate-mode drawing), Mini Golf shipped with no kernel.js changes
+at all — every mechanic the request asked for (a tile-map course, a
+hole, angle/power timing, a flag) turned out to already be expressible
+as composition of existing primitives, aimed at a different genre than
+whichever one first motivated them:
+
+- **The course** is the track generator (`mapGenerator: 1`) — the same
+  turtle-grammar walk the racer uses for a road, reused unchanged for a
+  fairway. `TILE_ROAD` is the fairway, the walk's own stamped edge
+  cells (`TILE_RUMBLE`) are the rough, everything the walk never
+  touched (`MAP_EDGE_TILE`) is out-of-bounds — three friction tiers for
+  free, no new tile-surface concept needed.
+- **The hole** is a `CHECKPOINT` token at the end of the token list.
+  The tee is the walk's own `START_FINISH` token (checkpoint 0). Both
+  read once at `on_init` via `GET_CHECKPOINT` — the same opcode the
+  racer uses for lap checkpoints and the cave crawler uses for player
+  start/stairs placement, doing double duty as "arbitrary named point
+  on the map" for a third, unrelated genre.
+- **The flag** is an ordinary static `renderKind: 0` sprite (a pole +
+  banner built from two `SHAPE_RECT`s) at the hole's checkpoint
+  position — nothing about it needed the just-shipped immediate-mode
+  drawing; not every visual needs to be procedural.
+- **Angle/power timing** is the existing `aimLine` cart field
+  (§21) — built for and until now only used by the destruction genre —
+  plus a small state machine in `on_input`: aim (steer with
+  left/right), press to start a power value ping-ponging between 0 and
+  `MAX_POWER` every frame (arithmetic composed from `ADD`/`CMPLE`/
+  `CMPGE`, no new opcode), press again to lock whatever it's at and
+  launch, using the exact `cos(angle)*power, -sin(angle)*power`
+  convention `aimLine`'s own doc comment already specifies. A real
+  two-press timing swing, not a hold-to-charge meter — matches how the
+  request was actually phrased ("angle and power timing").
+- **Rolling physics** (integrate position, apply friction read off
+  `GETTILE`+`TILE_SURFACE`, zero out on stop) is line-for-line the
+  racer's own `on_tick` pattern, renamed. The "has the ball stopped"
+  check reuses `DIST` in a way it wasn't obviously designed for —
+  `DIST(0, 0, vel_x, vel_y)` computes speed as a distance from the
+  origin, avoiding the need for a dedicated vector-magnitude opcode.
+
+One real correctness gap did turn up during headless verification
+(the same "exercise the hand-assembled hooks under Node before ever
+opening a browser" step §36's plant cart established): after sinking
+the putt, nothing reset `g_swing_state` away from 2 (only the
+"missed" branch did), so `on_tick` kept re-running its now-pointless
+stopped-ball check forever — harmless in practice (`on_input` already
+gates all input processing on `g_won` first, so nothing downstream of
+the stuck state was ever reachable again), but wasteful and worth a
+one-line guard (`LOADG g_won; JNZ tick_end` at the top of `on_tick`)
+for the same reason every other cart gates its update hooks on a
+game-over flag. Caught by simulating a full multi-shot playthrough
+(`runHook` driven by a scripted "aim at target, charge, release, roll
+out" loop, not just a single swing) headlessly before wiring the cart
+into the site at all — a single swing wouldn't have surfaced it, since
+the stuck state only matters *after* a win.
+
+## 38. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
