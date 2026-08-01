@@ -127,7 +127,7 @@ window.addEventListener('unhandledrejection', e => console.error('Unhandled reje
 (async () => {
   try{
     await registerAllCarts();
-    Runtime.renderMenu();
+    await Runtime.renderMenu();
     await boot();
     Runtime.startLoop();
   } catch(err){
@@ -153,6 +153,7 @@ window.__urlcadeDebug = {
   decodeCart: K.decodeCart, encodeCart: K.encodeCart, b64urlEncode: K.b64urlEncode, b64urlDecode: K.b64urlDecode,
   disassembleHook: K.disassembleHook, buildCFG: K.buildCFG, formatDisassembly: K.formatDisassembly, renderCFGSvg: K.renderCFGSvg,
   compileCartSource: K.compileCartSource,
+  encodeCartUrl: K.encodeCartUrl, decodeCartUrl: K.decodeCartUrl,
   encodePayload: K.encodePayload, decodePayloadToBytes: K.decodePayloadToBytes,
   deflateRawCompress: K.deflateRawCompress, deflateRawDecompress: K.deflateRawDecompress,
   hasCompression: () => K.HAS_COMPRESSION,

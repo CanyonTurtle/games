@@ -474,6 +474,7 @@ function buildRoguelikeCart(){
 
   const cart = {
     formatVersion: 1,
+    name: 'Cave Crawler', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 3, // advisory label only — see DESIGN.md §14
     paletteMode: 0, // curated bank #1 ("dungeon") — not the procedural
                      // hue-rotation mode; see CURATED_BANK's comment for why

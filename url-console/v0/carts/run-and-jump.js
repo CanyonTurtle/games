@@ -422,6 +422,7 @@ function buildPlatformerCart(){
 
   const cart = {
     formatVersion: 1,
+    name: 'Run & Jump', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 4, // advisory label only — see DESIGN.md §14
     paletteMode: 1,
     paletteParams: [205, 0, 25, 55, 35, 75, 150, 0],

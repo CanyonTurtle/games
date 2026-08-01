@@ -17,27 +17,44 @@ disagree, `kernel.js` is right.
 [the live runtime](https://canyonturtle.github.io/games/) and click
 **+ New Cart**, or **Debug** from any playing game. Paste the object
 below (with your own hooks) into its Source tab — it compiles
-automatically and the Compile tab shows a specific, line-numbered error
-the moment something's wrong (an unknown opcode, a missing operand, a
-malformed field), or a working Play link the moment it isn't. This
-works standalone too, from Node or any script, via
-`K.compileCartSource(source)` (below) — Source/Compile are a thin UI
-over exactly that function, nothing more.
+automatically and the compile status block at the top of that same tab
+shows a specific, line-numbered error the moment something's wrong (an
+unknown opcode, a missing operand, a malformed field), or a working
+Play link the moment it isn't. This works standalone too, from Node or
+any script, via `K.compileCartSource(source)` (below) — the Source
+tab's status block is a thin UI over exactly that function, nothing more.
 
 ## The pipeline
 
 ```
-cart object (JS)  --encodeCart-->  bytes  --encodePayload-->  URL fragment
-     ^                                                              |
-     +-------------------- decodeCart <-- decodePayloadToBytes -----+
+cart object (JS)  --encodeCart-->  bytes  --encodePayload-->  payload
+     ^                                                            |
+     +------------------ decodeCart <-- decodePayloadToBytes -----+
+
+payload  --encodeCartUrl(name, author)-->  URL fragment
+   ^                                             |
+   +-------------- decodeCartUrl ----------------+
 ```
 
 ```js
 const K = require('./kernel.js');
-const bytes = K.encodeCart(myCart);          // -> Uint8Array
-const fragment = await K.encodePayload(bytes); // -> "z.<base64url>" or "r.<base64url>"
+const bytes = K.encodeCart(myCart);            // -> Uint8Array
+const payload = await K.encodePayload(bytes);  // -> "z.<base64url>" or "r.<base64url>"
+const fragment = K.encodeCartUrl('My Game', 'Ada', payload); // -> "My%20Game,Ada,z.<base64url>"
 // url: https://your-host/#<fragment>
 ```
+
+`name`/`author` are plain, individually `encodeURIComponent`-encoded
+text — not part of the binary cart at all, and never base64'd. Base64
+buys no real compression on a short human-readable string, and leaving
+them as readable text means a shared link's game name is visible in
+the address bar without decoding anything. `encodeCartUrl` omits the
+prefix entirely when both are empty, so it's fully backward-compatible
+with a bare `z./r.` fragment from before this existed — `decodeCartUrl`
+reads either shape, giving back `{name: '', author: '', payload}` for
+the older, unprefixed kind. A comma is the (unambiguous) split point:
+base64url's own alphabet never contains one, and `encodeURIComponent`
+escapes any comma that shows up inside a name/author itself.
 
 Paste that fragment (with or without a leading `#`) into the live
 runtime's menu page "paste a cart link" box to play it, or set it as
@@ -50,13 +67,17 @@ inspect or edit it. There's no separate "compile" step beyond calling
 (`Uint8Array`) — `encodeCart` doesn't assemble source itself. If you'd
 rather write `hooks.on_init` etc. as plain arrays of assembly-source
 lines (like every example cart under `carts/*.js` does) and let one
-call handle assembling every hook, encoding, and round-trip-validating
-the result, use `K.compileCartSource(source)` instead of calling
-`assemble`/`encodeCart` yourself:
+call handle assembling every hook, encoding, round-trip-validating the
+result, and building the final fragment (name/author included), use
+`K.compileCartSource(source)` instead of calling
+`assemble`/`encodeCart`/`encodePayload`/`encodeCartUrl` yourself. It's
+`async` (it ends in `encodePayload`, which needs `CompressionStream`'s
+async API):
 
 ```js
-const { cart, bytes } = K.compileCartSource({
+const { cart, bytes, fragment, name, author } = await K.compileCartSource({
   ...myCartFieldsAbove,
+  name: 'My Game', author: 'Ada',   // optional — see the URL envelope above; never reach the binary format
   constNames: { GRAVITY: 0 },       // optional: name -> constants[] index, for PUSHC
   globalNames: { g_player: 0 },     // optional: name -> global slot, for LOADG/STOREG/LOADE/STOREE
   hooks: {
@@ -66,13 +87,14 @@ const { cart, bytes } = K.compileCartSource({
 });
 ```
 Errors from `compileCartSource` always name which hook and which
-source line is wrong — this is what the Debug view's Compile tab calls
-under the hood.
+source line is wrong — this is what the Debug view's Source tab calls
+under the hood, on every edit.
 
 ## Cart object shape
 
 ```js
 {
+  name: '', author: '',    // optional — URL envelope only (see The pipeline above), never reach the binary format
   formatVersion: 1,        // bump only on a breaking binary-layout change
   cartType: 0,              // advisory label only (see "cartType" below) — never dispatched on
   paletteMode: 0,           // 0 = curated bank, 1 = procedural harmony (see Palette)
@@ -132,7 +154,7 @@ menu, not a format decision.
   the first (player/target color, an accent UI element, etc).
   **`accentOffset` is stored as an unsigned byte (0-255)** — there is no
   way to express a negative hue shift; only positive offsets from
-  `baseHue` are reachable. Render the palette (the Inspector's Palette
+  `baseHue` are reachable. Render the palette (the Debug view's Assets
   tab, or `generatePalette(cart)` directly) before committing to a hue
   — a chosen offset can land somewhere unexpected.
 
@@ -434,13 +456,14 @@ pattern is used by every shipped cart with destructible entities.
 
 - **[The live runtime](https://canyonturtle.github.io/games/)**: click
   **+ New Cart** (or **Debug** from any playing game) and paste/edit a
-  cart source object in the Source tab — the Compile tab shows a
-  specific error, or byte/fragment size info and a "Play this version"
-  button, automatically as you type. No copy-pasting between a script
-  and the runtime, and every other tab (palette, sprites, tiles, map,
-  entities, a disassembly + control-flow graph of every hook) updates
-  live off the same edit — including cart_type/mapGenerator/hook
-  combinations this guide didn't spell out.
+  cart source object in the Source tab — the compile status block above
+  the textarea shows a specific error, or byte/fragment size info and a
+  "Play this version" button, automatically as you type. No
+  copy-pasting between a script and the runtime, and the Assets tab
+  (palette, sprites, tiles) and Logic tab (overview, map, entities, a
+  disassembly + control-flow graph of every hook) both update live off
+  the same edit — including cart_type/mapGenerator/hook combinations
+  this guide didn't spell out.
 - **`fixtures.md`**: known-good cart → bytes → fragment examples,
   including one that runs a real hook through `runHook` and shows the
   resulting globals — check any of the above against these without

@@ -86,13 +86,16 @@
     <h2>Play it, debug it, compile it</h2>
     <ul>
       <li><a href="../">The live runtime</a>
-        <p>The shelf lists five playable cartridges; any validly-encoded cart
-        fragment plays at <code>/#&lt;fragment&gt;</code>, not only those five.
-        From any playing game, <b>Debug</b> decodes and visualizes it (palette,
-        sprites, tiles, map, entities, disassembled hooks) across several tabs,
-        plus <b>Source</b> (the cart as an editable object, recompiling as you
-        type) and <b>Compile</b> (a specific error, or a "Play this version"
-        link) &mdash; a real authoring loop, not just a viewer. <b>+ New Cart</b>
+        <p>The shelf auto-generates a card (thumbnail, name, author) for each
+        of five playable cartridges purely by decoding its own URL fragment;
+        any validly-encoded cart fragment plays at <code>/#&lt;fragment&gt;</code>,
+        not only those five. From any playing game, <b>Debug</b> has three
+        tabs: <b>Assets</b> (palette, sprites, tiles), <b>Logic</b> (overview,
+        map, entities, disassembled hooks), and <b>Source</b> (the cart as an
+        editable object including <code>name</code>/<code>author</code>,
+        recompiling as you type, with its compile status &mdash; a specific
+        error, or a "Play this version" link &mdash; right at the top)
+        &mdash; a real authoring loop, not just a viewer. <b>+ New Cart</b>
         on the shelf opens Debug on a small starter cart to edit from scratch.</p></li>
     </ul>
   </section>
