@@ -2164,7 +2164,118 @@ case bolted on: the shelf is a list of fragments, and a fragment earns
 its place by decoding and playing, regardless of which agent, human, or
 codebase produced it.
 
-## 36. Open questions
+## 36. Pointer input and immediate-mode drawing — a breaking format bump to 2
+
+Two new, general-purpose kernel primitives, both needed by a single new
+request: a cart where you drag on the canvas to water a procedurally
+drawn, growing plant. Building it properly meant deciding how far to
+take "immediate mode" as a real platform feature rather than one-off
+plumbing for a single game — see the design discussion this section's
+own commit history preserves for the tradeoffs considered (a per-frame
+`on_draw` hook + a small opcode set vs. a heavier alternative touching
+both render backends more invasively) before landing on the shape below.
+
+**Pointer input.** A cart sets `inputWantsPointer: true` (one new u8 in
+the binary header, next to `inputActiveButtons`/`inputTouchTemplate`)
+and reads `LOAD_POINTER_X`/`LOAD_POINTER_Y`/`LOAD_POINTER_DOWN` — three
+no-operand opcodes, available in any hook — the continuous counterpart
+to `LOAD_INPUT`'s discrete bitmask. Safe to read even when the cart
+never declared the flag (reads 0, same "always readable, cart declares
+intent" shape buttons already have). `runtime.js` tracks real pointer
+position in cart-pixel space via a small coordinate transform
+(`pointerToCartCoords`) that undoes the canvas's CSS scaling/letterboxing
+(`object-fit: contain` means the displayed size and the native
+`cart.screenW`×`screenH` buffer size are almost never equal) — copied
+onto `world.pointerX/Y/Down` once per `loop()` iteration, exactly
+mirroring how `buttonMaskFromKeys()` already feeds `world.input` there,
+so every hook in a given tick sees one stable value for the whole tick
+it runs in rather than whatever the pointer happened to be mid-event.
+
+**Immediate-mode drawing.** A sixth hook, `on_draw`, paired with a
+third `entityTypes[i].renderKind` value (`2`, alongside the existing
+`0` sprite-blit and `1` tile-column kinds). Where every other hook runs
+on the fixed-timestep simulation clock, `on_draw` runs once per
+`renderKind:2` entity *per rendered frame* — presentation-only, like
+the existing `ilerp`/`ilerpAngle` interpolation between ticks, and
+opted into per entity *type*, not globally, so the overwhelming
+majority of a cast can stay cheap baked sprites and only the entities
+that actually need custom art pay for it. The one opcode today is
+`DRAW_LINE`: pop `color, y2, x2, y1, x1` (pushed in that order, `color`
+on top — same convention as `SETTILE`'s `x, y, tileId`) and hand them to
+a `ctx.drawLine` callback the caller supplies — kernel.js itself stays
+completely rendering-agnostic, same as every other opcode that reaches
+out through `ctx` (`playSound`, `setTile`, ...). Coordinates are
+entity-local pixels; the renderer translates to the entity's own
+position before running the hook, so `on_draw` never needs to know
+about the camera or even read its own position back out.
+
+`World` gained a `drawCmds` scratch array and `runDrawHook(entity)`
+(clears it, runs the hook with `self` bound, returns it) — called from
+`drawEntityCanvas`/`drawEntityGL`'s new `renderKind === 2` branch, and
+from the shelf's `buildCardThumbnail` (so a `renderKind:2` entity's
+first frame shows up in its shelf card thumbnail exactly like any
+sprite-based entity's does, no special case needed there beyond the one
+branch). The **GL implementation turned out cheaper than expected**: a
+line is just a degenerate rotated rectangle — center at the segment's
+midpoint, width = its length, height a fixed thin stroke, rotation =
+its own angle — so it reuses `glDrawColorQuad` exactly as-is (`glDrawLine`
+is just the trigonometry to compute those four numbers from two
+endpoints). No second shader, no new vertex buffer, no separate
+immediate-mode render path to keep in sync with the textured-quad one;
+Canvas2D's side is the expected `moveTo`/`lineTo`/`stroke`.
+
+**The breaking part.** `on_draw` is a genuine binary-layout change — a
+sixth entry in `HOOK_NAMES`, which both `encodeCart`/`decodeCart` and
+`compileCartSource` already iterate generically, so the format itself
+picked it up for free, but it means every existing `formatVersion:1`
+fragment has a different byte layout now. Per an explicit "we're still
+pre-v1, breaking is fine" call: `SUPPORTED_FORMAT_VERSIONS` dropped 1
+entirely rather than gaining a compatibility branch for it —
+`formatVersion:1` fragments now fail **loudly**, with kernel.js's own
+existing "unsupported format_version" error, rather than silently
+misparsing. All five original example carts and the Debug view's
+`STARTER_TEMPLATE` got bumped to `formatVersion: 2` in the same pass.
+
+**Breakout, vendored a second time.** §35's Breakout cart was still a
+`formatVersion:1` fragment — reachable via `EXTERNAL_CARTS` — so it
+broke the instant `SUPPORTED_FORMAT_VERSIONS` changed. Rather than
+lose it again, it got decompiled *before* touching the format (kernel.js's
+own `formatDisassembly`, run against its original bytes while the old
+kernel could still decode them) and checked in as `carts/breakout.js` —
+a real local example now, compiled through the normal `registerCart()`
+path like everything else, `formatVersion:2` included. `EXTERNAL_CARTS`
+is empty again, but the mechanism itself stays — this is now the second
+time it's proven useful to have a path for "a fragment nobody in this
+repo wrote," and the decompile-recompile round-trip is exactly what
+AUTHORING.md already documented as always valid, just used here to
+carry a cart across a breaking format change instead of to inspect one.
+
+**Water the Plant** (`carts/plant.js`) is the new cart both primitives
+exist for: dragging anywhere on the canvas spawns falling water-drop
+entities (an ordinary `renderKind:0` sprite) at the pointer's current x;
+a drop crossing a fixed soil-line y increments a `g_water` global and
+kills itself in its own `on_tick` — no `on_collide` needed at all for
+the mechanic. The plant itself is a single `renderKind:2` entity whose
+`on_draw` hook computes a stem height purely from `g_water` (clamped,
+stashed in an ext field via `STORE_SELF`/`LOAD_SELF` exactly like any
+other per-entity scratch value — `on_draw` isn't a different kind of
+hook, just one that happens to run on a different clock) and draws a
+stem, two side branches past one water threshold, and a small bloom
+past a second — genuinely continuous growth, not a handful of
+pre-drawn growth-stage sprites swapped by index. Before wiring it into
+the site at all, the whole hand-written hook set (drag-throttling in
+`on_input`, fall/absorb in `on_tick`, the branching draw logic in
+`on_draw`) was exercised headlessly under Node — no browser, no
+`World` — by driving `runHook` directly against a scripted sequence of
+simulated ticks and pointer states and inspecting the resulting
+`drawCmds` at several water levels, catching stack-discipline mistakes
+in the hand-assembled `DRAW_LINE` argument order before they could ever
+reach `test/smoke.js`'s Chromium pass (which then added its own
+behavioral check: a real Playwright-simulated drag on the plant cart,
+asserting `g_water` actually increased afterward, not just "nothing
+threw").
+
+## 37. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

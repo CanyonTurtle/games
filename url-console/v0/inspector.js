@@ -468,7 +468,7 @@ async function compileSourceText(){
 // through encode→decode too, consistent with every other path into this
 // view — no separate "nothing decoded yet" state to maintain).
 const STARTER_TEMPLATE = {
-  formatVersion: 1, cartType: 63, paletteMode: 0, paletteParams: [0,0,0,0,0,0,0,0],
+  formatVersion: 2, cartType: 63, paletteMode: 0, paletteParams: [0,0,0,0,0,0,0,0],
   rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
   backdropFillIndex: 8, backdropGroundHeight: 0, backdropGroundIndex: 0,
   inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {},

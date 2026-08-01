@@ -421,7 +421,7 @@ function buildPlatformerCart(){
   const screenW = 160, screenH = 160; // square, matches every other cart — see DESIGN.md §18
 
   const cart = {
-    formatVersion: 1,
+    formatVersion: 2,
     name: 'Run & Jump', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 4, // advisory label only — see DESIGN.md §14
     paletteMode: 1,
