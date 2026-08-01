@@ -916,7 +916,7 @@ function buildCastleCrusherCart(){
   const levelWpx = gridW*8, levelHpx = platform.gridH*8;
 
   const cart = {
-    formatVersion: 1,
+    formatVersion: 2,
     name: 'Castle Crusher', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 5,
     paletteMode: 1,

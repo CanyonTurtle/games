@@ -25,6 +25,8 @@ import { buildRacerCart } from './race-car.js';
 import { buildRoguelikeCart } from './cave-crawler.js';
 import { buildPlatformerCart } from './run-and-jump.js';
 import { buildCastleCrusherCart } from './castle-crusher.js';
+import { buildBreakoutCart } from './breakout.js';
+import { buildPlantCart } from './plant.js';
 
 const CARTS = {};
 
@@ -34,16 +36,16 @@ async function registerCart(key, builder){
 }
 
 // Externally-authored carts — already-compiled fragments this repo has no
-// source object for (built elsewhere, e.g. by another agent working purely
-// from AUTHORING.md against the live site, not from this codebase), rather
-// than a local carts/*.js builder run through compileCartSource. Registered
-// the same way either path ends up: a {fragment, name, author} CARTS entry
-// that renderMenu() decodes itself to build a card — a fragment doesn't need
-// a builder function checked into this repo to be shelf-worthy, only to
-// decode (see this file's own header, and DESIGN.md §34).
-const EXTERNAL_CARTS = [
-  ['breakout', 'Breakout,Claude,z.VVHNbtNAEP5m1j9rJ22ciDht0tjrS-DQqlEQQhwQKZHgQgqCA-0xqtw2UmmoCUi99QGQQOIEB8ijIM7lDTjwEpxh1ikSrDUz33w7M56ZJSLCQr4fqD3Qt9_CHsXOo_xw7j6dHh3PFcDAb7jPDmZFTnCss_Fw8iI3j9_khdkyRX5Y5K-OzXwmcF6cE1wbY_Znr83z6Wn2f8jLk8m5mRxNpqcNYDgEro2Aix0RwYv78rfR98vLe58-rn9dcma0lIVgSJwRWVzJcOfdt193pUUYDRC0tt02NBQZzST8cIWi6GdUI60JxnS7NWqUN--HnnAX_XKev-cLekjBATGCTEpRBupRSuxkBHYzIvYyYvYzUlIjtYXSEjlWuVZ5iceVeuszrOMnPlfrrQ8QW9O84qVariPNq14a9DgNE52FSIIstA-RhW6ixHqpSvzS-s0nSLwSes0RBgUSp3WGxBVlZKCyHzFkSAkSA9ar8U3RJc8VadeSAWs_ineX4N8rsvEHZbwtIqSyZBjFZ5D_ps5gC2uOLKQab2LNThi1NnE9YQqlKS779VWqhLTh7mDXtji2LY7R30a8DmMfxZd99rcpvrF0PXEt4NX4jmjxmuOSCGS7UTxeAqEH-2jb5VY7jtSvNuJb6NiNR_GegEpXddCGz3Xd5Tax8mW8LjX3bBKVSWyTJNa9ShLTdduqsqEGfwA'],
-];
+// source object for at all (built elsewhere, e.g. by another agent working
+// purely from AUTHORING.md against the live site, never touching this
+// codebase), registered directly rather than run through a local builder +
+// compileCartSource. Same {fragment, name, author} CARTS shape either way —
+// renderMenu() decodes every card from its fragment regardless of which
+// path produced it (see this file's own header, DESIGN.md §34). Empty for
+// now: the one cart that arrived this way (Breakout) got vendored as real
+// local source (breakout.js) once the binary format changed under it —
+// DESIGN.md §36 — but the mechanism stays here for the next one.
+const EXTERNAL_CARTS = [];
 
 function registerExternalCart(key, fragment){
   const { name, author } = decodeCartUrl(fragment);
@@ -56,6 +58,8 @@ async function registerAllCarts(){
   await registerCart('roguelike', buildRoguelikeCart);
   await registerCart('platformer', buildPlatformerCart);
   await registerCart('castle', buildCastleCrusherCart);
+  await registerCart('breakout', buildBreakoutCart);
+  await registerCart('plant', buildPlantCart);
   for(const [key, fragment] of EXTERNAL_CARTS) registerExternalCart(key, fragment);
 }
 

@@ -67,7 +67,9 @@
     <ul>
       <li><a href="AUTHORING.md">AUTHORING.md</a>
         <p>How to build a cart: the object shape, every field's meaning,
-        the opcode table, the hook lifecycle, the map generators. Start here.</p></li>
+        the opcode table, the hook lifecycle (including <code>on_draw</code>,
+        for entities that draw themselves fresh every frame), pointer/drag
+        input, the map generators. Start here.</p></li>
       <li><a href="kernel.js">kernel.js</a>
         <p>The actual <code>encodeCart</code>/<code>decodeCart</code>/opcode table/
         assembler/VM/compression/disassembler &mdash; one dependency-free file,

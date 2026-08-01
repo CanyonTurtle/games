@@ -50,6 +50,8 @@ class World {
     this.globals = new Array(24).fill(0); // room to grow past the original 16 — LOADG/STOREG operands are already u8 (0-255), this was always just an array-size choice, not a format limit
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
     this.input = 0;
+    this.pointerX = 0; this.pointerY = 0; this.pointerDown = 0; // set once/frame by loop(), see LOAD_POINTER_* below
+    this.drawCmds = []; // scratch, cleared and refilled by runDrawHook() each render call — see DRAW_LINE
     this.cartFault = false;
     this.cameraX = 0; this.cameraY = 0; // recomputed every render() via updateCamera()
     this.palette = generatePalette(cart);
@@ -105,13 +107,18 @@ class World {
       getCheckpoint: i => (self_.map && self_.map.checkpoints[i]) || {x:0,y:0},
       rng: () => self_.rng(),
       playSound: id => self_.playSound(id),
+      // DRAW_LINE's sink — only ever populated during a runDrawHook() call
+      // (renderKind:2 entities, at render time), but harmless to have here
+      // unconditionally: every other hook's bytecode simply never contains
+      // a DRAW_LINE instruction, so this never gets called from them.
+      drawLine: (x1,y1,x2,y2,color) => self_.drawCmds.push({x1,y1,x2,y2,color}),
     };
     // Reused across every hook call this session (self/a/b/input mutated in
     // place instead of Object.assign-ing a fresh object + copying the ~10
     // unchanging ctxBase fields every single invocation — up to ~7 hook
     // calls/tick * 60 ticks/sec). Safe because runHook only ever reads ctx
     // synchronously and never retains a reference past the call.
-    this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, input:0});
+    this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, input:0, pointerX:0, pointerY:0, pointerDown:0});
     this.runGlobalHook('on_init');
   }
   buildBitmap(asset, palette, transparent){
@@ -146,19 +153,38 @@ class World {
     const bc = this.cart.hooks[name];
     const ctx = this.ctxScratch;
     ctx.self = null; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
     return runHook(bc, ctx);
   }
   runEntityHook(name, entity){
     const bc = this.cart.hooks[name];
     const ctx = this.ctxScratch;
     ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
     return runHook(bc, ctx);
   }
   runCollideHook(a,b){
     const bc = this.cart.hooks['on_collide'];
     const ctx = this.ctxScratch;
     ctx.self = null; ctx.a = a; ctx.b = b; ctx.input = this.input;
+    ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
     return runHook(bc, ctx);
+  }
+  // Render-time, not tick-time (see HOOK_NAMES's own comment in kernel.js)
+  // — called once per renderKind:2 entity per drawn frame, immediately
+  // before the renderer consumes whatever it pushed into drawCmds via
+  // DRAW_LINE. Presentation-only, like ilerp: nothing stops a cart from
+  // writing to globals/props from on_draw, but doing so makes the
+  // simulation's determinism depend on the display's actual frame rate —
+  // AUTHORING.md flags this as a footgun, not something enforced here.
+  runDrawHook(entity){
+    this.drawCmds.length = 0;
+    const bc = this.cart.hooks.on_draw;
+    const ctx = this.ctxScratch;
+    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
+    runHook(bc, ctx);
+    return this.drawCmds;
   }
   getTileAt(x,y){
     if(!this.map) return -1;
@@ -519,6 +545,37 @@ function setupTouchControls(cart){
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 })();
 
+/* Pointer input (DESIGN.md §36) — raw analog position/held-state for carts
+   that declare inputWantsPointer, read via LOAD_POINTER_X/Y/DOWN in any
+   hook. Tracked unconditionally (cheap, and every cart's canvas already
+   gets pointer events for the tap gesture above) — module-scope, same
+   pattern as keysDown/touchBits, copied onto world.pointerX/Y/Down once
+   per loop() iteration rather than written directly from the event
+   handler, so a hook always sees a value stable for the whole tick it
+   runs in, the same guarantee buttonMaskFromKeys() already gives inputs. */
+let pointerX = 0, pointerY = 0, pointerDown = 0;
+// Canvas is CSS-scaled (object-fit:contain, letterboxed on a mismatched
+// aspect — see #screen's own CSS) while its pixel buffer stays at the
+// cart's native resolution; a raw clientX/Y needs both the letterbox
+// offset and the uniform scale factor removed to land in cart-pixel space.
+function pointerToCartCoords(e){
+  const rect = canvas.getBoundingClientRect();
+  const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
+  const dispW = canvas.width * scale, dispH = canvas.height * scale;
+  const offX = rect.left + (rect.width - dispW) / 2, offY = rect.top + (rect.height - dispH) / 2;
+  return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale };
+}
+(function wirePointerTracking(){
+  const move = e => { const p = pointerToCartCoords(e); pointerX = p.x; pointerY = p.y; };
+  const down = e => { move(e); pointerDown = 1; };
+  const up = () => { pointerDown = 0; };
+  canvas.addEventListener('pointerdown', down, {passive:true});
+  canvas.addEventListener('pointermove', move, {passive:true});
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('pointerleave', up);
+})();
+
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 
 // Auto-derived, not a manual per-cart index (DESIGN.md §34): scans every
@@ -575,6 +632,8 @@ function buildCardThumbnail(cart){
         const isCapRow = capAtTop ? row===0 : row===extent-1;
         c.drawImage(isCapRow?capCanvas:bodyCanvas, e.props[0], e.props[1]+row*8);
       }
+    } else if(type.renderKind === 2){ // custom draw — same on_draw path the live renderer uses
+      strokeDrawCmds(c, e.props[0], e.props[1], w.palette, w.runDrawHook(e));
     } else {
       const spr = w.spriteCanvases[type.assetIndex];
       c.drawImage(spr, e.props[0]-spr.width/2, e.props[1]-spr.height/2);
@@ -737,6 +796,26 @@ function updateCamera(alpha){
   world.cameraY = Math.max(cam.clampMinY, Math.min(cam.clampMaxY, y));
 }
 
+// Shared by the live Canvas2D renderer (drawEntityCanvas, below) and the
+// shelf's static thumbnail renderer (buildCardThumbnail, above) — both
+// paint a World's drawCmds the same way, just at different (x,y) origins
+// and against different <canvas> targets. Coordinates in cmds are
+// entity-local (see kernel.js's DRAW_LINE comment); translating to (x,y)
+// first is what makes on_draw's own bytecode never need to know about the
+// camera or even its own position.
+function strokeDrawCmds(targetCtx, x, y, palette, cmds){
+  targetCtx.save();
+  targetCtx.translate(x, y);
+  for(const cmd of cmds){
+    targetCtx.strokeStyle = palette[cmd.color] || '#fff';
+    targetCtx.beginPath();
+    targetCtx.moveTo(cmd.x1, cmd.y1);
+    targetCtx.lineTo(cmd.x2, cmd.y2);
+    targetCtx.stroke();
+  }
+  targetCtx.restore();
+}
+
 function drawEntityCanvas(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
   const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
@@ -749,6 +828,8 @@ function drawEntityCanvas(e, alpha){
       const isCapRow = capAtTop ? row===0 : row===extent-1;
       ctx2d.drawImage(isCapRow?capCanvas:bodyCanvas, x, y+row*8);
     }
+  } else if(type.renderKind === 2){ // custom draw — runs on_draw, then paints whatever it emitted
+    strokeDrawCmds(ctx2d, x, y, world.palette, world.runDrawHook(e));
   } else {
     const spr = world.spriteCanvases[type.assetIndex];
     if(type.rotateFlag){
@@ -861,6 +942,23 @@ function renderSceneGL(alpha){
   }
 }
 
+// A line is a degenerate rotated rect: reuses glDrawColorQuad exactly
+// (center = the segment's midpoint, width = its length, height = a fixed
+// thin stroke, rotation = its own angle) instead of a second shader/buffer
+// just for immediate-mode drawing. glDrawColorQuad's (x,y) is the quad's
+// top-left *before* rotation — since rotation happens about the center
+// regardless (see initGL()'s vertex shader), top-left = center - (w,h)/2
+// is all that's needed to land the quad centered on the line's midpoint.
+const DRAW_LINE_THICKNESS_PX = 1.4;
+function glDrawLine(x, y, palette, cmd){
+  const dx = cmd.x2 - cmd.x1, dy = cmd.y2 - cmd.y1;
+  const length = Math.max(0.75, Math.hypot(dx, dy)); // floor avoids a degenerate zero-length quad for a dot-like "line"
+  const rot = Math.atan2(dy, dx);
+  const mx = x + (cmd.x1 + cmd.x2) / 2, my = y + (cmd.y1 + cmd.y2) / 2;
+  const [r,g,b] = cssColorToRGB(palette[cmd.color] || '#fff');
+  glDrawColorQuad(mx - length/2, my - DRAW_LINE_THICKNESS_PX/2, length, DRAW_LINE_THICKNESS_PX, r/255, g/255, b/255, 1, rot);
+}
+
 function drawEntityGL(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
   const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
@@ -873,6 +971,8 @@ function drawEntityGL(e, alpha){
       const isCapRow = capAtTop ? row===0 : row===extent-1;
       glDrawTexturedQuad(isCapRow?capTex:bodyTex, x, y+row*8, 8, 8, 0);
     }
+  } else if(type.renderKind === 2){ // custom draw — runs on_draw, then paints whatever it emitted
+    for(const cmd of world.runDrawHook(e)) glDrawLine(x, y, world.palette, cmd);
   } else {
     const tex = world.glSpriteTextures[type.assetIndex];
     const src = world.spriteCanvases[type.assetIndex]; // dimensions only — same source as Canvas2D
@@ -947,6 +1047,7 @@ function loop(ts){
     accumulator = Math.min(accumulator + (ts - lastTime), MAX_ACCUMULATED_MS);
     lastTime = ts;
     world.input = buttonMaskFromKeys();
+    world.pointerX = pointerX; world.pointerY = pointerY; world.pointerDown = pointerDown;
     while(accumulator >= STEP_MS){
       world.step();
       accumulator -= STEP_MS;

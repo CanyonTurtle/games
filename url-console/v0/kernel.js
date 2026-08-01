@@ -83,6 +83,19 @@ const OPS = [
   ['TESTBIT',['u8']],['LOAD_INPUT',[]],['PLAYSOUND',['u8']],['HALT',[]],
   ['SETTILE',[]],
   ['MOVE_SOLID',[]],
+  // Pointer input (DESIGN.md §36) — raw analog position/held-state, the
+  // continuous counterpart to LOAD_INPUT's discrete button bitmask. Only
+  // meaningful when the cart declares inputWantsPointer; reads 0 otherwise
+  // (see runHook below), same "always safe to read, cart declares intent"
+  // shape as the button system.
+  ['LOAD_POINTER_X',[]],['LOAD_POINTER_Y',[]],['LOAD_POINTER_DOWN',[]],
+  // Immediate-mode drawing (DESIGN.md §36) — issued from a renderKind-2
+  // entity's on_draw hook, at render time, in entity-local pixel space
+  // (the renderer translates to the entity's own position first, same as
+  // an ordinary sprite). No operands beyond the stack: push x1,y1,x2,y2,
+  // color in that order (color ends up on top, same "last pushed operand
+  // on top" convention as SETTILE's x,y,tileId).
+  ['DRAW_LINE',[]],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -159,6 +172,11 @@ function assemble(lines, sym){
        world:{cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
        getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}),
        rng:Math.random, playSound:()=>{}, setTile:()=>{} }
+   `pointerX`/`pointerY`/`pointerDown` and `drawLine` are optional on top
+   of that — LOAD_POINTER_* reads 0 when absent (same as a cart that never
+   declares inputWantsPointer), and DRAW_LINE is simply a no-op when
+   `drawLine` isn't supplied, so this minimum shape still runs any hook,
+   including on_draw, without throwing.
    ============================================================ */
 const MAX_STEPS = 20000;
 const vmStack = [];
@@ -255,6 +273,14 @@ function runHook(bytecode, ctx){
           }
           e.props[1] = ny;
         }
+        break;
+      }
+      case 53: { stack.push(ctx.pointerX||0); break; } // LOAD_POINTER_X
+      case 54: { stack.push(ctx.pointerY||0); break; } // LOAD_POINTER_Y
+      case 55: { stack.push(ctx.pointerDown?1:0); break; } // LOAD_POINTER_DOWN
+      case 56: { // DRAW_LINE — see runtime.js's World for the ctx.drawLine it calls
+        const color=stack.pop(), y2=stack.pop(), x2=stack.pop(), y1=stack.pop(), x1=stack.pop();
+        if(ctx.drawLine) ctx.drawLine(x1,y1,x2,y2,color);
         break;
       }
       default: throw new Error('runHook: unknown opcode '+op+' at ip '+(ip-1));
@@ -389,7 +415,10 @@ class ByteReader {
   bytesN(n){ this._need(n); const r = this.bytes.slice(this.p, this.p+n); this.p += n; return r; }
 }
 
-const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide'];
+// on_draw (DESIGN.md §36) runs at render time, not simulation-tick time,
+// for renderKind:2 ("custom draw") entities only — every other hook here
+// runs on the fixed-timestep simulation clock.
+const HOOK_NAMES = ['on_init','on_frame','on_tick','on_input','on_collide','on_draw'];
 
 // Button bit convention, fixed and universal (not genre- or cart-specific):
 // 1=left 2=right 4=up/primary 8=down/secondary 16=action. A cart declares
@@ -430,6 +459,7 @@ function encodeCart(cart){
   for(const bit of BUTTON_BITS){
     if(cart.inputActiveButtons & bit) writeString(w, cart.inputButtonLabels[bit] || '');
   }
+  w.u8(cart.inputWantsPointer ? 1 : 0);
 
   w.u8(cart.hudSpec.length);
   for(const line of cart.hudSpec){
@@ -515,7 +545,15 @@ function encodeCart(cart){
   return w.toUint8Array();
 }
 
-const SUPPORTED_FORMAT_VERSIONS = [1];
+// Bumped from 1 to 2 for on_draw/renderKind:2/DRAW_LINE/pointer input and
+// the inputWantsPointer field (DESIGN.md §36) — a real binary-layout
+// change (a 6th hook, one more header byte), so old formatVersion:1
+// fragments now fail loudly here instead of decoding into garbage. No
+// compatibility branch for version 1 on purpose: this project is still
+// pre-v1 for all intents and purposes, and any cart worth keeping can be
+// decompiled under the old kernel and recompiled fresh (see how
+// carts/breakout.js was vendored, same §36).
+const SUPPORTED_FORMAT_VERSIONS = [2];
 function decodeCart(bytes){
   const r = new ByteReader(bytes);
   const cart = {};
@@ -545,6 +583,7 @@ function decodeCart(bytes){
   for(const bit of BUTTON_BITS){
     if(cart.inputActiveButtons & bit) cart.inputButtonLabels[bit] = readString(r);
   }
+  cart.inputWantsPointer = !!r.u8();
 
   const hudCount = r.u8();
   cart.hudSpec = [];
@@ -1075,6 +1114,7 @@ function describeControls(cart){
   if(cart.inputActiveButtons & 4) parts.push('↑ = ' + (cart.inputButtonLabels[4] || 'up'));
   if(cart.inputActiveButtons & 8) parts.push('↓ = ' + (cart.inputButtonLabels[8] || 'down'));
   if(cart.inputActiveButtons & 16) parts.push('space = ' + (cart.inputButtonLabels[16] || 'action'));
+  if(cart.inputWantsPointer) parts.push('touch & drag');
   return parts.join(', ');
 }
 
@@ -1095,7 +1135,7 @@ function defaultCartFields(){
   return {
     tileSurfaceOverrides: {}, camera: {followGlobal:255, clampMinX:0, clampMinY:0, clampMaxX:0, clampMaxY:0},
     aimLine: null, hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [],
-    mapGenerator: 0, inputButtonLabels: {},
+    mapGenerator: 0, inputButtonLabels: {}, inputWantsPointer: false,
   };
 }
 // `source` is a plain object like the carts/*.js builders return, except

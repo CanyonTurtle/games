@@ -95,7 +95,7 @@ under the hood, on every edit.
 ```js
 {
   name: '', author: '',    // optional — URL envelope only (see The pipeline above), never reach the binary format
-  formatVersion: 1,        // bump only on a breaking binary-layout change
+  formatVersion: 2,        // bump only on a breaking binary-layout change
   cartType: 0,              // advisory label only (see "cartType" below) — never dispatched on
   paletteMode: 0,           // 0 = curated bank, 1 = procedural harmony (see Palette)
   rngSeed: 1,               // seeds the deterministic RNG used by RAND_RANGE and any generator
@@ -109,6 +109,7 @@ under the hood, on every edit.
   inputActiveButtons: 0,     // bitmask of BUTTON_BITS this cart actually reads
   inputTouchTemplate: 0,     // which on-screen touch layout to show (see Input)
   inputButtonLabels: {},     // { buttonBit: "label text" } for each active bit
+  inputWantsPointer: false,  // true = LOAD_POINTER_X/Y/DOWN read real pointer state (see Input)
 
   hudSpec: [],               // ordered list of HUD readout lines (see HUD)
   constants: [],             // named-at-authoring-time f32 pool, PUSHC indexes into this
@@ -124,7 +125,7 @@ under the hood, on every edit.
   camera: null,                // null = static viewport; or {followGlobal, clampMinX/Y, clampMaxX/Y}
   aimLine: null,                // null = no aim indicator; or {anchorXGlobal, anchorYGlobal, angleGlobal, powerGlobal, maxPowerConstIdx, activeGlobal, colorIdx, maxLengthPx}
 
-  hooks: {},                    // { on_init, on_frame, on_tick, on_input, on_collide: Uint8Array }
+  hooks: {},                    // { on_init, on_frame, on_tick, on_input, on_collide, on_draw: Uint8Array }
 }
 ```
 
@@ -198,6 +199,20 @@ Read `LOAD_INPUT`/`TESTBIT` (below) inside hooks to react to held
 buttons; the runtime doesn't interpret button meaning beyond delivering
 the raw bitmask.
 
+**`inputWantsPointer: true`** additionally exposes raw analog
+position/held-state — the continuous counterpart to the discrete
+button bitmask above — via three no-operand opcodes usable in any
+hook: `LOAD_POINTER_X`, `LOAD_POINTER_Y` (cart-pixel coordinates, same
+space as entity `pos_x`/`pos_y` — the runtime already accounts for the
+canvas's CSS scaling/letterboxing before a hook ever sees these), and
+`LOAD_POINTER_DOWN` (0/1, held-state — read every frame, not
+edge-triggered, same as `TESTBIT`). Safe to read even when
+`inputWantsPointer` is false or absent — reads 0 rather than throwing,
+just like an unread button bit. Combine with `inputTouchTemplate:
+TOUCH_TEMPLATE_NONE` when a cart's whole interaction is pointer-driven
+and it has no discrete buttons at all (see `carts/plant.js`, which
+drops water anywhere you drag on the canvas).
+
 ## HUD
 
 `hudSpec` is an ordered list of readout lines, each:
@@ -242,7 +257,10 @@ the name exists purely to make your own assembly source readable.
   free-form: ext field **8** is the run length in tiles, and ext field
   **10** is which end gets the cap (`0` = cap at the top of the run,
   non-zero = cap at the bottom — e.g. a pipe hanging from the ceiling
-  needs its cap facing down).
+  needs its cap facing down). `2` = custom draw — no sprite/tile at
+  all, painted fresh every frame by this type's own `on_draw` hook
+  (see Immediate-mode drawing below); `assetIndex` is unused for this
+  kind.
 - `rotateFlag`: if set, the sprite is rotated by ext field 8 (in
   degrees) around its own center at render time (the racer's car
   heading is the reference use).
@@ -295,6 +313,49 @@ CMPEQ; JNZ ...`) — see any shipped cart's `on_tick` for the pattern.
 
 `tiles[i]` are always raw 8x8 pixel arrays (palette indices), used by
 map generators and `renderKind: 1` tile-column entities.
+
+## Immediate-mode drawing
+
+`renderKind: 2` entities have no sprite at all — every rendered frame,
+the runtime runs that entity type's `on_draw` hook (`self` bound to
+the entity) and paints whatever it emits, then throws the result away.
+Where sprites are baked once at load time from fixed authored data,
+`on_draw` can draw something different every single frame, computed
+from whatever the cart's own globals/props say right now — this is
+how `carts/plant.js`'s stem visibly grows in real time as its own
+`g_water` global increases, rather than jumping between a handful of
+pre-drawn growth-stage sprites.
+
+The only opcode today is `DRAW_LINE` — push `x1 y1 x2 y2 color` (in
+that order; `color` ends up on top, same "last operand pushed is on
+top" convention as `SETTILE`'s `x y tileId`) and call it:
+
+```
+PUSHI 0      ; x1
+PUSHI 0      ; y1
+PUSHI 20     ; x2
+PUSHI -40    ; y2
+PUSHI 5      ; color (palette index)
+DRAW_LINE
+```
+
+Coordinates are **entity-local pixels**, not screen or world space —
+`(0,0)` is always the entity's own `(pos_x, pos_y)`, and the runtime
+translates before drawing (the same way a `rotateFlag` sprite is
+already translated to its own position before rotating). `on_draw`
+never needs to know about the camera, or even read its own position —
+just draw the shape as if the entity sat at the origin. `self`'s own
+`props` (including any `extFieldCount` ext fields) work exactly like
+they do in any other hook — `carts/plant.js` computes its current stem
+height once at the top of `on_draw` and stashes it in an ext field via
+`STORE_SELF`, then reuses it with `LOAD_SELF` for every line that
+needs it, instead of recomputing the same expression repeatedly.
+
+`entityTypes[i].collisionW`/`collisionH` still apply normally to a
+`renderKind: 2` type (nothing about custom drawing changes collision —
+only *rendering* is custom) — set them to whatever AABB actually makes
+sense for the shape you're drawing, or `1`/`1` if the entity never
+needs to collide with anything.
 
 ## Map generators
 
@@ -386,7 +447,7 @@ or the line will visibly lie.
 
 ## Hooks: the lifecycle VM
 
-Five fixed entry points, each independently optional (an empty/absent
+Six fixed entry points, each independently optional (an empty/absent
 hook is a no-op):
 
 | hook | called | `self`/`a`/`b` bound |
@@ -396,6 +457,17 @@ hook is a no-op):
 | `on_tick` | once per **active entity**, per tick | `self` = that entity |
 | `on_input` | once per tick, before `on_tick` | none |
 | `on_collide` | once per **overlapping entity pair**, per tick | `a`, `b` = the pair (ordered by spawn order — either could be either type) |
+| `on_draw` | once per **renderKind:2 entity**, per *rendered frame* | `self` = that entity |
+
+Every hook above `on_draw` runs on the fixed-timestep simulation
+clock — deterministic, same result on any device. `on_draw` is the one
+exception: it runs at render time (see Immediate-mode drawing below),
+so it can run more or less often than any fixed rate depending on the
+display. That's fine for drawing (purely presentational, like the
+runtime's own position interpolation between ticks) but means writes
+to globals/props from inside `on_draw` make your simulation's outcome
+depend on the viewer's frame rate — nothing stops you, but treat it as
+a footgun, not a feature.
 
 Compile mnemonic source (one instruction per line, whitespace-separated
 operands, `label:` lines for jump targets, `;` for comments) with
@@ -441,7 +513,10 @@ value):
 - **Math helpers**: `SIN COS ATAN2 RAND_RANGE DIST CLAMP_ABS LERP
   NORM_ANGLE`
 - **Input**: `LOAD_INPUT` (raw button bitmask), `TESTBIT <bit>`
-  (extract one bit as 0/1)
+  (extract one bit as 0/1), `LOAD_POINTER_X`, `LOAD_POINTER_Y`,
+  `LOAD_POINTER_DOWN` (raw analog pointer state — see Input above)
+- **Immediate-mode drawing**: `DRAW_LINE` (see Immediate-mode drawing
+  below)
 - **Misc**: `PLAYSOUND <id>`
 
 **Deferred-kill pattern**: `on_collide` should only ever adjust `hp`
@@ -468,15 +543,24 @@ pattern is used by every shipped cart with destructible entities.
   including one that runs a real hook through `runHook` and shows the
   resulting globals — check any of the above against these without
   running anything.
-- **The five shipped carts with source in this repo**: `carts/flappy-bird.js`,
-  `carts/race-car.js`, `carts/cave-crawler.js`, `carts/run-and-jump.js`, and
-  `carts/castle-crusher.js` (each exporting one `build*Cart()` function)
-  are complete, real, working examples of every generator and hook
-  pattern above, in combination — richer worked examples than any prose
-  walkthrough. `carts/shared-sprites.js` has the small blob-silhouette
-  helpers more than one of them reuses. The shelf can also carry carts
-  with no source in this repo at all — an already-compiled fragment
-  built entirely against this document and the live Debug view, by a
-  human or another agent, registered directly (see `carts/index.js`'s
-  `EXTERNAL_CARTS`) — proof this pipeline doesn't require touching this
-  codebase to produce a real, shelf-worthy game.
+- **The shipped carts with source in this repo**: `carts/flappy-bird.js`,
+  `carts/race-car.js`, `carts/cave-crawler.js`, `carts/run-and-jump.js`,
+  `carts/castle-crusher.js`, `carts/breakout.js`, and `carts/plant.js`
+  (each exporting one `build*Cart()` function) are complete, real,
+  working examples of every generator and hook pattern above, in
+  combination — richer worked examples than any prose walkthrough
+  (`plant.js` in particular for pointer input + `on_draw`).
+  `carts/shared-sprites.js` has the small blob-silhouette helpers more
+  than one of them reuses. `breakout.js` is itself worth reading as a
+  worked example of a *different* kind: it's a decompilation (numeric
+  operands only, no named constants — see its own header comment), not
+  hand-authored source, and still compiles and plays identically.
+- The shelf can also carry carts with no source in this repo at all —
+  an already-compiled fragment built entirely against this document
+  and the live Debug view, by a human or another agent, registered
+  directly (see `carts/index.js`'s `EXTERNAL_CARTS`, currently empty)
+  — proof this pipeline doesn't require touching this codebase to
+  produce a real, shelf-worthy game. (`breakout.js` above started this
+  way; it got vendored as real source once the binary format changed
+  under it — see DESIGN.md §36 — but the registration path itself is
+  still there for the next one.)
