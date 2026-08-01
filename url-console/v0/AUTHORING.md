@@ -7,11 +7,21 @@ format got here, or why a decision was made a particular way, see
 `DESIGN.md` (project history, not required reading to build a game).
 
 Everything below is verified against the actual runtime, not described
-from memory: `kernel.js` is the same code that ships in `urlcade.html`
-(see its own header comment), and `fixtures.md` has worked, byte-exact
-examples of the cart shape below going in and a fragment string coming
-out. If this document and `kernel.js` ever disagree, `kernel.js` is
-right.
+from memory: `kernel.js` is the single source of truth for the cart
+format — the player runtime, the Cart Inspector, and the `/compile`
+tool all load this exact file, not a copy of it (see its own header
+comment) — and `fixtures.md` has worked, byte-exact examples of the
+cart shape below going in and a fragment string coming out. If this
+document and `kernel.js` ever disagree, `kernel.js` is right.
+
+**Fastest way to check a cart actually works: [/compile](https://canyonturtle.github.io/games/compile/).**
+Paste the object below (with your own hooks) into its left pane — it
+compiles automatically and shows a specific, line-numbered error the
+moment something's wrong (an unknown opcode, a missing operand, a
+malformed field), or a working Play/Inspect link the moment it isn't.
+This works standalone too, from Node or any script, via
+`K.compileCartSource(source)` (below) — `/compile` is a thin UI over
+exactly that function, nothing more.
 
 ## The pipeline
 
@@ -29,9 +39,32 @@ const fragment = await K.encodePayload(bytes); // -> "z.<base64url>" or "r.<base
 ```
 
 Paste that fragment (with or without a leading `#`) into the live
-runtime's menu page "paste a cart link" box, or set it as the page's
-URL hash directly, to actually play it. There's no separate "compile"
+runtime's menu page "paste a cart link" box to Play or Inspect it, or
+set it as the page's URL hash directly — any validly-encoded fragment
+plays, not only the five shipped carts. There's no separate "compile"
 step beyond calling `encodeCart` — the object below *is* the game.
+
+`myCart.hooks[name]` above has to already be assembled bytecode
+(`Uint8Array`) — `encodeCart` doesn't assemble source itself. If you'd
+rather write `hooks.on_init` etc. as plain arrays of assembly-source
+lines (like every example cart under `carts/*.js` does) and let one
+call handle assembling every hook, encoding, and round-trip-validating
+the result, use `K.compileCartSource(source)` instead of calling
+`assemble`/`encodeCart` yourself:
+
+```js
+const { cart, bytes } = K.compileCartSource({
+  ...myCartFieldsAbove,
+  constNames: { GRAVITY: 0 },       // optional: name -> constants[] index, for PUSHC
+  globalNames: { g_player: 0 },     // optional: name -> global slot, for LOADG/STOREG/LOADE/STOREE
+  hooks: {
+    on_init: ['PUSHC GRAVITY', 'STOREG g_player', 'HALT'],
+    // ...
+  },
+});
+```
+Errors from `compileCartSource` always name which hook and which
+source line is wrong — this is what `/compile` calls under the hood.
 
 ## Cart object shape
 
@@ -396,6 +429,10 @@ pattern is used by every shipped cart with destructible entities.
 
 ## Checking your work
 
+- **[/compile](https://canyonturtle.github.io/games/compile/)**: the
+  fastest loop — paste/edit a cart source object and get a specific
+  compile error or a working Play/Inspect link back automatically, no
+  copy-pasting between a script and the runtime.
 - **`fixtures.md`**: known-good cart → bytes → fragment examples,
   including one that runs a real hook through `runHook` and shows the
   resulting globals — check any of the above against these without
@@ -406,8 +443,10 @@ pattern is used by every shipped cart with destructible entities.
   disassembly + control-flow graph of every hook — for whatever you
   just built, including cart_type/mapGenerator/hook combinations this
   guide didn't spell out.
-- **The five shipped carts**: `urlcade.html`'s own `buildFlappyCart`/
-  `buildRacerCart`/`buildRoguelikeCart`/`buildPlatformerCart`/
-  `buildCastleCrusherCart` are complete, real, working examples of
-  every generator and hook pattern above, in combination — richer
-  worked examples than any prose walkthrough.
+- **The five shipped carts**: `carts/flappy-bird.js`, `carts/race-car.js`,
+  `carts/cave-crawler.js`, `carts/run-and-jump.js`, and
+  `carts/castle-crusher.js` (each exporting one `build*Cart()` function)
+  are complete, real, working examples of every generator and hook
+  pattern above, in combination — richer worked examples than any prose
+  walkthrough. `carts/shared-sprites.js` has the small blob-silhouette
+  helpers more than one of them reuses.

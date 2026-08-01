@@ -1677,15 +1677,134 @@ entirely, unlike every other entity, which is centered. `llms.txt` and
 `fixtures.md`, in that order, as "build a cart"; the runtime's own menu
 page links to it as "game authoring API" instead of "spec & design docs."
 
-## 28. Open questions
+## 29. From monolith to modules: splitting the runtime, and a self-serve /compile tool
+
+Direct instruction, in the same spirit as §27: stop shipping the
+runtime as one file. `urlcade.html` had grown to ~5000 lines — the VM/
+format guts (already separately available as `kernel.js`, §26), the
+World simulation and both render backends, touch/keyboard input, the
+menu and hash-based view router, the Cart Inspector UI, and all five
+example carts' authoring code, all in one inline `<script>`. That was a
+deliberate original design property (§1's "no build step, no server"
+read, at the time, as "no separate files either"), but it stopped
+paying for itself once the goal became a platform other people's
+agents build on, not just a single demo page.
+
+**The split.** `kernel.js` gained everything else about the cart format
+that's pure data-in-data-out with no DOM dependency and had, until now,
+only existed duplicated inside `urlcade.html`: palette generation, the
+three map generators (track/cave/platform), the sprite shape-list
+renderer, and — most consequentially — the disassembler and
+control-flow-graph extractor (§19's Inspector, previously
+Inspector-only code). `runtime.js` took everything that genuinely needs
+a `document`/canvas/WebGL context: the `World` class, both render
+backends, input, the fixed-timestep loop, and menu/game view-switching.
+`inspector.js` took the Inspector's own tab UI. Each of the five example
+carts moved to its own file under `carts/`, plus a small
+`carts/shared-sprites.js` for the blob-silhouette helpers more than one
+of them reuses (§17's authoring sugar). `index.html` shrank to markup
+and CSS plus two `<script>` tags — `kernel.js` as a classic script
+(so `window.UrlcadeKernel` and `require('./kernel.js')` are still both
+the same file, unchanged contract), everything else as native ES
+modules (`<script type="module">`) importing each other directly. Still
+zero build step: no bundler, no transpiler, browsers have supported
+`type="module"` natively for years.
+
+The headline consequence: **`kernel.js` stopped being a copy and became
+an import.** §26 built it as "the same code, copied out and checked
+against the original by a Playwright diff" specifically because
+`urlcade.html` staying one file meant it *couldn't* be a shared module.
+Once that constraint was gone, the fix wasn't "check harder," it was
+"stop duplicating" — the runtime now loads `kernel.js` directly, so
+there's nothing left for `test/check-kernel-sync.js` to check. Retired,
+replaced by `test/smoke.js` (loads the real module-split `index.html` in
+a real browser, registers all five carts, plays each, exercises the
+Inspector and `/compile`, asserts zero console errors) — a regression
+test against the thing that's actually risky about a refactor this size
+(behavior silently changing while moving code), not a drift check
+against a problem that no longer exists.
+
+**A real bug the split surfaced, not introduced.** Two of the five
+carts (`run-and-jump.js`, `castle-crusher.js`) call `buildPlatformLevel`
+directly at authoring time — not just at runtime inside `World`'s
+constructor — to read off the generated grid's actual width and
+coin/enemy counts before finalizing `screenW`/camera clamp bounds and
+`NUM_COINS`/`NUM_ENEMIES` constants (see §15.2's note on why a naive
+`tokens.filter()` undercounts). Splitting `buildPlatformLevel` into
+`kernel.js` without noticing this second, authoring-time call site broke
+both carts the first time they were actually loaded in a browser — caught
+immediately by `test/smoke.js`, not shipped. Worth naming because it's
+the same *species* of bug §15.1 found twice before (a piece of code
+quietly relying on something that looked purely internal to one part of
+the system) — found the same way, by actually running it, not by
+re-reading the diff.
+
+**Another real bug the split fixed.** The original single-scope
+`boot()`/`backToMenu()` could leave a game's step/render loop running
+invisibly in the background after navigating straight from a live game
+to an `#inspect:` link — nothing on that path reset `running`, only the
+explicit "back to shelf" button did. Splitting the runtime and the
+Inspector into separate modules with their own private state (no more
+one script incidentally able to reach into the other's variables)
+forced this transition to be named explicitly in `main.js`'s `boot()`
+instead of happening by accident — fixed as a consequence of the
+module boundary, not a separately-motivated change.
+
+**A real product gap the split exposed, fixed at the same time.** The
+original `startGame(key)` only ever played a hash that matched one of
+the five shelf carts' own precomputed payload string — `findCartByHash`
+did a linear scan against `CARTS`, and any other validly-encoded cart
+fragment (a `/compile` result, a link a friend shared) silently fell
+through to the menu instead of playing. Backwards for a self-serve
+platform: a cart shouldn't need to be checked into this repo's shelf to
+be playable, it just needs to decode. `startGame` now takes a raw
+fragment and decodes it directly (falling back to the Inspector's
+existing decode-error UI, rather than duplicating that messaging, if it
+doesn't); the five shelf carts play exactly the same way any other
+cart does now, through the same code path, not a special one.
+
+**`/compile`.** A new, standalone page (`url-console/compile/`) —
+self-serve compiling and decompiling, the piece this platform needed
+most for an agent (or a human) to close its own loop without a human
+relay. Two panes, kept in sync in both directions: a "cart source" pane
+(plain JS object literal, hooks as arrays of assembly-source lines —
+the same shape every `carts/*.js` builder already returns) that
+compiles automatically as it's edited, and a "fragment" pane that
+decompiles automatically as it's edited. Compiling goes through a new
+`kernel.js` export, `compileCartSource(source)` — assembles every hook
+(via `assemble`, which now reports a 1-based source line number in
+every error, not just the offending line's text), `encodeCart`s the
+result, and round-trips it back through `decodeCart` immediately so a
+malformed-but-not-rejected cart shape fails at the point it was
+authored, not the first time the runtime or Inspector tries to read it.
+Decompiling reuses `formatDisassembly` (§19) — its block-labeled output
+(`B0:`, `B1:`, ...) was already, deliberately, `assemble()`-compatible,
+so a decompiled hook pastes back in and reassembles to byte-identical
+bytecode with no translation step.
+
+`decodeCart` itself got stricter as part of this: `ByteReader` now
+bounds-checks every read instead of silently returning `undefined` (and
+poisoning everything downstream as `NaN`) past the end of a truncated
+buffer, `format_version` is validated against a known list, and leftover
+unread bytes after a full decode throw instead of being silently
+ignored — each with a specific message naming what's wrong and where.
+This wasn't `/compile`-specific plumbing; it's `kernel.js` itself
+getting an actual point of view about "invalid cart data" for the first
+time, which every other caller (the runtime, the Inspector) inherited
+for free.
+
+## 30. Open questions
 
 **Format & encoding**
-- §26's `kernel.js` is a copy of part of `urlcade.html`, not an import —
-  nothing stops the two from silently drifting apart except running
-  `test/check-kernel-sync.js` after touching either one. Is a copy with
-  a manual check sufficient long-term, or does this need enforcement
-  (a pre-commit hook, a CI job) before it's trustworthy enough for an
-  agent to actually rely on unattended?
+- ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
+  import — nothing stops the two from silently drifting apart except
+  running `test/check-kernel-sync.js` after touching either one. Is a
+  copy with a manual check sufficient long-term, or does this need
+  enforcement before it's trustworthy enough for an agent to actually
+  rely on unattended?~~ Moot as of §29: the runtime split into modules
+  specifically so `kernel.js` could stop being a copy and become an
+  import. There's nothing left to drift, so there's nothing left to
+  check — `check-kernel-sync.js` is retired.
 - Is base64url-over-custom-binary actually the right density/compat
   tradeoff, or is a larger Unicode alphabet worth the copy/paste risk
   for power users who know what they're doing?

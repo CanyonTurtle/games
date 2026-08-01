@@ -1,9 +1,21 @@
 # V0 — a real, working Urlcade
 
-`urlcade.html` is a single self-contained page: the runtime (VM,
-assembler, palette generator, three map generators — track-grammar,
-cellular-automata caves, and a heightmap turtle-grammar — a camera, and a
-renderer) and four dogfood carts (`../examples/flappy-bird.md`,
+**Update, post module split:** everything this file originally described
+as "one self-contained `urlcade.html`" now lives across `kernel.js` (the
+cart format: VM, assembler, palette/map generators, disassembler — see
+its own header), `runtime.js`/`color-utils.js`/`inspector.js`/`main.js`
+(the player + Cart Inspector), and `carts/*.js` (one file per example
+cart) — wired together by `index.html`. Still zero build step (native
+`<script type=module>`, no bundler) and still fully playable by opening
+`index.html` in a browser. The rest of this file is left as it was
+written, as project history (like `DESIGN.md`) — read "`urlcade.html`"
+below as "the runtime, considered as a whole," not a literal file that
+still exists.
+
+The original text: `urlcade.html` was a single self-contained page: the
+runtime (VM, assembler, palette generator, three map generators —
+track-grammar, cellular-automata caves, and a heightmap turtle-grammar —
+a camera, and a renderer) and four dogfood carts (`../examples/flappy-bird.md`,
 `../examples/race-car.md`, and a roguelike and a platformer both built
 directly from `../examples/three-more-carts.md` §1/§2) built and playable
 in one file. Open it directly in a browser — no build step, no server.
