@@ -59,7 +59,7 @@ escapes any comma that shows up inside a name/author itself.
 Paste that fragment (with or without a leading `#`) into the live
 runtime's menu page "paste a cart link" box to play it, or set it as
 the page's URL hash directly — any validly-encoded fragment plays, not
-only the five shipped carts. Once it's playing, hit **Debug** to
+only the carts already on the shelf. Once it's playing, hit **Debug** to
 inspect or edit it. There's no separate "compile" step beyond calling
 `encodeCart` — the object below *is* the game.
 
@@ -468,10 +468,15 @@ pattern is used by every shipped cart with destructible entities.
   including one that runs a real hook through `runHook` and shows the
   resulting globals — check any of the above against these without
   running anything.
-- **The five shipped carts**: `carts/flappy-bird.js`, `carts/race-car.js`,
-  `carts/cave-crawler.js`, `carts/run-and-jump.js`, and
+- **The five shipped carts with source in this repo**: `carts/flappy-bird.js`,
+  `carts/race-car.js`, `carts/cave-crawler.js`, `carts/run-and-jump.js`, and
   `carts/castle-crusher.js` (each exporting one `build*Cart()` function)
   are complete, real, working examples of every generator and hook
   pattern above, in combination — richer worked examples than any prose
   walkthrough. `carts/shared-sprites.js` has the small blob-silhouette
-  helpers more than one of them reuses.
+  helpers more than one of them reuses. The shelf can also carry carts
+  with no source in this repo at all — an already-compiled fragment
+  built entirely against this document and the live Debug view, by a
+  human or another agent, registered directly (see `carts/index.js`'s
+  `EXTERNAL_CARTS`) — proof this pipeline doesn't require touching this
+  codebase to produce a real, shelf-worthy game.

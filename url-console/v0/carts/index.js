@@ -19,7 +19,7 @@
    ============================================================ */
 "use strict";
 const K = window.UrlcadeKernel;
-const { compileCartSource } = K;
+const { compileCartSource, decodeCartUrl } = K;
 import { buildFlappyCart } from './flappy-bird.js';
 import { buildRacerCart } from './race-car.js';
 import { buildRoguelikeCart } from './cave-crawler.js';
@@ -33,12 +33,30 @@ async function registerCart(key, builder){
   CARTS[key] = { fragment, name, author };
 }
 
+// Externally-authored carts — already-compiled fragments this repo has no
+// source object for (built elsewhere, e.g. by another agent working purely
+// from AUTHORING.md against the live site, not from this codebase), rather
+// than a local carts/*.js builder run through compileCartSource. Registered
+// the same way either path ends up: a {fragment, name, author} CARTS entry
+// that renderMenu() decodes itself to build a card — a fragment doesn't need
+// a builder function checked into this repo to be shelf-worthy, only to
+// decode (see this file's own header, and DESIGN.md §34).
+const EXTERNAL_CARTS = [
+  ['breakout', 'Breakout,Claude,z.VVHNbtNAEP5m1j9rJ22ciDht0tjrS-DQqlEQQhwQKZHgQgqCA-0xqtw2UmmoCUi99QGQQOIEB8ijIM7lDTjwEpxh1ikSrDUz33w7M56ZJSLCQr4fqD3Qt9_CHsXOo_xw7j6dHh3PFcDAb7jPDmZFTnCss_Fw8iI3j9_khdkyRX5Y5K-OzXwmcF6cE1wbY_Znr83z6Wn2f8jLk8m5mRxNpqcNYDgEro2Aix0RwYv78rfR98vLe58-rn9dcma0lIVgSJwRWVzJcOfdt193pUUYDRC0tt02NBQZzST8cIWi6GdUI60JxnS7NWqUN--HnnAX_XKev-cLekjBATGCTEpRBupRSuxkBHYzIvYyYvYzUlIjtYXSEjlWuVZ5iceVeuszrOMnPlfrrQ8QW9O84qVariPNq14a9DgNE52FSIIstA-RhW6ixHqpSvzS-s0nSLwSes0RBgUSp3WGxBVlZKCyHzFkSAkSA9ar8U3RJc8VadeSAWs_ineX4N8rsvEHZbwtIqSyZBjFZ5D_ps5gC2uOLKQab2LNThi1NnE9YQqlKS779VWqhLTh7mDXtji2LY7R30a8DmMfxZd99rcpvrF0PXEt4NX4jmjxmuOSCGS7UTxeAqEH-2jb5VY7jtSvNuJb6NiNR_GegEpXddCGz3Xd5Tax8mW8LjX3bBKVSWyTJNa9ShLTdduqsqEGfwA'],
+];
+
+function registerExternalCart(key, fragment){
+  const { name, author } = decodeCartUrl(fragment);
+  CARTS[key] = { fragment, name, author };
+}
+
 async function registerAllCarts(){
   await registerCart('flappy', buildFlappyCart);
   await registerCart('racer', buildRacerCart);
   await registerCart('roguelike', buildRoguelikeCart);
   await registerCart('platformer', buildPlatformerCart);
   await registerCart('castle', buildCastleCrusherCart);
+  for(const [key, fragment] of EXTERNAL_CARTS) registerExternalCart(key, fragment);
 }
 
 export { CARTS, registerAllCarts };

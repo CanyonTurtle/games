@@ -2122,7 +2122,49 @@ reproduced the failure (all five shelf carts: `{"ok":false}`) before
 restoring it — the standing verify-the-verifier practice throughout
 this log.
 
-## 35. Open questions
+## 35. The first externally-authored cart: Breakout, by an agent working purely from AUTHORING.md
+
+§34 built the whole name/author/thumbnail pipeline on a claim it hadn't
+actually been tested against yet: that a fragment doesn't need a
+`carts/*.js` builder checked into this repo to be shelf-worthy, only to
+decode. That claim got its first real test almost immediately — a
+Breakout cart built by a different agent, working entirely against the
+live site and AUTHORING.md, with no access to this repo's source at
+all, handed back as nothing but a finished link
+(`#Breakout,Claude,z.<payload>`).
+
+Adding it didn't need a new `carts/breakout.js` builder — there's no
+source to put in one, only the compiled fragment. `carts/index.js`
+gained a second, much smaller registration path alongside
+`registerCart()`: an `EXTERNAL_CARTS` list of `[key, fragment]` pairs,
+registered via `decodeCartUrl(fragment)` alone (just enough to read the
+`name`/`author` already sitting in the fragment's own envelope) rather
+than a full `compileCartSource()` round-trip — there's no source object
+to compile, the fragment already *is* the compiled output. Both paths
+converge on the exact same `CARTS[key] = {fragment, name, author}`
+shape, so `runtime.js`'s shelf renderer (§34) needed zero changes: it
+was already decoding every card from its fragment alone, never the
+in-memory authored object, specifically so this would work.
+
+Before wiring it in, the fragment was decoded and its `on_init` hook
+run standalone under Node (`kernel.js` has zero DOM dependency, so this
+needed no browser) — confirmed a clean decode, no cart fault, and 42
+entities spawned (paddle, ball, and a full brick grid, consistent with
+a working Breakout) — the same "prove it, don't just claim it"
+instinct as everywhere else in this log, applied to a cart this
+codebase had zero part in producing. `test/smoke.js`'s shelf-count
+assertions moved from 5 to 6, and its "every shelf card has a name and
+author" check was loosened from asserting `/Urlcade/` specifically
+(true of every local example) to just asserting *a* non-empty author —
+the original assertion was accidentally over-fitted to "every cart on
+the shelf happens to be ours."
+
+This is the intended end state of the whole platform, not a special
+case bolted on: the shelf is a list of fragments, and a fragment earns
+its place by decoding and playing, regardless of which agent, human, or
+codebase produced it.
+
+## 36. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

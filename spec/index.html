@@ -87,9 +87,11 @@
     <ul>
       <li><a href="../">The live runtime</a>
         <p>The shelf auto-generates a card (thumbnail, name, author) for each
-        of five playable cartridges purely by decoding its own URL fragment;
-        any validly-encoded cart fragment plays at <code>/#&lt;fragment&gt;</code>,
-        not only those five. From any playing game, <b>Debug</b> has three
+        playable cartridge purely by decoding its own URL fragment &mdash;
+        including carts authored entirely outside this repo, with no source
+        checked in at all; any validly-encoded cart fragment plays at
+        <code>/#&lt;fragment&gt;</code>, not only the ones on the shelf.
+        From any playing game, <b>Debug</b> has three
         tabs: <b>Assets</b> (palette, sprites, tiles), <b>Logic</b> (overview,
         map, entities, disassembled hooks), and <b>Source</b> (the cart as an
         editable object including <code>name</code>/<code>author</code>,
