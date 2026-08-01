@@ -532,7 +532,6 @@ function renderMenu(){
         <p class="eyebrow"><b>${c.genre}</b></p>
         <h2>${c.title}</h2>
         <a class="playbtn" href="#${c.payload}">&#9654; PLAY</a>
-        <a class="inspectbtn" href="#inspect:${c.payload}">INSPECT</a>
         <dl class="spec">
           <dt>raw size</dt><dd>${c.byteLen} bytes</dd>
           <dt>fragment</dt><dd>${c.charLen} chars${c.compressed
@@ -607,6 +606,28 @@ function showMenu(){
   const m = document.getElementById('menu');
   m.classList.remove('active'); void m.offsetWidth; m.classList.add('active');
 }
+
+// Lighter than stopGame(): hides the game view but keeps `world` (and its
+// GL textures) alive instead of disposing them, so resumeGame() can pick
+// back up instantly. This is what the in-game "Debug" button uses to open
+// the Inspector on the cart that's currently playing — stopGame()'s full
+// teardown would be the wrong tool there, since the point is coming back
+// to the *same* running game, not ending it. (Debugging something else
+// entirely — a pasted link, a fresh "+ New Cart" — still goes through the
+// full stopGame(), same as before; see main.js's boot().)
+function pauseGame(){
+  running = false;
+  document.getElementById('gameWrap').classList.remove('active');
+}
+function resumeGame(){
+  if(!world) return false;
+  const gw = document.getElementById('gameWrap');
+  gw.classList.remove('active'); void gw.offsetWidth; gw.classList.add('active');
+  running = true;
+  lastTime = null; // avoid a stale huge dt from however long the game was paused
+  return true;
+}
+function getCurrentFragment(){ return currentKey; }
 
 // Linear-interpolate a prop between the last two simulation steps for
 // smooth rendering at whatever rate the display refreshes, independent of
@@ -873,5 +894,6 @@ function startLoop(){ requestAnimationFrame(loop); }
 
 export {
   World, disposeGLTextures, renderMenu, startGame, stopGame, showMenu,
+  pauseGame, resumeGame, getCurrentFragment,
   render, getWorld, isUsingGL, startLoop,
 };

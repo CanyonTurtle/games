@@ -1819,7 +1819,76 @@ version before landing, the same "reproduce the failure, then verify
 the fix undoes it" instinct DESIGN.md keeps coming back to elsewhere
 (§15.1, §18.2).
 
-## 30. Open questions
+## 30. Merging Play/Inspect/Compile into one view, and dropping DESIGN.md from the site
+
+Direct feedback after §29 shipped: three separate top-level experiences
+(the shelf/player, a standalone Cart Inspector view, a standalone
+`/compile` page) was a seam that never needed to exist. Nothing about
+"look at this cart's guts" and "edit this cart's guts" was actually
+different work — both start from a decoded cart, both need the same
+disassembler, and `/compile`'s whole right-hand pane (byte/fragment
+size, Play link, errors) is information the Inspector's Overview tab
+was already halfway toward showing. Keeping them apart just meant a
+player who wanted to peek under the hood had to leave the game, and an
+author fixing a bug had to bounce between two pages that didn't share
+state.
+
+**The fix: Debug tabs, not Debug pages.** `/compile` is gone. The
+Inspector (now generally called "Debug" in the UI, reachable via a new
+Debug button in the game view's topbar) grew two more tabs —
+**Source** (the cart as an editable plain-JS-object literal, recompiling
+automatically as you type, via the same `compileCartSource()` §29
+added) and **Compile** (a specific, line-numbered error naming the
+failing hook, or byte/fragment size info and a "Play this version"
+button) — landing `/compile`'s entire feature set inside the same tab
+strip as Overview/Palette/Sprites/Tiles/Map/Entities/Hooks. A
+successful compile now also live-rebuilds `inspectWorld`/
+`inspectCartInfo` from the *edited* cart, so every other tab reflects
+the current Source text, not a stale snapshot from whenever Debug was
+opened — switch to Hooks after fixing a bug and the disassembly is
+already the fixed version's.
+
+**Debug can pause and resume a live game, not just replace it.**
+Opening Debug used to always fully tear the current view down
+(`stopGame()`, in `runtime.js`) — fine when the destination was a
+different cart entirely, wrong when the destination is "the same game,
+plus a panel over it." `runtime.js` gained `pauseGame()`/`resumeGame()`
+— pause hides the game view and stops the simulation loop without
+disposing `World`/its GL textures; resume picks the exact same instance
+back up. `main.js`'s `openDebug(payload)` decides which one applies by
+comparing the fragment being debugged against whatever's currently
+playing (`Runtime.getCurrentFragment()`, also new) — no separate
+"how did we get here" state to keep in sync, just a comparison against
+what's already on screen. Debugging something else entirely (a pasted
+link, "+ New Cart") still gets the full `stopGame()` teardown, same as
+before.
+
+**"+ New Cart"**, on the shelf, replaces `/compile`'s "load with a
+starter template already compiled" default state: it compiles a small
+known-good cart (one entity wrapping around the screen, a frame-count
+HUD line — the same starter `/compile` shipped) and opens Debug on it,
+landed on the Source tab instead of Overview. Round-tripped through
+encode→decode like every other path into Debug, rather than a separate
+"nothing decoded yet" mode — one less state for every tab's rendering
+code to account for, at the cost of the freshly-opened Source tab
+showing numeric disassembly instead of the original named constants
+(`PUSHC 0` instead of `PUSHC SCREEN_W`) — accepted, since named
+constants never round-trip through the binary format for *any* cart,
+so this is consistent with every other decompile, not a special case
+worth keeping the extra state for.
+
+**DESIGN.md itself dropped out of the authoring-facing surface**,
+tightening what §27 already started. `AUTHORING.md` used to point
+readers at this file for "how the format got here, or why a decision
+was made a particular way" — true, but this file was never published
+(§27), so that pointer was a dead link on the live site and, more to
+the point, unnecessary reading for the one job `AUTHORING.md` exists to
+do. The pointer is gone; this file stays exactly what §27 already
+said it was — a decision log for whoever maintains this codebase, kept
+in the repo, not part of what an author (human or agent) needs to load
+to build a cart.
+
+## 31. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
