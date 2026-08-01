@@ -86,15 +86,17 @@ async function main(){
     check('every local script/import reference is cache-busted (?v=...)', allBusted, sample);
   }
 
-  // 1. The shelf: all five carts register and play, no console/page errors.
+  // 1. The shelf: all six carts (five local + one externally-authored, see
+  // carts/index.js's EXTERNAL_CARTS — DESIGN.md §35) register and play, no
+  // console/page errors.
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if(m.type() === 'error') errors.push(m.text()); });
 
   await page.goto(`${base}/index.html`);
-  await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 10000});
-  check('all 5 example carts registered', true);
+  await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 6, {timeout: 10000});
+  check('all 6 shelf carts registered (5 local + 1 external)', true);
 
   // Each cart's own fragment carries its name/author in the URL envelope
   // (DESIGN.md §34) — never a manual title/genre/accentIdx passed to a
@@ -118,8 +120,8 @@ async function main(){
     title: div.querySelector('h2')?.textContent || '',
     author: div.querySelector('.cart-author')?.textContent || '',
   })));
-  check('all 5 shelf cards rendered a thumbnail canvas + name + author',
-    shelfCards.length === 5 && shelfCards.every(c => c.hasThumb && c.title && /Urlcade/.test(c.author)),
+  check('all 6 shelf cards rendered a thumbnail canvas + name + author',
+    shelfCards.length === 6 && shelfCards.every(c => c.hasThumb && c.title && /^by /.test(c.author)),
     JSON.stringify(shelfCards));
 
   const keys = await page.evaluate(() => Object.keys(window.__urlcadeDebug.CARTS));
@@ -272,7 +274,7 @@ async function main(){
       };
     });
     await page2.goto(`http://localhost:${port2}/index.html`);
-    await page2.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 10000});
+    await page2.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 6, {timeout: 10000});
     check('carts still register when deflate-raw compression is unsupported', true);
 
     await page2.click('#newCartBtn');
@@ -304,7 +306,7 @@ async function main(){
     const subErrors = [];
     subPage.on('pageerror', e => subErrors.push(e.message));
     await subPage.goto(`${subBase}/index.html`);
-    await subPage.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 8000});
+    await subPage.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 6, {timeout: 8000});
     check('root runtime loads under a subpath deployment', true);
 
     await subPage.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
