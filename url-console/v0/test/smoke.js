@@ -24,10 +24,21 @@ const { execFileSync } = require('child_process');
 
 const MIME = { '.html':'text/html', '.js':'text/javascript', '.md':'text/markdown', '.json':'application/json' };
 
-function serve(root){
+// `prefix`, when given, simulates a subpath deployment (this site published
+// under e.g. https://a-custom-domain/games/ rather than the domain root —
+// a real, current deployment target, not a hypothetical): requests outside
+// the prefix 404, and it's stripped before resolving to a file. Root-
+// absolute paths (`/kernel.js`) break under a prefix; paths relative to the
+// referencing file don't — see the subpath test below and DESIGN.md.
+function serve(root, prefix){
+  prefix = prefix || '';
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       let p = decodeURIComponent(req.url.split('?')[0]);
+      if(prefix){
+        if(!p.startsWith(prefix)){ res.writeHead(404); res.end('not found: ' + p); return; }
+        p = p.slice(prefix.length) || '/';
+      }
       if(p === '/') p = '/index.html';
       const full = path.join(root, p);
       fs.readFile(full, (err, data) => {
@@ -157,6 +168,51 @@ async function main(){
 
   await browser.close();
   server.close();
+
+  // 3. Same site, mounted under a URL subpath instead of the domain root
+  // (a real, current deployment target — not hypothetical). Caught a real
+  // bug once: /compile used root-absolute paths (`/kernel.js`) that
+  // resolved outside the subpath and 404'd, so `window.UrlcadeKernel`
+  // never loaded and the Play link silently pointed nowhere useful. Fixed
+  // by making /compile's own references relative to itself instead.
+  {
+    const subBrowser = await chromium.launch();
+    const prefix = '/games';
+    const subServer = await serve(siteDir, prefix);
+    const subPort = subServer.address().port;
+    const subBase = `http://localhost:${subPort}${prefix}`;
+
+    const page = await subBrowser.newPage();
+    const errors = [];
+    page.on('pageerror', e => errors.push(e.message));
+    await page.goto(`${subBase}/index.html`);
+    await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 8000});
+    check('root runtime loads under a subpath deployment', true);
+
+    const page2 = await subBrowser.newPage();
+    page2.on('pageerror', e => errors.push(e.message));
+    await page2.goto(`${subBase}/compile/index.html`);
+    await page2.waitForTimeout(600);
+    const playHref = await page2.getAttribute('#playLink', 'href');
+    check('/compile compiles under a subpath deployment', /^[rz]\./.test(await page2.inputValue('#fragmentInput')));
+    check("/compile's Play link is not root-absolute (breaks under a subpath)", !!playHref && !playHref.startsWith('/'), playHref);
+
+    const page3 = await subBrowser.newPage();
+    page3.on('pageerror', e => errors.push(e.message));
+    await page3.goto(new URL(playHref, `${subBase}/compile/index.html`).href);
+    await page3.waitForFunction(() => window.__urlcadeDebug && window.__urlcadeDebug.getWorld(), {timeout: 8000}).catch(() => {});
+    const played = await page3.evaluate(() => {
+      if(!window.__urlcadeDebug) return {ok: false, reason: 'no __urlcadeDebug (kernel.js/main.js failed to load — check for root-absolute paths)'};
+      const w = window.__urlcadeDebug.getWorld();
+      return w ? {ok: true, fault: w.cartFault} : {ok: false, reason: 'no world'};
+    });
+    check("/compile's Play link works under a subpath deployment", played.ok && !played.fault, JSON.stringify(played));
+    check('no errors anywhere in the subpath scenario', errors.length === 0, JSON.stringify(errors));
+
+    await subBrowser.close();
+    subServer.close();
+  }
+
   fs.rmSync(siteDir, {recursive: true, force: true});
 
   console.log(failures === 0

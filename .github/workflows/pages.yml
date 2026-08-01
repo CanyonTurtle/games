@@ -16,9 +16,11 @@ name: Deploy Pages
 # so every fragment link ever shared against this site (`#z.<payload>` at
 # the root) keeps working — that's the one URL shape this repo has always
 # guaranteed stays stable. /compile's own HTML references its sibling
-# runtime files with root-relative paths (`/kernel.js`, `/index.html`,
-# ...) for exactly this reason, not a `../v0/...` relative path — see its
-# own source.
+# runtime files with paths relative to itself (`../kernel.js`,
+# `../index.html`, ...), not root-absolute ones (`/kernel.js`) — the site
+# is also published from a subpath on at least one custom domain, where a
+# root-absolute path resolves to the wrong place entirely and silently
+# fails to load `window.UrlcadeKernel`. See /compile's own source.
 
 on:
   push:

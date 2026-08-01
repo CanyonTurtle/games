@@ -81,7 +81,7 @@
   <header>
     <p class="model">Model V0 &middot; self-serve compiler</p>
     <h1>Compile <span class="dim">// cart source &#8646; fragment</span></h1>
-    <p>Write a cart as a plain object (see <a href="/AUTHORING.md">AUTHORING.md</a> for every
+    <p>Write a cart as a plain object (see <a href="../AUTHORING.md">AUTHORING.md</a> for every
     field's meaning and the full opcode table) in the left pane — it compiles automatically, with
     specific errors if anything's wrong, and the right pane fills in with a playable fragment.
     Paste an existing link or fragment into the right pane instead and the left pane decompiles it
@@ -121,18 +121,18 @@
   </details>
 
   <footer>
-    Runs entirely client-side against <a href="/kernel.js">kernel.js</a> — the same file the
+    Runs entirely client-side against <a href="../kernel.js">kernel.js</a> — the same file the
     player runtime, the Cart Inspector, and Node/agent scripts all load. See
-    <a href="/fixtures.md">fixtures.md</a> for known-good cart&#8594;bytes&#8594;fragment examples,
+    <a href="../fixtures.md">fixtures.md</a> for known-good cart&#8594;bytes&#8594;fragment examples,
     and the <a href="../">cartridge shelf</a> to play the five example carts.
   </footer>
 </div>
 
-<script src="/kernel.js"></script>
+<script src="../kernel.js"></script>
 <script>
 "use strict";
 const K = window.UrlcadeKernel;
-const RUNTIME_BASE = '/index.html';
+const RUNTIME_BASE = '../index.html';
 
 const sourceEl = document.getElementById('sourceInput');
 const fragmentEl = document.getElementById('fragmentInput');

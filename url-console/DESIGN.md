@@ -1793,6 +1793,32 @@ getting an actual point of view about "invalid cart data" for the first
 time, which every other caller (the runtime, the Inspector) inherited
 for free.
 
+**A real bug shipped anyway, found within a day by an actual user.**
+`/compile`'s own HTML referenced its sibling runtime files
+(`kernel.js`, `index.html`, `AUTHORING.md`, `fixtures.md`) with
+root-absolute paths (`/kernel.js`) — reasoned about, at the time, as
+"safe because the site's always served from a domain root." Wrong: this
+site is also published from a subpath on at least one custom domain
+(`some-domain.example/games/...`, not the domain root), where a
+root-absolute path resolves to an entirely different, nonexistent
+location — `kernel.js` 404s, `window.UrlcadeKernel` never gets set, and
+every module that reads it throws immediately, including inside
+`/compile`'s own Play-link construction. The local test setup (this
+section, above) never caught it because it served the assembled site
+from the true root of a local HTTP server every time — root-absolute
+and root-relative paths are indistinguishable from *that* vantage
+point, which is exactly why the bug was invisible to it. Fixed by
+switching `/compile` to paths relative to its own location
+(`../kernel.js`, one directory up to the flattened site root — see
+`build-site.sh`), which resolve correctly regardless of what prefix, if
+any, the whole site is mounted under. `test/smoke.js` gained a third
+section that serves the assembled site behind a simulated URL prefix
+specifically to keep this class of bug from being invisible to the
+test suite a second time — confirmed against both the broken and fixed
+version before landing, the same "reproduce the failure, then verify
+the fix undoes it" instinct DESIGN.md keeps coming back to elsewhere
+(§15.1, §18.2).
+
 ## 30. Open questions
 
 **Format & encoding**
