@@ -197,8 +197,12 @@ const PLANT_HOOKS_SRC = {
 };
 
 function buildPlantCart(){
+  // color:7 (white) — deliberately *not* 8 (sky blue), even though sky
+  // blue reads as "water": that's also backdropFillIndex below, so a drop
+  // painted in it would be invisible against its own background. White
+  // reads clearly against both the sky and the soil band it falls past.
   const dropShapes = [
-    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:8},
+    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:7},
   ];
   const cart = {
     formatVersion: 2,
@@ -222,7 +226,13 @@ function buildPlantCart(){
       {kind:0, sourceKind:0, srcA:PLANT_GLOBAL_NAMES.g_water, srcB:0, delta:0, suffixConstIdx:PLANT_CONST_NAMES.WIN_THRESHOLD, clamp:1, label:'Watered'},
       {kind:1, sourceKind:0, srcA:PLANT_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'It bloomed! Refresh to grow another'},
     ],
-    constants: [3, 130, 8, 6, 8, 80, 9, 70, 3, 6, 18],
+    // WIN_THRESHOLD raised from 8 to 24 and DROP_SPAWN_INTERVAL slowed
+    // from 6 to 10 ticks — at 6 drops/sec absorbed (once the ~0.7s fall
+    // time's first drop lands) that's ~4s of continuous dragging to fully
+    // bloom, not under 1s. STEM_STEP dropped from 9 to 3 to match (still
+    // ~MAX_STEM_H/WIN_THRESHOLD, so full growth still lands right at the
+    // clamp instead of hitting it almost immediately).
+    constants: [3, 130, 24, 10, 8, 80, 3, 70, 6, 14, 18],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:8, extFieldCount:0}, // 0: water drop
       {renderKind:2, assetIndex:0, rotateFlag:0, collisionW:1, collisionH:1, extFieldCount:1}, // 1: plant — ext 8 = current stem height, see on_draw
