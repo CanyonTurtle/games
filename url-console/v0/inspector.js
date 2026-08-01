@@ -103,8 +103,13 @@ async function startInspect(payload){
   renderInspectBody();
   // Populate Compile tab / tab-strip status immediately, without
   // requiring an edit first — what Source currently says should always
-  // compile cl​eanly right after a successful decode.
-  await compileSourceText();
+  // compile cleanly right after a successful decode. compileSourceText()
+  // itself never throws (every failure path sets compileState instead of
+  // rejecting) — still guarded here as defense in depth: an unguarded
+  // await in a caller with no .catch() turns any unexpected throw into a
+  // silent, invisible failure, which is exactly the bug class that made
+  // "Debug/New Cart do nothing" hard to diagnose in the first place.
+  try{ await compileSourceText(); } catch(err){ console.error('compileSourceText failed:', err); }
   return true;
 }
 
@@ -441,15 +446,27 @@ const STARTER_TEMPLATE = {
   },
 };
 async function startNewCart(){
-  const {bytes} = compileCartSource(STARTER_TEMPLATE);
-  const fragment = await encodePayload(bytes);
-  const ok = await startInspect(fragment);
-  if(ok){
-    inspectTab = 'Source';
-    renderInspectTabs();
-    renderInspectBody();
+  // Every step here can throw (compileCartSource synchronously,
+  // encodePayload/startInspect asynchronously) — wrapped as one block,
+  // not left to whatever caller happens to invoke this, because a
+  // rejected promise nobody awaits or .catch()es is a silent no-op from
+  // the user's side: exactly what made this worth fixing (see
+  // startInspect's own comment on the same failure class).
+  try{
+    const {bytes} = compileCartSource(STARTER_TEMPLATE);
+    const fragment = await encodePayload(bytes);
+    const ok = await startInspect(fragment);
+    if(ok){
+      inspectTab = 'Source';
+      renderInspectTabs();
+      renderInspectBody();
+    }
+    return ok;
+  } catch(err){
+    console.error('startNewCart failed:', err);
+    document.getElementById('inspectError').textContent = 'Could not start a new cart: ' + err.message;
+    return false;
   }
-  return ok;
 }
 
 // Counterpart to startInspect(), called by main.js when navigating away

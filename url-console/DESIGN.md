@@ -1888,7 +1888,54 @@ said it was — a decision log for whoever maintains this codebase, kept
 in the repo, not part of what an author (human or agent) needs to load
 to build a cart.
 
-## 31. Open questions
+## 31. Silent failures on mobile: two unguarded awaits and a compression-format gap
+
+Reported live, right after §30 shipped: "Debug" and "+ New Cart" did
+nothing on mobile — no error, no view change, no console output visible
+to the reporter. Diagnosing this without access to the reporter's
+device meant reasoning from the code, not reproducing the exact
+failure — and the code had a real, findable class of bug regardless of
+what specifically triggered it on that device.
+
+**The bug: unhandled promise rejections in click handlers.**
+`inspector.js`'s `startNewCart()` called `compileCartSource()`,
+`encodePayload()`, and `startInspect()` back to back with no
+`try`/`catch`; `main.js`'s `newCartBtn` click handler called it without
+`await` or `.catch()` either. If *anything* in that chain threw —
+network hiccup, a browser-specific API quirk, any future bug — the
+resulting rejected promise had no handler anywhere in the call chain.
+That's not a crash and not a console error a typical mobile user would
+ever see: it's a tap that visibly does nothing, indistinguishable from
+"the button isn't wired up" from the user's side. The same shape of gap
+existed in `main.js`'s `boot()`/`openDebug()` (the Debug button's own
+path, via `hashchange`) and in `startInspect()`'s own tail (the
+newly-added automatic `compileSourceText()` call from §30). Fixed by
+making every one of these an explicit `try`/`catch` that either shows a
+specific message via the existing `#inspectError` element or, for the
+top-level bootstrap IIFE, force-shows the shelf first so the error has
+somewhere visible to land — plus a `window.unhandledrejection` listener
+as a last-resort console log for anything that still slips past. None
+of this changes behavior when nothing goes wrong; it only changes
+whether a failure is visible or silent.
+
+**A concrete cause, found while auditing what could actually throw:**
+`kernel.js`'s `encodePayload()` guards on `HAS_COMPRESSION`
+(`typeof CompressionStream !== 'undefined'`) before attempting
+compression, but that only confirms the *constructor* exists — not that
+the specific `'deflate-raw'` format it's called with is supported by
+that implementation. At least one real mobile browser reports
+`CompressionStream` as present but throws constructing it with
+`'deflate-raw'` specifically. Previously that exception propagated
+through every caller; now `encodePayload` catches it and falls back to
+the raw, uncompressed fragment form — a real, always-available
+fallback, so a format-support gap costs fragment length, not the whole
+authoring flow built on top of it. `test/smoke.js` gained a section
+that simulates exactly this (a monkeypatched `CompressionStream` that
+throws only for `'deflate-raw'`) and confirms `+ New Cart` still works
+end to end — verified against both the broken and fixed version, same
+as §29's postscript, so this doesn't just look plausible, it's checked.
+
+## 32. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

@@ -202,7 +202,48 @@ async function main(){
   await browser.close();
   server.close();
 
-  // 7. Same site, mounted under a URL subpath instead of the domain root
+  // 7. A real-world failure mode found live: some mobile browsers report
+  // CompressionStream as present (HAS_COMPRESSION true) but throw when the
+  // 'deflate-raw' format specifically is actually used — which used to
+  // reject encodePayload() with nothing catching it, silently no-oping
+  // "Debug"/"+ New Cart" on affected devices. Simulates exactly that by
+  // making 'deflate-raw' throw while leaving CompressionStream itself
+  // defined, and checks the whole flow still works (falls back to the
+  // raw, uncompressed fragment form) instead of silently doing nothing.
+  {
+    const server2 = await serve(siteDir);
+    const port2 = server2.address().port;
+    const browser2 = await chromium.launch();
+    const page2 = await browser2.newPage();
+    const errors2 = [];
+    page2.on('pageerror', e => errors2.push(e.message));
+    await page2.addInitScript(() => {
+      const OrigCS = window.CompressionStream;
+      window.CompressionStream = function(format){
+        if(format === 'deflate-raw') throw new TypeError('Unsupported format: deflate-raw (simulated)');
+        return new OrigCS(format);
+      };
+    });
+    await page2.goto(`http://localhost:${port2}/index.html`);
+    await page2.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 10000});
+    check('carts still register when deflate-raw compression is unsupported', true);
+
+    await page2.click('#newCartBtn');
+    await page2.waitForTimeout(600);
+    const degradedState = await page2.evaluate(() => ({
+      debugActive: document.getElementById('inspectWrap').classList.contains('active'),
+      activeTab: document.querySelector('.inspect-tab.active')?.dataset.tab,
+      compileOk: (() => { const c = window.__urlcadeDebug.getCompileState(); return c && c.ok; })(),
+      fragmentIsRaw: (() => { const c = window.__urlcadeDebug.getCompileState(); return c && c.fragment && c.fragment.startsWith('r.'); })(),
+    }));
+    check('"+ New Cart" still works with deflate-raw unsupported (falls back to raw)', degradedState.debugActive && degradedState.activeTab === 'Source' && degradedState.compileOk && degradedState.fragmentIsRaw, JSON.stringify(degradedState));
+    check('no errors with deflate-raw unsupported', errors2.length === 0, JSON.stringify(errors2));
+
+    await browser2.close();
+    server2.close();
+  }
+
+  // 8. Same site, mounted under a URL subpath instead of the domain root
   // (a real, current deployment target — not hypothetical; see DESIGN.md
   // §29's postscript for the bug this class of check caught once already).
   {

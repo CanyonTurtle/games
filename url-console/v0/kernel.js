@@ -310,8 +310,20 @@ async function deflateRawDecompress(bytes){ return runThroughStream(Decompressio
 async function encodePayload(bytes){
   const raw = 'r.' + b64urlEncode(bytes);
   if(!HAS_COMPRESSION) return raw;
-  const compressed = 'z.' + b64urlEncode(await deflateRawCompress(bytes));
-  return compressed.length < raw.length ? compressed : raw;
+  try{
+    const compressed = 'z.' + b64urlEncode(await deflateRawCompress(bytes));
+    return compressed.length < raw.length ? compressed : raw;
+  } catch(err){
+    // HAS_COMPRESSION only confirms CompressionStream/DecompressionStream
+    // exist as constructors — some hosts report that true but still throw
+    // when the 'deflate-raw' format specifically is actually used (seen in
+    // the wild on at least one mobile browser). There's a real fallback
+    // here (the raw, uncompressed form), so a format-support gap degrades
+    // a fragment's length, not the entire cart-authoring flow built on top
+    // of this function — every caller (the runtime, Debug's Compile tab)
+    // would otherwise see this as an unexplained, silent failure instead.
+    return raw;
+  }
 }
 async function decodePayloadToBytes(str){
   if(str.startsWith('z.')) return deflateRawDecompress(b64urlDecode(str.slice(2)));

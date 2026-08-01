@@ -37,10 +37,25 @@ function goToMenu(){
 // Cart"), where there's no live game to come back to. Distinguished by
 // whether a live game's own fragment matches what's being debugged,
 // rather than a separate piece of routing state to keep in sync.
+//
+// The try/catch here is load-bearing, not decorative: this used to call
+// Inspector.startInspect() unguarded, and an unguarded await whose
+// promise nobody catches is an *invisible* failure — the tap registers,
+// the click handler runs, and if anything inside throws, nothing
+// happens on screen and nothing is logged anywhere a mobile user could
+// see. That's exactly what "Debug/New Cart do nothing" turned out to
+// be. See inspector.js's startInspect/startNewCart for the same fix.
 async function openDebug(payload){
   const resuming = !!Runtime.getWorld() && Runtime.getCurrentFragment() === payload;
   if(resuming) Runtime.pauseGame(); else Runtime.stopGame();
-  if(await Inspector.startInspect(payload)) return true;
+  let ok = false;
+  try{
+    ok = await Inspector.startInspect(payload);
+  } catch(err){
+    console.error('openDebug failed:', err);
+    document.getElementById('inspectError').textContent = 'Could not open Debug: ' + err.message;
+  }
+  if(ok) return true;
   if(resuming) Runtime.resumeGame(); else goToMenu();
   return false;
 }
@@ -68,13 +83,17 @@ async function boot(){
   }
   Inspector.closeInspector();
   if(hash){
-    // startGame() decodes the fragment directly — it doesn't need to be
-    // one of the five shelf carts, just a validly-encoded one (anything
-    // Debug's Source/Compile tabs produce, or a link a friend shared,
-    // works exactly the same way). If it doesn't decode, fall into
-    // Debug's own decode-error UI instead of duplicating that messaging.
-    if(await Runtime.startGame(hash)) return;
-    if(await Inspector.startInspect(hash)) return;
+    try{
+      // startGame() decodes the fragment directly — it doesn't need to be
+      // one of the five shelf carts, just a validly-encoded one (anything
+      // Debug's Source/Compile tabs produce, or a link a friend shared,
+      // works exactly the same way). If it doesn't decode, fall into
+      // Debug's own decode-error UI instead of duplicating that messaging.
+      if(await Runtime.startGame(hash)) return;
+      if(await Inspector.startInspect(hash)) return;
+    } catch(err){
+      console.error('boot failed:', err);
+    }
   }
   goToMenu();
 }
@@ -84,9 +103,13 @@ document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDe
 document.getElementById('debugBtn').addEventListener('click', () => {
   location.hash = 'debug:' + Runtime.getCurrentFragment();
 });
-document.getElementById('newCartBtn').addEventListener('click', () => {
+// Inspector.startNewCart() catches its own errors (see its source) and
+// never rejects — awaited here anyway, and not left as a bare unawaited
+// call, so a future regression there fails loudly during development
+// instead of silently doing nothing on a real device again.
+document.getElementById('newCartBtn').addEventListener('click', async () => {
   Runtime.stopGame();
-  Inspector.startNewCart();
+  await Inspector.startNewCart();
 });
 document.getElementById('inspectForm').addEventListener('submit', e => {
   e.preventDefault();
@@ -95,12 +118,25 @@ document.getElementById('inspectForm').addEventListener('submit', e => {
   location.hash = payload; // just play it — boot()'s normal routing (+ its Debug fallback) takes it from there
 });
 window.addEventListener('hashchange', boot);
+// Last-resort net: logs anything that still slips past the try/catches
+// above (or in some as-yet-unguarded corner) instead of leaving it as a
+// completely silent, unreported failure. Doesn't itself show the user
+// anything — the specific paths above already do that where it matters.
+window.addEventListener('unhandledrejection', e => console.error('Unhandled rejection:', e.reason));
 
 (async () => {
-  await registerAllCarts();
-  Runtime.renderMenu();
-  await boot();
-  Runtime.startLoop();
+  try{
+    await registerAllCarts();
+    Runtime.renderMenu();
+    await boot();
+    Runtime.startLoop();
+  } catch(err){
+    console.error('Startup failed:', err);
+    // #inspectError only shows while #menu itself is the active view — a
+    // startup failure this early may mean showMenu() itself never ran.
+    Runtime.showMenu();
+    document.getElementById('inspectError').textContent = 'Startup failed: ' + err.message;
+  }
 })();
 
 // Debugging/testing surface only (see test/smoke.js) — not part of the
