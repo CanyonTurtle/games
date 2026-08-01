@@ -30,6 +30,7 @@ cp "$ROOT/v0/kernel.js" "$DEST/spec/kernel.js"
 cp "$ROOT/v0/fixtures.md" "$DEST/spec/fixtures.md"
 cp "$ROOT/v0/AUTHORING.md" "$DEST/spec/AUTHORING.md"
 # Also at the root — llms.txt and AUTHORING.md link to these without
-# /spec/, and /compile's own links are root-relative (see its source).
+# /spec/, and /compile's own links are relative to itself, one level up
+# (see its source: subpath-deployment-safe on purpose, not root-absolute).
 cp "$ROOT/v0/AUTHORING.md" "$DEST/AUTHORING.md"
 cp "$ROOT/v0/fixtures.md" "$DEST/fixtures.md"
