@@ -3,25 +3,26 @@
 
    A second top-level view (alongside the shelf/player) that decodes any
    Urlcade cart — the one currently playing (via the game view's "Debug"
-   button), a pasted link, or a fresh "+ New Cart" — and tabs between its
-   palette/sprites/tiles/map/entities/hooks, plus two tabs that turn this
-   into a full authoring loop rather than a read-only decoder:
+   button), a pasted link, or a fresh "+ New Cart" — into three tabs:
 
+   - Assets: palette, sprites, tiles — everything that's just pixels.
+   - Logic: header/camera/input overview, map, entity types, and every
+     hook's bytecode decompiled to a labeled listing and a flowchart.
    - Source: the cart as an editable plain-JS-object literal (hooks as
-     assembly-source line arrays). Recompiles automatically as you type.
-   - Compile: the result — a specific, line-numbered error naming the
-     failing hook, or byte/fragment size info and a "Play this version"
-     button. A successful compile also live-updates every other tab (the
-     cart this whole view describes is always whatever Source currently
-     says, not a stale snapshot from whenever Debug was opened).
+     assembly-source line arrays, plus name/author — see AUTHORING.md).
+     Compile status/fragment/errors sit at the top of this tab, the
+     textarea right below, so editing and its feedback are never more
+     than a scroll apart. Recompiles automatically as you type, and a
+     successful compile live-updates every other tab too — the cart this
+     whole view describes is always whatever Source currently says, not
+     a stale snapshot from whenever Debug was opened.
 
-   This used to be two separate things — a read-only Inspector and a
-   standalone /compile page — kept apart because each grew out of a
-   different ask at a different time. Folding decompiling and compiling
-   into the same tab strip removes a seam that never needed to exist:
-   there was never a reason "look at this cart's guts" and "edit this
-   cart's guts" should be different pages, and every tab already shares
-   the same decoded-cart state regardless.
+   This used to be nine tabs (Overview/Palette/Sprites/Tiles/Map/
+   Entities/Hooks/Source/Compile — themselves the result of an earlier
+   merge of a read-only Inspector and a standalone /compile page).
+   Grouping into three matches how an author actually thinks about a
+   cart's parts — assets, logic, source — rather than exposing the
+   Inspector's own internal render-function boundaries as separate tabs.
 
    Reuses kernel.js's disassembler/CFG extractor and compileCartSource()
    (window.UrlcadeKernel — a classic <script> global, not an import; see
@@ -32,19 +33,19 @@
 "use strict";
 const K = window.UrlcadeKernel;
 const {
-  formatDisassembly, renderCFGSvg, compileCartSource, encodePayload,
+  formatDisassembly, renderCFGSvg, compileCartSource, decodeCartUrl,
   generatePalette, SHAPE_ELLIPSE, HOOK_NAMES, decodeCart, decodePayloadToBytes,
 } = K;
 import { World, disposeGLTextures } from './runtime.js';
 
-const INSPECT_TABS = ['Overview','Palette','Sprites','Tiles','Map','Entities','Hooks','Source','Compile'];
+const INSPECT_TABS = ['Assets', 'Logic', 'Source'];
 const MAP_GEN_NAMES = {0:'none', 1:'track (turtle-grammar)', 2:'cave (cellular automata)', 3:'platform (heightmap turtle-grammar)'};
 const TOUCH_TEMPLATE_NAMES = {0:'none', 1:'single button', 2:'steer + action', 3:'d-pad + action', 4:'d-pad only'};
-let inspectWorld = null, inspectCartInfo = null, inspectTab = 'Overview', inspectHookTab = 'on_init';
-// Source/Compile tab state — independent of inspectCartInfo because it
-// has to survive a *failed* compile (inspectCartInfo keeps showing the
-// last-known-good cart on every other tab while Source shows what you
-// actually typed and Compile shows why it doesn't work yet).
+let inspectWorld = null, inspectCartInfo = null, inspectTab = 'Logic', inspectHookTab = 'on_init';
+// Source tab state — independent of inspectCartInfo because it has to
+// survive a *failed* compile (inspectCartInfo keeps showing the
+// last-known-good cart on Assets/Logic while Source shows what you
+// actually typed and its status block shows why it doesn't work yet).
 let sourceText = '', compileState = null, sourceDebounceTimer = null;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
@@ -61,21 +62,27 @@ function extractPayloadFromInput(raw){
 // formatDisassembly()'s block-labeled output (B0:, B1:, ...) is
 // deliberately assemble()-compatible (see kernel.js), so a decompiled
 // hook pastes straight into compileCartSource() unmodified — that's
-// what makes the Source tab round-trip.
-function cartToSourceObject(cart){
-  const out = Object.assign({}, cart);
+// what makes the Source tab round-trip. name/author go in front of the
+// binary-only cart fields, matching compileCartSource's own reading of
+// them (see kernel.js) — they never round-trip through decodeCart, only
+// through this object and the fragment's own URL envelope.
+function cartToSourceObject(cart, name, author){
+  const out = {name: name || '', author: author || ''};
+  Object.assign(out, cart);
   out.hooks = {};
-  for(const name of HOOK_NAMES){
-    const bc = cart.hooks[name];
-    out.hooks[name] = (bc && bc.length) ? formatDisassembly(bc).split('\n') : [];
+  for(const hookName of HOOK_NAMES){
+    const bc = cart.hooks[hookName];
+    out.hooks[hookName] = (bc && bc.length) ? formatDisassembly(bc).split('\n') : [];
   }
   return out;
 }
 
-async function startInspect(payload){
-  let cart, bytes;
+async function startInspect(rawFragment){
+  let cart, bytes, name = '', author = '';
   try{
-    bytes = await decodePayloadToBytes(payload);
+    const decodedUrl = decodeCartUrl(rawFragment);
+    name = decodedUrl.name; author = decodedUrl.author;
+    bytes = await decodePayloadToBytes(decodedUrl.payload);
     cart = decodeCart(bytes);
   } catch(err){
     document.getElementById('inspectError').textContent = 'Could not decode this as an Urlcade cart: ' + err.message;
@@ -89,11 +96,11 @@ async function startInspect(payload){
     document.getElementById('inspectError').textContent = 'Decoded, but the map/entity data could not be built: ' + err.message;
     return false;
   }
-  inspectCartInfo = {cart, payload, byteLen: bytes.length, charLen: payload.length};
-  inspectTab = 'Overview';
+  inspectCartInfo = {cart, payload: rawFragment, byteLen: bytes.length, charLen: rawFragment.length, name, author};
+  inspectTab = 'Logic';
   const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
   inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
-  sourceText = JSON.stringify(cartToSourceObject(cart), null, 2);
+  sourceText = JSON.stringify(cartToSourceObject(cart, name, author), null, 2);
   document.getElementById('menu').classList.remove('active');
   document.getElementById('gameWrap').classList.remove('active');
   const iw = document.getElementById('inspectWrap');
@@ -101,22 +108,23 @@ async function startInspect(payload){
   updateTitle();
   renderInspectTabs();
   renderInspectBody();
-  // Populate Compile tab / tab-strip status immediately, without
-  // requiring an edit first — what Source currently says should always
-  // compile cleanly right after a successful decode. compileSourceText()
-  // itself never throws (every failure path sets compileState instead of
-  // rejecting) — still guarded here as defense in depth: an unguarded
-  // await in a caller with no .catch() turns any unexpected throw into a
-  // silent, invisible failure, which is exactly the bug class that made
-  // "Debug/New Cart do nothing" hard to diagnose in the first place.
+  // Populate the Source tab's compile status / tab-strip badge
+  // immediately, without requiring an edit first — what Source currently
+  // says should always compile cleanly right after a successful decode.
+  // compileSourceText() itself never throws (every failure path sets
+  // compileState instead of rejecting) — still guarded here as defense
+  // in depth: an unguarded await in a caller with no .catch() turns any
+  // unexpected throw into a silent, invisible failure, which is exactly
+  // the bug class that made "Debug/New Cart do nothing" hard to
+  // diagnose in the first place.
   try{ await compileSourceText(); } catch(err){ console.error('compileSourceText failed:', err); }
   return true;
 }
 
 function updateTitle(){
-  const {cart, byteLen, charLen} = inspectCartInfo;
-  document.getElementById('inspectTitle').textContent =
-    `cart_type ${cart.cartType} · ${byteLen}B raw / ${charLen} chars`;
+  const {cart, byteLen, charLen, name} = inspectCartInfo;
+  const label = name ? `${name} — cart_type ${cart.cartType}` : `cart_type ${cart.cartType}`;
+  document.getElementById('inspectTitle').textContent = `${label} · ${byteLen}B raw / ${charLen} chars`;
 }
 
 function renderInspectTabs(){
@@ -124,7 +132,7 @@ function renderInspectTabs(){
   wrap.innerHTML = INSPECT_TABS.map(t => {
     let label = t;
     let cls = 'inspect-tab' + (t===inspectTab ? ' active' : '');
-    if(t === 'Compile' && compileState){
+    if(t === 'Source' && compileState){
       cls += compileState.ok ? ' tab-ok' : ' tab-err';
       label = t + (compileState.ok ? ' ✓' : ' ✕');
     }
@@ -200,8 +208,8 @@ function renderInspectPalette(cart){
     </div>`).join('') + '</div>';
 }
 
-function renderInspectSprites(body, cart){
-  let html = '<div class="inspect-grid" id="spriteGrid"></div>';
+function spritesListHtml(cart){
+  let html = '';
   cart.sprites.forEach((s,i) => {
     html += `<div class="inspect-section-title">Sprite ${i} — ${s.w}×${s.h}, ${s.kind===1?'shape list':'raw pixels'}</div>`;
     html += `<div id="spriteSlot${i}" style="max-width:160px;margin-bottom:10px;"></div>`;
@@ -214,7 +222,9 @@ function renderInspectSprites(body, cart){
       ]);
     }
   });
-  body.innerHTML = html;
+  return html;
+}
+function attachSpriteCanvases(cart){
   cart.sprites.forEach((s,i) => {
     const slot = document.getElementById('spriteSlot'+i);
     const c = inspectWorld.spriteCanvases[i];
@@ -223,10 +233,7 @@ function renderInspectSprites(body, cart){
     slot.appendChild(c);
   });
 }
-
-function renderInspectTiles(body, cart){
-  let html = '<div class="inspect-grid" id="tileGrid"></div>';
-  body.innerHTML = html;
+function attachTileCanvases(cart){
   const grid = document.getElementById('tileGrid');
   cart.tiles.forEach((t,i) => {
     const tile = document.createElement('div');
@@ -239,6 +246,21 @@ function renderInspectTiles(body, cart){
     tile.appendChild(p);
     grid.appendChild(tile);
   });
+}
+// Assets tab: palette + sprites + tiles, in sequence — everything that's
+// just pixels, nothing that's behavior. Built as one body.innerHTML pass
+// (not three separate ones) so the sprite/tile canvases' slot divs exist
+// before attachSpriteCanvases/attachTileCanvases go looking for them.
+function renderInspectAssets(body, cart){
+  let html = '<div class="inspect-section-title">Palette</div>';
+  html += renderInspectPalette(cart);
+  html += '<div class="inspect-section-title">Sprites</div>';
+  html += spritesListHtml(cart);
+  html += '<div class="inspect-section-title">Tiles</div>';
+  html += '<div class="inspect-grid" id="tileGrid"></div>';
+  body.innerHTML = html;
+  attachSpriteCanvases(cart);
+  attachTileCanvases(cart);
 }
 
 function renderInspectMap(cart){
@@ -299,34 +321,28 @@ function renderInspectHooks(body, cart){
   }));
 }
 
+// Logic tab: header/camera/input overview, map, entity types, hooks — in
+// sequence, everything that's cart *behavior* rather than raw assets.
+// Hooks gets its own sub-slot (not body.innerHTML directly) because its
+// own hook-tab clicks re-render just that slot, same as before this tab
+// merge — clicking "on_tick" shouldn't also redraw Overview/Map above it.
+function renderInspectLogic(body, cart){
+  let html = renderInspectOverview(cart);
+  html += '<div class="inspect-section-title">Map</div>';
+  html += renderInspectMap(cart);
+  html += '<div class="inspect-section-title">Entities</div>';
+  html += renderInspectEntities(cart);
+  html += '<div class="inspect-section-title">Hooks</div><div id="hooksSlot"></div>';
+  body.innerHTML = html;
+  renderInspectHooks(document.getElementById('hooksSlot'), cart);
+}
+
 function renderInspectBody(){
   const body = document.getElementById('inspectBody');
   const {cart} = inspectCartInfo;
-  if(inspectTab === 'Overview') body.innerHTML = renderInspectOverview(cart);
-  else if(inspectTab === 'Palette') body.innerHTML = renderInspectPalette(cart);
-  else if(inspectTab === 'Sprites') renderInspectSprites(body, cart);
-  else if(inspectTab === 'Tiles') renderInspectTiles(body, cart);
-  else if(inspectTab === 'Map') body.innerHTML = renderInspectMap(cart);
-  else if(inspectTab === 'Entities') body.innerHTML = renderInspectEntities(cart);
-  else if(inspectTab === 'Hooks') renderInspectHooks(body, cart);
-  else if(inspectTab === 'Source') renderInspectSource(body);
-  else if(inspectTab === 'Compile') renderInspectCompile(body);
-}
-
-function renderInspectSource(body){
-  body.innerHTML = `
-    <p class="inspect-help">Plain JS object — header fields as values, each hook as an array of
-    assembly-source lines (see <a href="AUTHORING.md">AUTHORING.md</a>). Recompiles automatically
-    as you edit; see the Compile tab for status.</p>
-    <textarea id="debugSourceInput" class="debug-textarea" spellcheck="false"
-      autocapitalize="off" autocomplete="off">${esc(sourceText)}</textarea>
-  `;
-  const ta = document.getElementById('debugSourceInput');
-  ta.addEventListener('input', () => {
-    sourceText = ta.value;
-    clearTimeout(sourceDebounceTimer);
-    sourceDebounceTimer = setTimeout(compileSourceText, 400);
-  });
+  if(inspectTab === 'Assets') renderInspectAssets(body, cart);
+  else if(inspectTab === 'Logic') renderInspectLogic(body, cart);
+  else if(inspectTab === 'Source') renderInspectSourceTab(body);
 }
 
 function sizeClassLabel(charLen){
@@ -337,26 +353,28 @@ function sizeClassLabel(charLen){
   return 'over "full" (~2000-char ceiling)';
 }
 
-function renderInspectCompile(body){
+// Compile status block — the top of the Source tab. Lives in its own
+// function (returning html, not touching the DOM) so it can be
+// re-rendered into #compileStatusSlot alone on every recompile, without
+// touching the textarea below it (see renderCompileStatusSlot).
+function compileStatusHtml(){
   if(!compileState){
-    body.innerHTML = '<p class="inspect-empty">Compiling…</p>';
-    return;
+    return '<div class="inspect-section-title">Compile status</div><p class="inspect-empty">Compiling…</p>';
   }
   if(!compileState.ok){
-    body.innerHTML = `
-      <div class="inspect-section-title">Compile error</div>
+    return `
+      <div class="inspect-section-title">Compile status</div>
       <p class="compile-error">${esc(compileState.message)}</p>
-      <p class="inspect-help">Fix it on the Source tab — this updates automatically as you edit.</p>
     `;
-    return;
   }
   const {bytes, fragment} = compileState;
-  body.innerHTML = `
-    <div class="inspect-section-title">Compiled OK</div>
+  const {payload} = decodeCartUrl(fragment);
+  return `
+    <div class="inspect-section-title">Compile status</div>
     ${table([
       ['field','value'],
       ['raw size', bytes.length + ' bytes'],
-      ['fragment', fragment.length + ' chars (' + (fragment.startsWith('z.') ? 'compressed' : 'uncompressed') + ')'],
+      ['fragment', fragment.length + ' chars (' + (payload.startsWith('z.') ? 'compressed' : 'uncompressed') + ')'],
       ['size class', sizeClassLabel(fragment.length)],
     ])}
     <div class="debug-actions">
@@ -365,17 +383,48 @@ function renderInspectCompile(body){
     <div class="inspect-section-title">Fragment</div>
     <code class="fragment-code">${esc(fragment)}</code>
   `;
-  document.getElementById('playCompiledBtn').addEventListener('click', () => { location.hash = fragment; });
+}
+// Only fires while the Source tab is actually the one rendered (the
+// #compileStatusSlot it targets only exists then) — compileSourceText()
+// also runs right after a decode, before any tab has necessarily been
+// rendered as Source, and that's fine: the status is recomputed fresh
+// the next time a real tab click lands on Source (see renderInspectBody).
+function renderCompileStatusSlot(){
+  const slot = document.getElementById('compileStatusSlot');
+  if(!slot) return;
+  slot.innerHTML = compileStatusHtml();
+  const playBtn = document.getElementById('playCompiledBtn');
+  if(playBtn) playBtn.addEventListener('click', () => { location.hash = compileState.fragment; });
+}
+
+function renderInspectSourceTab(body){
+  body.innerHTML = `
+    <div id="compileStatusSlot"></div>
+    <div class="inspect-section-title">Source</div>
+    <p class="inspect-help">Plain JS object — header fields as values, plus <code>name</code>/
+    <code>author</code> (unencoded text in the URL fragment itself — see
+    <a href="AUTHORING.md">AUTHORING.md</a> — never part of the binary cart), each hook as an
+    array of assembly-source lines. Recompiles automatically as you edit; status above updates live.</p>
+    <textarea id="debugSourceInput" class="debug-textarea" spellcheck="false"
+      autocapitalize="off" autocomplete="off">${esc(sourceText)}</textarea>
+  `;
+  renderCompileStatusSlot();
+  const ta = document.getElementById('debugSourceInput');
+  ta.addEventListener('input', () => {
+    sourceText = ta.value;
+    clearTimeout(sourceDebounceTimer);
+    sourceDebounceTimer = setTimeout(compileSourceText, 400);
+  });
 }
 
 // Parses the Source tab's text, compiles it (kernel.js's
 // compileCartSource — assembles every hook, encodeCart, round-trips
-// through decodeCart), and encodes a fragment. On success, also rebuilds
-// inspectWorld/inspectCartInfo from the *edited* cart so every other tab
-// (Overview, Hooks, ...) reflects it live — this view always shows what
+// through decodeCart, encodes the fragment including any name/author),
+// and on success rebuilds inspectWorld/inspectCartInfo from the *edited*
+// cart so Assets/Logic reflect it live — this view always shows what
 // Source currently says, never a stale snapshot from whenever Debug was
-// first opened. On failure, every other tab keeps showing the last
-// known-good cart; only Source and Compile reflect the broken edit.
+// first opened. On failure, Assets/Logic keep showing the last known-good
+// cart; only the Source tab's status block reflects the broken edit.
 async function compileSourceText(){
   let parsed;
   try{
@@ -383,16 +432,16 @@ async function compileSourceText(){
   } catch(err){
     compileState = {ok: false, message: 'Source is not valid JS: ' + err.message};
     renderInspectTabs();
+    renderCompileStatusSlot();
     return;
   }
   try{
-    const {cart, bytes} = compileCartSource(parsed);
-    const fragment = await encodePayload(bytes);
+    const {cart, bytes, fragment, name, author} = await compileCartSource(parsed);
     compileState = {ok: true, bytes, fragment};
     if(inspectWorld) disposeGLTextures(inspectWorld);
     try{
       inspectWorld = new World(cart);
-      inspectCartInfo = {cart, payload: fragment, byteLen: bytes.length, charLen: fragment.length};
+      inspectCartInfo = {cart, payload: fragment, byteLen: bytes.length, charLen: fragment.length, name, author};
       updateTitle();
     } catch(err){
       // Rare — compileCartSource already round-trips through decodeCart
@@ -404,12 +453,13 @@ async function compileSourceText(){
   } catch(err){
     compileState = {ok: false, message: err.message};
   }
-  // Only the tab strip (for the Compile tab's ✓/✕ status) — never the
-  // body while the user's still typing in Source, or every keystroke
-  // would blow away textarea focus/cursor/selection by re-rendering it
-  // out from under itself. The body picks up fresh state next time it's
-  // actually rendered (a real tab click, including landing on Compile).
+  // Tab strip (for the Source tab's ✓/✕ status) plus just the compile
+  // status slot — never Assets/Logic, and never the textarea itself,
+  // while the user's still typing, or every keystroke would blow away
+  // textarea focus/cursor/selection by re-rendering it out from under
+  // itself.
   renderInspectTabs();
+  renderCompileStatusSlot();
 }
 
 // Standalone entry point for "+ New Cart" (main.js) — compiles a small
@@ -446,15 +496,14 @@ const STARTER_TEMPLATE = {
   },
 };
 async function startNewCart(){
-  // Every step here can throw (compileCartSource synchronously,
-  // encodePayload/startInspect asynchronously) — wrapped as one block,
-  // not left to whatever caller happens to invoke this, because a
-  // rejected promise nobody awaits or .catch()es is a silent no-op from
-  // the user's side: exactly what made this worth fixing (see
-  // startInspect's own comment on the same failure class).
+  // Every step here can throw (compileCartSource, startInspect — both
+  // async) — wrapped as one block, not left to whatever caller happens
+  // to invoke this, because a rejected promise nobody awaits or
+  // .catch()es is a silent no-op from the user's side: exactly what made
+  // this worth fixing (see startInspect's own comment on the same
+  // failure class).
   try{
-    const {bytes} = compileCartSource(STARTER_TEMPLATE);
-    const fragment = await encodePayload(bytes);
+    const {fragment} = await compileCartSource(STARTER_TEMPLATE);
     const ok = await startInspect(fragment);
     if(ok){
       inspectTab = 'Source';

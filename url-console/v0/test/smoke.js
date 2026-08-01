@@ -96,8 +96,34 @@ async function main(){
   await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 10000});
   check('all 5 example carts registered', true);
 
+  // Each cart's own fragment carries its name/author in the URL envelope
+  // (DESIGN.md §34) — never a manual title/genre/accentIdx passed to a
+  // registerCart() call (that whole call shape is gone, see carts/
+  // index.js). Checked straight from the fragment, the same way the shelf
+  // itself reads it, not from anything the builder function returned.
+  const envelopes = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    return Object.fromEntries(Object.entries(K.CARTS).map(([k, c]) => [k, K.decodeCartUrl(c.fragment)]));
+  });
+  check('every shelf cart\'s fragment carries a non-empty name+author envelope',
+    Object.values(envelopes).every(e => e.name && e.author), JSON.stringify(envelopes));
+
+  // The shelf itself never sees the in-memory authored cart object — it
+  // rebuilds each card (thumbnail, name, author) purely by decoding the
+  // fragment, same as any pasted link. Checked by reading the rendered
+  // DOM, not CARTS, so a regression that broke that decode path (and fell
+  // back to the div's error branch) would be caught here.
+  const shelfCards = await page.evaluate(() => Array.from(document.querySelectorAll('#cartList .cart')).map(div => ({
+    hasThumb: !!div.querySelector('.cart-thumb'),
+    title: div.querySelector('h2')?.textContent || '',
+    author: div.querySelector('.cart-author')?.textContent || '',
+  })));
+  check('all 5 shelf cards rendered a thumbnail canvas + name + author',
+    shelfCards.length === 5 && shelfCards.every(c => c.hasThumb && c.title && /Urlcade/.test(c.author)),
+    JSON.stringify(shelfCards));
+
   const keys = await page.evaluate(() => Object.keys(window.__urlcadeDebug.CARTS));
-  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].payload; }, keys[0]);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
   await page.waitForTimeout(250);
   let state = await page.evaluate(() => {
     const w = window.__urlcadeDebug.getWorld();
@@ -105,7 +131,7 @@ async function main(){
   });
   check(`cart "${keys[0]}" plays (world exists, no cart fault)`, state.ok && !state.fault, JSON.stringify(state));
   for(const key of keys.slice(1)){
-    await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].payload; }, key);
+    await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, key);
     await page.waitForTimeout(200);
     const st = await page.evaluate(() => {
       const w = window.__urlcadeDebug.getWorld();
@@ -115,9 +141,9 @@ async function main(){
   }
 
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
-  // live world, shows all 9 tabs including Source/Compile, and the Compile
-  // tab starts in a known-good state matching the game's own fragment.
-  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].payload; }, keys[0]);
+  // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
+  // in a known-good compiled state matching the game's own fragment.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
   await page.waitForTimeout(250);
   const originalFragment = await page.evaluate(() => window.__urlcadeDebug.getCurrentFragment());
   await page.click('#debugBtn');
@@ -130,43 +156,39 @@ async function main(){
   check('Debug pauses (not tears down) the live game', pausedState.worldStillAlive && !pausedState.gameViewActive && pausedState.debugViewActive, JSON.stringify(pausedState));
 
   const tabLabels = await page.$$eval('.inspect-tab', els => els.map(e => e.dataset.tab));
-  check('all 9 tabs present including Source/Compile', JSON.stringify(tabLabels) === JSON.stringify(['Overview','Palette','Sprites','Tiles','Map','Entities','Hooks','Source','Compile']), tabLabels.join(','));
+  check('all 3 tabs present (Assets/Logic/Source)', JSON.stringify(tabLabels) === JSON.stringify(['Assets','Logic','Source']), tabLabels.join(','));
 
-  await page.click('.inspect-tab[data-tab="Compile"]');
-  await page.waitForTimeout(100);
   let compileOk = await page.evaluate(() => {
     const c = window.__urlcadeDebug.getCompileState();
     return c && c.ok && c.fragment;
   });
-  check('Compile tab starts in a known-good state for the paused game', !!compileOk);
+  check('compile state starts known-good for the paused game (computed before any tab click)', !!compileOk);
 
   await page.click('.inspect-tab[data-tab="Source"]');
   await page.waitForTimeout(100);
   const sourceText1 = await page.inputValue('#debugSourceInput');
   check('Source tab is pre-filled with decompiled source', /formatVersion/.test(sourceText1) && /hooks/.test(sourceText1), sourceText1.slice(0, 60));
+  const compileFieldText = await page.textContent('.inspect-body');
+  check('Source tab shows compile status (fragment/size) above the textarea', /Compile status/.test(compileFieldText) && /Play this version/.test(compileFieldText), compileFieldText.slice(0, 80));
 
   // 3. Editing Source recompiles automatically (debounced) and updates the
-  // Compile tab's status — bad opcode surfaces a specific, hook+line-named
-  // error without navigating anywhere.
+  // Source tab's own compile-status block — bad opcode surfaces a
+  // specific, hook+line-named error without navigating anywhere.
   const broken = sourceText1.replace(/HALT/, 'BOGUS');
   await page.fill('#debugSourceInput', broken);
   await page.waitForTimeout(600);
-  const compileTabClass = await page.evaluate(() => document.querySelector('.inspect-tab[data-tab="Compile"]').className);
-  check('bad opcode marks the Compile tab as errored', /tab-err/.test(compileTabClass), compileTabClass);
-  await page.click('.inspect-tab[data-tab="Compile"]');
-  await page.waitForTimeout(100);
+  const sourceTabClass = await page.evaluate(() => document.querySelector('.inspect-tab[data-tab="Source"]').className);
+  check('bad opcode marks the Source tab as errored', /tab-err/.test(sourceTabClass), sourceTabClass);
   const errText = await page.textContent('.compile-error');
-  check('bad opcode surfaces a specific, hook+line-named error', /line \d+/.test(errText) && /hook/.test(errText), errText);
+  check('bad opcode surfaces a specific, hook+line-named error, still on Source (no extra click)', /line \d+/.test(errText) && /hook/.test(errText), errText);
+  const taStillFocused = await page.evaluate(() => document.activeElement && document.activeElement.id === 'debugSourceInput');
+  check('recompiling on edit does not steal focus from the textarea', taStillFocused);
 
   // Fix it back and confirm Play-this-version actually starts the (now
   // slightly different, still valid) cart — exercises the same "any valid
   // fragment plays directly" path a completely external cart would use.
-  await page.click('.inspect-tab[data-tab="Source"]');
-  await page.waitForTimeout(100);
   await page.fill('#debugSourceInput', sourceText1);
   await page.waitForTimeout(600);
-  await page.click('.inspect-tab[data-tab="Compile"]');
-  await page.waitForTimeout(100);
   await page.click('#playCompiledBtn');
   await page.waitForTimeout(300);
   const replayedState = await page.evaluate(() => {
@@ -181,7 +203,7 @@ async function main(){
   // before pausing — history.replaceState (not location.hash=) is what's
   // supposed to make resuming skip startGame() entirely; a plain "is a
   // game running" check wouldn't catch a regression back to re-decoding.
-  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].payload; }, keys[0]);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
   await page.waitForTimeout(250);
   await page.evaluate(() => { window.__urlcadeDebug.getWorld().__smokeTestMarker = 'same-instance'; });
   await page.click('#debugBtn');
@@ -285,14 +307,14 @@ async function main(){
     await subPage.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 5, {timeout: 8000});
     check('root runtime loads under a subpath deployment', true);
 
-    await subPage.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].payload; }, keys[0]);
+    await subPage.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
     await subPage.waitForTimeout(250);
     await subPage.click('#debugBtn');
     await subPage.waitForTimeout(300);
-    await subPage.click('.inspect-tab[data-tab="Compile"]');
+    await subPage.click('.inspect-tab[data-tab="Source"]');
     await subPage.waitForTimeout(100);
     const subCompileOk = await subPage.evaluate(() => { const c = window.__urlcadeDebug.getCompileState(); return c && c.ok; });
-    check('Debug (Source/Compile included) works under a subpath deployment', !!subCompileOk);
+    check('Debug (Source tab, with compile status, included) works under a subpath deployment', !!subCompileOk);
     check('no errors under the subpath scenario', subErrors.length === 0, JSON.stringify(subErrors));
 
     await subBrowser.close();

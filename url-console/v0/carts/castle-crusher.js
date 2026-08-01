@@ -917,6 +917,7 @@ function buildCastleCrusherCart(){
 
   const cart = {
     formatVersion: 1,
+    name: 'Castle Crusher', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 5,
     paletteMode: 1,
     paletteParams: [210, 0, 10, 30, 25, 70, 150, 0], // cool stone/grey hue

@@ -1986,7 +1986,143 @@ server pointed at the repo) needs no cache-busting at all. Versioning
 lives entirely in the deploy step, where the actual risk (a CDN or
 browser caching across deploys) actually is.
 
-## 33. Open questions
+## 34. Name/author URL envelope, an automatic thumbnail shelf, and a 3-tab Debug reorg
+
+Two changes shipped together, both aimed at the same thing: making a
+cart's identity (what game is this, who made it) and the Debug view's
+organization both fall directly out of the fragment/cart data itself,
+rather than out of hand-maintained metadata sitting next to it.
+
+**Name/author, unencoded, in front of the payload.** `carts/index.js`
+used to call `registerCart(key, title, genre, accentIdx, builder)` —
+title and a manually-chosen accent-palette index, typed once per cart,
+next to but not *part of* the cart the builder actually produced. That
+duplication is exactly the kind of thing that quietly drifts (rename a
+cart's `cartType` comment and forget the shelf's `genre` string next to
+it). The fix: `name`/`author` became real fields on the cart *source*
+object every `carts/*.js` builder already returns — the same object
+`compileCartSource` was already reading everything else from — and
+`kernel.js` gained `encodeCartUrl(name, author, payload)` /
+`decodeCartUrl(fragment)` to carry them in the URL fragment itself,
+prefixed before the existing `z.`/`r.` tag: `#My%20Game,Ada,z.<payload>`.
+
+Deliberately *not* folded into the binary cart format and base64'd like
+everything else:
+- Base64 buys real compression on binary data with byte-level
+  redundancy; it buys essentially nothing on a short, already-dense,
+  human-authored string like a game's name.
+- Plain text in the fragment means a shared link is self-describing at
+  a glance — `#Flappy%20Bird,Urlcade,z.dVDL...` tells a human (or an
+  agent skimming a list of links) what it is without decoding anything.
+  That's a real usability property a binary-encoded name would give up
+  for no compression benefit in return.
+
+A comma is the delimiter, and it's unambiguous in both directions:
+base64url's own alphabet (`A-Za-z0-9-_`) never contains a comma, and
+neither does a legacy untagged raw fragment (same alphabet) — so a
+fragment with no comma at all is exactly a fragment from before this
+existed. `encodeCartUrl` only emits the `name,author,` prefix when at
+least one of them is non-empty (both empty ⇒ returns `payload`
+unchanged), so every fragment this repo already shipped, and any
+fresh "+ New Cart" until an author sets a name, stays exactly the
+bare `z./r.` shape it always was — this is additive, not a breaking
+format bump. `encodeURIComponent` on each field individually (not on
+the whole `name,author` string at once) means a literal comma *inside*
+a name or author gets escaped to `%2C`, so it can never be mistaken for
+the delimiter — verified directly (`decodeCartUrl(encodeCartUrl('A, B',
+'C, D', 'r.xyz'))` round-trips `'A, B'`/`'C, D'` exactly).
+
+`compileCartSource` became `async` (it now ends in a call to
+`encodePayload`, itself async since `CompressionStream` is) and returns
+`{cart, bytes, fragment, name, author}` instead of `{cart, bytes}` —
+`fragment` is the fully-encoded, ready-to-play URL fragment, envelope
+included, so every caller that used to hand-assemble `encodePayload(bytes)`
+itself (`carts/index.js`, `inspector.js`'s `startNewCart`/
+`compileSourceText`) now gets it directly. `name`/`author` are stripped
+from the cart object before `encodeCart` sees it (same treatment as the
+existing `constNames`/`globalNames` authoring-time-only fields) — they
+never reach `decodeCart`'s output, only the fragment's own envelope and
+the Source tab's editable object (see below).
+
+**The shelf is now auto-generated from fragments, not hand-styled
+cards.** `carts/index.js` no longer takes a title/genre/accent per
+cart — it just compiles each builder via `compileCartSource` and keeps
+the resulting `{fragment, name, author}`. `runtime.js`'s `renderMenu()`
+was rewritten to build each card by *decoding* that fragment — the same
+`decodeCartUrl` → `decodePayloadToBytes` → `decodeCart` path any pasted
+link goes through, never reaching into the in-memory authored object —
+and rendering the decoded cart's actual first frame (post-`on_init`, no
+ticks run) to an offscreen Canvas2D thumbnail. That's a deliberate
+"prove it, don't just claim it" property: a shelf card existing is
+proof its exact fragment decodes and renders, not a hand-typed
+assertion sitting next to a cart that might have drifted from it.
+
+The thumbnail renderer builds (and immediately tears down) a real
+`World` purely to reuse its already-CPU-side `spriteCanvases`/
+`tileCanvases`/`mapCanvas` (`buildBitmap` never depends on which
+renderer is active), composites them onto a plain `<canvas>` with
+Canvas2D — never the WebGL path `renderSceneGL` uses for actual play.
+A shelf full of live GL textures with no natural disposal point is
+exactly the "texture lifecycle complexity" not worth taking on for a
+static preview image; `disposeGLTextures()` runs right after drawing,
+same pattern `inspector.js` already used for its own throwaway/replaced
+`inspectWorld`.
+
+Card accent color is now derived from the decoded palette instead of a
+manually-chosen index (the old `accentIdx` argument): scan every
+palette entry (skipping index 0, conventionally an outline/background
+color) for whichever has the largest max-minus-min across its RGB
+channels — a cheap, mode-agnostic "how colorful is this" proxy. A fixed
+index doesn't generalize: curated-bank palettes (`paletteMode: 0`) pad
+unused slots with flat black past whatever count a specific bank
+defines, so a fixed index like 8 or 15 lands on real color for some
+banks and dead padding for others; the scan-for-most-colorful approach
+is blind to that distinction entirely.
+
+**Debug's nine tabs became three.** `Overview/Palette/Sprites/Tiles/
+Map/Entities/Hooks/Source/Compile` — themselves the result of an
+earlier merge (§30) of a read-only Inspector and a standalone
+`/compile` page — grouped by what an author actually thinks in terms
+of, not by the Inspector's own internal render-function boundaries:
+- **Assets**: Palette, Sprites, Tiles, in sequence — everything that's
+  just pixels.
+- **Logic**: Overview, Map, Entities, Hooks, in sequence — everything
+  that's cart *behavior*. Hooks keeps its own nested hook-tab
+  sub-navigation (on_init/on_frame/.../on_collide) unchanged.
+- **Source**: compile status (raw size, fragment length/class, a "Play
+  this version" button, or a specific line-numbered error) at the top,
+  the editable source textarea directly below — explicitly per this
+  round's request, so editing and its own feedback are never more than
+  a scroll apart, instead of two separate tab clicks away from each
+  other the way Source/Compile used to be.
+
+The ✓/✕ compile-status badge moved from the old Compile tab's own
+button onto Source's. The debounced auto-recompile-on-edit still only
+touches a small `#compileStatusSlot` div at the top of the Source tab's
+body — never the textarea itself, never Assets/Logic — the same
+focus-preservation concern §14 already solved, just re-scoped to a
+sub-element instead of a whole separate tab now that status and editor
+share one tab. `cartToSourceObject` (decompiled-bytecode → editable
+JS-object text) now prepends `name`/`author` fields ahead of the
+binary-only cart fields, so editing a cart's identity is exactly as
+live/first-class in Source as editing its hooks — decoded straight
+from the fragment's own envelope, round-tripped back into one on the
+next successful compile.
+
+One real bug caught during this: `runtime.js`'s `startGame(fragment)`
+originally still called `decodeCart(await decodePayloadToBytes(fragment))`
+directly on the raw hash — unchanged from before this section — which
+broke every cart whose fragment now carries a name/author prefix (the
+prefix isn't valid base64url, so decoding failed and the game silently
+fell through to `boot()`'s Inspector fallback instead of playing).
+Confirmed via `test/smoke.js`'s existing "cart plays" checks, which
+started failing outright; fixed by decoding through `decodeCartUrl(fragment).payload`
+first, same as every other entry point already did. Reverting the fix
+reproduced the failure (all five shelf carts: `{"ok":false}`) before
+restoring it — the standing verify-the-verifier practice throughout
+this log.
+
+## 35. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

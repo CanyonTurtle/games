@@ -348,6 +348,7 @@ function buildRacerCart(){
 
   const cart = {
     formatVersion: 1,
+    name: 'Race Car', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14
     paletteMode: 1,
     paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],

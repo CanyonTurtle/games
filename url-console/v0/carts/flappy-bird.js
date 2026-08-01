@@ -201,6 +201,7 @@ function buildFlappyCart(){
   ]);
   const cart = {
     formatVersion: 1,
+    name: 'Flappy Bird', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 63, // advisory label only — see DESIGN.md §14
     paletteMode: 0,
     paletteParams: [0,0,0,0,0,0,0,0],

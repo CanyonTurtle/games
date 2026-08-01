@@ -23,7 +23,7 @@ const {
   runHook, MAP_EDGE_TILE, BUTTON_BITS,
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION,
   TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
-  decodeCart, decodePayloadToBytes, describeControls,
+  decodeCart, decodePayloadToBytes, decodeCartUrl, describeControls,
 } = K;
 import { CARTS } from './carts/index.js';
 import { cssColorToRGB } from './color-utils.js';
@@ -519,30 +519,104 @@ function setupTouchControls(cart){
   canvas.addEventListener('contextmenu', e => e.preventDefault());
 })();
 
-function renderMenu(){
+function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+
+// Auto-derived, not a manual per-cart index (DESIGN.md §34): scans every
+// palette entry for the most "colorful" one (max-min across its RGB
+// channels — cheap, and blind to which palette *mode* produced it) and
+// uses that as the card's accent. Skips index 0 on purpose — convention
+// across every generator/cart is an outline/background color there, and
+// it's frequently black or otherwise a poor accent regardless of mode.
+// Robust to curated-bank palettes padding unused slots with flat black
+// (a fixed index like 8 or 15 would land on padding for some banks).
+function deriveAccentColor(palette){
+  let best = null, bestScore = -1;
+  for(let i=1;i<palette.length;i++){
+    const [r,g,b] = cssColorToRGB(palette[i]);
+    const score = Math.max(r,g,b) - Math.min(r,g,b);
+    if(score > bestScore){ bestScore = score; best = palette[i]; }
+  }
+  return best || palette[0] || '#e0a030';
+}
+
+// Renders a decoded cart's first frame (post on_init, no ticks run) to an
+// offscreen Canvas2D — deliberately not the WebGL path renderSceneGL uses
+// for actual play: a shelf full of live GL textures with no defined
+// disposal point is exactly the "texture lifecycle complexity" not worth
+// taking on for a static preview image. Builds (and immediately tears
+// down) a real World purely to reuse its already-CPU-side sprite/tile/map
+// canvases (buildBitmap never depends on which renderer is active) —
+// disposeGLTextures() below cleans up whatever GL textures the shared
+// USE_GL flag caused it to also build, same as inspector.js already does
+// for its own throwaway/replaced Worlds.
+function buildCardThumbnail(cart){
+  const w = new World(cart);
+  const off = document.createElement('canvas');
+  off.width = cart.screenW; off.height = cart.screenH;
+  const c = off.getContext('2d');
+  if(w.map){
+    c.drawImage(w.mapCanvas, 0, 0);
+  } else {
+    c.fillStyle = w.palette[cart.backdropFillIndex] || '#222';
+    c.fillRect(0, 0, off.width, off.height);
+    if(cart.backdropGroundHeight > 0){
+      c.fillStyle = w.palette[cart.backdropGroundIndex] || '#222';
+      c.fillRect(0, off.height - cart.backdropGroundHeight, off.width, cart.backdropGroundHeight);
+    }
+  }
+  for(const e of w.entities){
+    const type = cart.entityTypes[e.typeId];
+    if(type.renderKind === 1){ // tile column
+      const extent = Math.max(0, Math.floor(e.props[8]));
+      const capAtTop = e.props[10] === 0;
+      const bodyCanvas = w.tileCanvases[type.assetIndex];
+      const capCanvas = w.tileCanvases[type.assetIndex+1];
+      for(let row=0; row<extent; row++){
+        const isCapRow = capAtTop ? row===0 : row===extent-1;
+        c.drawImage(isCapRow?capCanvas:bodyCanvas, e.props[0], e.props[1]+row*8);
+      }
+    } else {
+      const spr = w.spriteCanvases[type.assetIndex];
+      c.drawImage(spr, e.props[0]-spr.width/2, e.props[1]-spr.height/2);
+    }
+  }
+  disposeGLTextures(w);
+  return off;
+}
+
+// Takes a list of ready-to-play fragments (CARTS' own values — see
+// carts/index.js) and decodes *each one*, same as any pasted link would
+// be, to build its card: name/author from the fragment's own URL
+// envelope (decodeCartUrl), thumbnail/accent from the cart it decodes to.
+// Never reaches into an in-memory authored object — a shelf card is proof
+// its fragment plays, not a claim about it (see carts/index.js's header).
+async function renderMenu(){
   const list = document.getElementById('cartList');
   list.innerHTML = '';
   for(const key of Object.keys(CARTS)){
-    const c = CARTS[key];
+    const { fragment } = CARTS[key];
     const div = document.createElement('div');
     div.className = 'cart';
-    div.style.setProperty('--cart-accent', c.accent);
-    div.innerHTML = `<div class="cart-stripe"></div>
-      <div class="cart-body">
-        <p class="eyebrow"><b>${c.genre}</b></p>
-        <h2>${c.title}</h2>
-        <a class="playbtn" href="#${c.payload}">&#9654; PLAY</a>
-        <dl class="spec">
-          <dt>raw size</dt><dd>${c.byteLen} bytes</dd>
-          <dt>fragment</dt><dd>${c.charLen} chars${c.compressed
-            ? ` (was ${c.rawCharLen} uncompressed, -${Math.round((1-c.charLen/c.rawCharLen)*100)}%)`
-            : ', uncompressed (compression didn’t win on a cart this small)'}</dd>
-        </dl>
-        <details class="payload">
-          <summary>fragment payload</summary>
-          <code>#${c.payload}</code>
-        </details>
-      </div>`;
+    try{
+      const { name, author, payload } = decodeCartUrl(fragment);
+      const cart = decodeCart(await decodePayloadToBytes(payload));
+      const accent = deriveAccentColor(generatePalette(cart));
+      div.style.setProperty('--cart-accent', accent);
+      div.innerHTML = `
+        <a class="cart-thumb-link" href="#${fragment}" aria-label="Play ${esc(name || 'this cart')}">
+          <div class="cart-thumb-slot"></div>
+        </a>
+        <div class="cart-body">
+          <h2>${esc(name) || '(untitled)'}</h2>
+          <p class="cart-author">${author ? 'by ' + esc(author) : ''}</p>
+          <a class="playbtn" href="#${fragment}">&#9654; PLAY</a>
+        </div>`;
+      const thumb = buildCardThumbnail(cart);
+      thumb.className = 'cart-thumb';
+      div.querySelector('.cart-thumb-slot').appendChild(thumb);
+    } catch(err){
+      div.innerHTML = `<div class="cart-body"><p class="compile-error">Could not decode "${esc(key)}": ${esc(err.message)}</p></div>`;
+    }
     list.appendChild(div);
   }
 }
@@ -564,7 +638,7 @@ function renderMenu(){
 async function startGame(fragment){
   let cart;
   try{
-    cart = decodeCart(await decodePayloadToBytes(fragment));
+    cart = decodeCart(await decodePayloadToBytes(decodeCartUrl(fragment).payload));
   } catch(err){
     return false;
   }

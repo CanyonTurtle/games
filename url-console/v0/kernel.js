@@ -331,6 +331,32 @@ async function decodePayloadToBytes(str){
   return b64urlDecode(str); // untagged: legacy raw fragment
 }
 
+// Name/author URL envelope (DESIGN.md §34) — plain, unencoded-as-cart-data
+// text prefixed onto a payload before its z./r. tag: `<name>,<author>,z.<...>`.
+// Deliberately encodeURIComponent'd individually rather than folded into the
+// binary cart format and base64'd like everything else: base64 buys no real
+// compression on a short human-readable string, and a reader glancing at a
+// shared link can already tell what game it is without decoding anything.
+// A comma is a safe, unambiguous split point because neither base64url's
+// alphabet (A-Za-z0-9-_) nor a legacy untagged raw fragment (same alphabet)
+// ever contains one — so a fragment with no comma at all is exactly a
+// fragment from before this existed, or one with no name/author set.
+function encodeCartUrl(name, author, payload){
+  if(!name && !author) return payload;
+  return encodeURIComponent(name || '') + ',' + encodeURIComponent(author || '') + ',' + payload;
+}
+function decodeCartUrl(fragment){
+  const c1 = fragment.indexOf(',');
+  if(c1 === -1) return {name: '', author: '', payload: fragment};
+  const c2 = fragment.indexOf(',', c1 + 1);
+  if(c2 === -1) return {name: '', author: '', payload: fragment};
+  return {
+    name: decodeURIComponent(fragment.slice(0, c1)),
+    author: decodeURIComponent(fragment.slice(c1 + 1, c2)),
+    payload: fragment.slice(c2 + 1),
+  };
+}
+
 /* ============================================================
    5. Cart binary format (byte-aligned V0 simplification of
       DESIGN.md §4 — see url-console/v0/README.md for what this
@@ -1081,10 +1107,17 @@ function defaultCartFields(){
 // cart's own FOO_CONST_NAMES/FOO_GLOBAL_NAMES, used only to resolve
 // PUSHC/LOADG/STOREG/LOADE/STOREE mnemonic operands; they never affect
 // the encoded bytes and are stripped before encodeCart sees the cart.
-function compileCartSource(source){
+// `source.name`/`source.author` (optional) likewise never reach the binary
+// format — they're carried into the returned `fragment`'s URL envelope
+// instead (see encodeCartUrl above), the same "authoring-time metadata,
+// stripped before encodeCart" treatment as constNames/globalNames.
+// Async (unlike encodeCart/decodeCart) only because it ends in
+// encodePayload(), which needs CompressionStream's async API.
+async function compileCartSource(source){
   if(!source || typeof source !== 'object') throw new Error('compile: cart source must be an object');
   const cart = Object.assign(defaultCartFields(), source);
   delete cart.constNames; delete cart.globalNames;
+  delete cart.name; delete cart.author;
   const sym = {constants: source.constNames || {}, globals: source.globalNames || {}};
   const hooks = {};
   for(const name of HOOK_NAMES){
@@ -1116,13 +1149,16 @@ function compileCartSource(source){
   } catch(err){
     throw new Error('compile: cart encoded but failed to round-trip through decodeCart (' + err.message + ') — this is a bug in the source data, not a transport issue');
   }
-  return {cart: decoded, bytes};
+  const name = source.name || '', author = source.author || '';
+  const fragment = encodeCartUrl(name, author, await encodePayload(bytes));
+  return {cart: decoded, bytes, fragment, name, author};
 }
 
 return {
   OPS, OPINDEX, assemble, runHook, MAX_STEPS,
   b64urlEncode, b64urlDecode, HAS_COMPRESSION,
   deflateRawCompress, deflateRawDecompress, encodePayload, decodePayloadToBytes,
+  encodeCartUrl, decodeCartUrl,
   ByteWriter, ByteReader, HOOK_NAMES, BUTTON_BITS,
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION, TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
   SHAPE_ELLIPSE, SHAPE_RECT, writeString, readString,
