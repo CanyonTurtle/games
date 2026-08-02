@@ -269,7 +269,15 @@ async function main(){
   // 5c. Mini Golf's two-press timing swing: press once to start charging,
   // again to release — a real behavioral check that the state machine
   // (aiming -> charging -> in motion) actually advances and the ball
-  // actually moves, not just "the cart loads".
+  // actually moves, not just "the cart loads". Drives the actual
+  // on-screen touch button (.touch-btn[data-bit="4"]), not the keyboard —
+  // this cart shipped with its swing action checking the wrong bit
+  // (TESTBIT 4 / mask 16, matching a keyboard spacebar, when
+  // TOUCH_TEMPLATE_STEER_ACTION's own action button is hardcoded to send
+  // mask 4) and a keyboard-only test missed it completely, since the
+  // spacebar is wired to mask 16 independent of any cart's own template
+  // (DESIGN.md §38). Clicking the real button a touch player taps is
+  // what actually exercises the template/opcode contract.
   await page.evaluate(() => { location.hash = ''; });
   await page.waitForTimeout(200);
   await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'golf');
@@ -279,13 +287,21 @@ async function main(){
     const ball = w.entities.find(e => e.typeId === 0);
     return {swingState: w.globals[1], strokes: w.globals[5], ballX: ball.props[0], ballY: ball.props[1]};
   });
-  await page.keyboard.down(' ');
-  await page.waitForTimeout(50);
-  await page.keyboard.up(' ');
+  // A plain .click() fires mousedown+mouseup back to back — fast enough
+  // that the button can toggle on and back off before the running game
+  // loop's next frame ever samples it as held. A real tap holds for some
+  // real duration; press-wait-release here mirrors that instead.
+  async function tapSwingButton(){
+    const box = await page.locator('#touchControls .touch-btn[data-bit="4"]').boundingBox();
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+    await page.mouse.move(cx, cy);
+    await page.mouse.down();
+    await page.waitForTimeout(80);
+    await page.mouse.up();
+  }
+  await tapSwingButton();
   await page.waitForTimeout(400); // let power oscillate for a while
-  await page.keyboard.down(' ');
-  await page.waitForTimeout(50);
-  await page.keyboard.up(' ');
+  await tapSwingButton();
   await page.waitForTimeout(1500); // let the ball roll and come to rest
   const golfState = await page.evaluate(() => {
     const w = window.__urlcadeDebug.getWorld();

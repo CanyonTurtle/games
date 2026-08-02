@@ -2334,7 +2334,64 @@ out" loop, not just a single swing) headlessly before wiring the cart
 into the site at all — a single swing wouldn't have surfaced it, since
 the stuck state only matters *after* a win.
 
-## 38. Open questions
+## 38. §37's real bug: a touch-template/opcode bit mismatch a keyboard test couldn't see
+
+Reported live: aiming worked, but the ball never launched — "stays in
+place forever at the left edge of the track." §37's own headless
+`runHook` playthrough and `test/smoke.js`'s browser check both passed
+before shipping, so this needed a fresh look rather than trusting
+"already verified."
+
+The cause: Mini Golf declared `inputTouchTemplate:
+TOUCH_TEMPLATE_STEER_ACTION` but read its swing/action button as
+`TESTBIT 4` (bit *value* 16) in `on_input`. `runtime.js`'s
+`buildTouchControlsHTML` hardcodes that template's own action button to
+send bit value 4 (`data-bit="4"`) — the convention race-car.js (the
+same template) already follows correctly (`TESTBIT 2`, bit value 4).
+Golf's on-screen "Swing" button was tapping out mask 4 the whole time;
+the hook was listening for mask 16. Aiming (`TESTBIT 0`/`TESTBIT 1`,
+left/right) was unaffected, which is exactly why it "worked."
+
+**Why two separate verification passes both missed it**: the headless
+`runHook` simulation drove `ctx.input` directly with whatever numeric
+mask the test script chose — it never went through `buildTouchControlsHTML`
+at all, so a template/opcode mismatch was structurally invisible to it.
+`test/smoke.js`'s browser check used `page.keyboard.down(' ')` — the
+spacebar, which `buttonMaskFromKeys()` hardcodes to bit value 16
+*regardless of a cart's touch template* — so it happened to send
+exactly the (wrong) bit the cart was listening for, passing for the
+wrong reason. Neither check ever exercised the actual on-screen button
+a touch player taps.
+
+**Fix**: `TESTBIT 4` → `TESTBIT 2` (four call sites) and
+`inputActiveButtons`/`inputButtonLabels` moved from bit 16 to bit 4,
+matching race-car.js's own precedent for this exact template.
+`test/smoke.js`'s golf check was rewritten to locate and press-hold-release
+the real `.touch-btn[data-bit="4"]` element (`page.mouse` down/wait/up
+on its bounding box, not a keyboard key) — confirmed to fail against
+the broken build and pass against the fix. A first attempt using
+Playwright's plain `.click()` on that button *also* passed against the
+broken build (a false negative): `.click()` fires mousedown+mouseup
+back-to-back, fast enough that the held-button state can flip on and
+back off before the running game loop's next frame ever samples it —
+the same press-wait-release shape §36's plant drag test already used,
+now established as the right pattern for any on-screen button test
+here, not just drags.
+
+**The general lesson**: a touch template is a *contract* between
+`runtime.js` (which bit a given on-screen button actually sends) and a
+cart's own hook code (which bit it reads) — nothing in `compileCartSource`
+or `decodeCart` checks that the two agree, because the binary format has
+no way to know a hook's TESTBIT operands are "supposed to" correspond to
+a particular template. Getting this wrong doesn't error, doesn't fault,
+doesn't even fail a keyboard-driven test — it just silently listens to a
+button nothing on screen ever presses. Worth remembering next time a
+cart pairs a specific `inputTouchTemplate` with its own `TESTBIT`
+operands: cross-check against `runtime.js`'s `buildTouchControlsHTML`
+(or an already-shipped cart using the same template) rather than
+assuming the "obvious" bit.
+
+## 39. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

@@ -121,10 +121,10 @@ const GOLF_HOOKS_SRC = {
     STOREG g_angle
     chk_swing_press:
     LOAD_INPUT
-    TESTBIT 4
+    TESTBIT 2
     JZ store_prev
     LOADG g_prev_input
-    TESTBIT 4
+    TESTBIT 2
     JNZ store_prev
     PUSHI 1
     STOREG g_swing_state
@@ -167,10 +167,10 @@ const GOLF_HOOKS_SRC = {
 
     chk_swing_release:
     LOAD_INPUT
-    TESTBIT 4
+    TESTBIT 2
     JZ store_prev
     LOADG g_prev_input
-    TESTBIT 4
+    TESTBIT 2
     JNZ store_prev
     LOADG g_angle
     COS
@@ -348,9 +348,18 @@ function buildMiniGolfCart(){
     screenW, screenH,
     backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused — the map covers the whole frame
     tileSurfaceOverrides: {4: 2}, // tee behaves exactly like fairway for friction purposes
-    inputActiveButtons: 1 | 2 | 16, // left, right, action
+    // Action bit is 4 (not 16) — TOUCH_TEMPLATE_STEER_ACTION's on-screen
+    // action button is hardcoded to send bit 4 (see runtime.js's
+    // buildTouchControlsHTML), matching the racer's own on_input, which
+    // reads the same template's action button as TESTBIT 2. A cart is
+    // free to use any button for "action" with other touch templates,
+    // but STEER_ACTION specifically means bit 4 — this shipped with bit
+    // 16 at first (works from a keyboard's spacebar, since that's wired
+    // to bit 16 regardless of template, but not from the on-screen
+    // button an actual touch player taps) — see DESIGN.md §38.
+    inputActiveButtons: 1 | 2 | 4, // left, right, action
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
-    inputButtonLabels: {1: 'Aim', 2: 'Aim', 16: 'Swing'},
+    inputButtonLabels: {1: 'Aim', 2: 'Aim', 4: 'Swing'},
     hudSpec: [
       {kind:0, sourceKind:0, srcA:GOLF_GLOBAL_NAMES.g_strokes, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Strokes'},
       {kind:1, sourceKind:0, srcA:GOLF_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Holed out! Refresh to play again'},
