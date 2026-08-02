@@ -305,9 +305,19 @@ function buildMiniGolfCart(){
     {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3.5, ry:3.5, color:1},
     {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:2.7, ry:2.7, color:7},
   ];
+  // Sprite is drawn centered on the entity's own (x,y) — see
+  // drawEntityCanvas's `x-spr.width/2, y-spr.height/2` — so the pole's
+  // base (not the sprite's bottom edge) has to land on local (w/2, h/2)
+  // to actually sit at the hole. The cup ellipse there is a real visual
+  // cue for HOLE_RADIUS below, not just decoration — the earlier flag
+  // (pole spanning the whole sprite height, no cup mark at all) gave a
+  // player no way to see how forgiving or tight the sink radius actually
+  // was, which is at least as much of "the hitbox feels like a tiny
+  // point" as HOLE_RADIUS itself being too small (DESIGN.md §39).
   const flagShapes = [
-    {type:SHAPE_RECT, x:4, y:0, w:1, h:16, color:0},
-    {type:SHAPE_RECT, x:5, y:1, w:5, h:4, color:9},
+    {type:SHAPE_ELLIPSE, cx:8, cy:12, rx:4.5, ry:2.5, color:0}, // cup
+    {type:SHAPE_RECT, x:7, y:0, w:1, h:12, color:0}, // pole, base at the cup center
+    {type:SHAPE_RECT, x:8, y:1, w:6, h:4, color:9}, // banner
   ];
   // Fairway/rough/OB tiles map onto grid ids 1-4 (see buildTrack) via
   // [OB, fairway, rough, tee] — same array-position convention race-car.js
@@ -368,15 +378,17 @@ function buildMiniGolfCart(){
     // ~80 ticks, ~1.3s — a real timing window, not a blink-and-you-miss
     // one). Friction values tuned (and headlessly verified) so a full-power
     // fairway shot travels a satisfying distance and actually comes to
-    // rest rather than crawling forever.
-    constants: [6, 0.15, 2, 0.035, 0.12, 0.35, 0.15, 6],
+    // rest rather than crawling forever. HOLE_RADIUS=12 (was 6 — smaller
+    // than the ball's own 3px radius, so the ball's *center* had to land
+    // almost exactly on the hole's center to sink; see DESIGN.md §39).
+    constants: [6, 0.15, 2, 0.035, 0.12, 0.35, 0.15, 12],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // 0: ball
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:2, collisionH:2, extFieldCount:0}, // 1: flag
     ],
     sprites: [
       {kind:1, w:8, h:8, shapes:ballShapes},
-      {kind:1, w:10, h:16, shapes:flagShapes},
+      {kind:1, w:16, h:24, shapes:flagShapes},
     ],
     tiles: [
       {w:8, h:8, pixels:obPixels}, {w:8, h:8, pixels:fairwayPixels},

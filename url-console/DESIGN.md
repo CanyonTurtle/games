@@ -2391,7 +2391,40 @@ operands: cross-check against `runtime.js`'s `buildTouchControlsHTML`
 (or an already-shipped cart using the same template) rather than
 assuming the "obvious" bit.
 
-## 39. Open questions
+## 39. HOLE_RADIUS was smaller than the ball itself, and invisible
+
+Reported live, again, after §38's fix let the ball actually launch:
+"it's too hard to win — the hole hitbox seems to be a tiny point." Two
+compounding problems, both real:
+
+- **`HOLE_RADIUS` was 6px** — smaller than the ball's own ~3px radius
+  plus any reasonable margin. The check is a straight `DIST(ball,
+  hole) < HOLE_RADIUS` on the ball's *center*, so a 6px radius meant
+  the center had to land almost exactly on the hole's center, with
+  essentially no tolerance for the ball's own size or any imprecision
+  in a timing-based (not pixel-precise) aim/power system. Raised to 12.
+- **There was no cup graphic at all.** The flag sprite was just a pole
+  + banner — nothing marked where the actual sink radius was, so even
+  a *correctly sized* hitbox would have felt arbitrary; a player has
+  no way to aim for a target they can't see. Fixed by adding a dark
+  ellipse to the flag sprite, positioned at the sprite's own center —
+  which is where the entity's `(x, y)` anchor actually lands, per
+  `drawEntityCanvas`'s `x - spr.width/2, y - spr.height/2` — so the cup
+  mark and the true `HOLE_RADIUS` check now agree on where "the hole"
+  is, not just visually near it. (The old flag had the pole spanning
+  its *entire* sprite height, so its visual base sat 8px below the
+  true anchor point — a smaller, separate accuracy gap the redesign
+  fixed as a side effect of getting the cup placement right.)
+
+Both changes verified the same way as every prior tuning change in
+this cart: headlessly, before touching the browser — confirmed the
+existing 4-stroke fairway-following playthrough still sinks (unchanged
+distances, just a more forgiving final check), and added a new
+specific case a `HOLE_RADIUS: 6` cart would have missed (a putt with a
+deliberate 6° aiming error from 30px out) to confirm the fix actually
+buys real, meaningful forgiveness rather than a cosmetic-only bump.
+
+## 40. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
