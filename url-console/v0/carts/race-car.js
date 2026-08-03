@@ -573,6 +573,17 @@ function buildRacerCart(){
     // only knob that actually changes how quickly velocity "catches up"
     // to a new heading). AI_TURN_GAIN's own turn clamp scales with
     // TURN_RATE too, so the AI corners a little tighter for free.
+    // TURN_RATE 2.4->3.2, FRICTION_ROAD 0.02->0.03 (DESIGN.md §51): a
+    // second, explicitly 2x-as-large pass over the same two knobs, same
+    // reasoning as §47 — this round's delta (+0.8 turn rate, +0.01
+    // friction) is exactly double the previous round's (+0.4, +0.005),
+    // not a fresh guess at "tighter." Re-verified the same way every
+    // handling change on this cart has been: the sloppy-bot lap test
+    // still completes cleanly (confirms this didn't reintroduce the
+    // wall-collision/flyby failure modes from §45/§46 at the higher AI
+    // turn-clamp this also produces), the AI-progress regression check
+    // still passes, and a headless spin-in-place measurement confirmed a
+    // visibly tighter turning circle than §47's own.
     // CHECKPOINT_RADIUS 14->24->40 (DESIGN.md §46, then §47): 24 was
     // enough for the AI's near-optimal, straight-line-seeking path but
     // not for a real driven line — a car sweeping wide through a turn
@@ -596,7 +607,7 @@ function buildRacerCart(){
     // line stays up after the player crosses the finish line — 90 at this
     // cart's 60Hz sim is 1.5s, long enough to actually read, short enough
     // to be gone well before the next lap if the player is quick.
-    constants: [0.075, 2.4, 0.02, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3, 90],
+    constants: [0.075, 3.2, 0.03, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3, 90],
     // Type 2 (the AI cars' own car type) is identical to type 0 in every
     // way that matters to physics/collision — same collisionW/H, same
     // extFieldCount, so the same props layout every car-handling hook
