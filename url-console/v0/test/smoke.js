@@ -86,20 +86,23 @@ async function main(){
     check('every local script/import reference is cache-busted (?v=...)', allBusted, sample);
   }
 
-  // 1. The shelf: all eight carts register and play, no console/page
+  // 1. The shelf: all nine carts register and play, no console/page
   // errors — the five original examples, Breakout (vendored from a
   // decompiled externally-authored fragment, DESIGN.md §35), Water the
   // Plant (pointer input + on_draw immediate-mode drawing, DESIGN.md
-  // §36), and Mini Golf (a tile-map course from the track generator,
-  // reused for a fairway instead of a road — no new kernel features).
+  // §36), Mini Golf (a tile-map course from the track generator,
+  // reused for a fairway instead of a road — no new kernel features),
+  // and Corridor (a raycast first-person shooter — the cave generator
+  // reused purely as a wall/floor grid, the whole screen repainted every
+  // frame by a single on_draw'd DRAW_LINE raycaster, DESIGN.md §54).
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if(m.type() === 'error') errors.push(m.text()); });
 
   await page.goto(`${base}/index.html`);
-  await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 10000});
-  check('all 8 shelf carts registered', true);
+  await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 9, {timeout: 10000});
+  check('all 9 shelf carts registered', true);
 
   // 1b. Palette contrast (DESIGN.md §41/§44): every shelf cart's two
   // generated entity ramps (8-11, 12-15 — the ramps entity sprites draw
@@ -261,8 +264,8 @@ async function main(){
     title: div.querySelector('h2')?.textContent || '',
     author: div.querySelector('.cart-author')?.textContent || '',
   })));
-  check('all 8 shelf cards rendered a thumbnail canvas + name + author',
-    shelfCards.length === 8 && shelfCards.every(c => c.hasThumb && c.title && /^by /.test(c.author)),
+  check('all 9 shelf cards rendered a thumbnail canvas + name + author',
+    shelfCards.length === 9 && shelfCards.every(c => c.hasThumb && c.title && /^by /.test(c.author)),
     JSON.stringify(shelfCards));
 
   const keys = await page.evaluate(() => Object.keys(window.__urlcadeDebug.CARTS));
@@ -494,6 +497,42 @@ async function main(){
     golfState.ok && !golfState.fault && golfState.strokes > teeState.strokes && ballMoved,
     JSON.stringify({tee: teeState, after: golfState}));
 
+  // 5c2. Corridor: the raycast FPS actually plays. Walking forward moves
+  // the player entity (collision-checked via MOVE_SOLID against the
+  // cave's real wall grid, not just "the input handler ran"), turning
+  // changes its facing, and — the real risk this cart's whole design bet
+  // on staying under — repeated on_draw calls (the ~14000-op-worst-case
+  // 40-ray raycast, run once per rendered frame the whole time) never
+  // trip the MAX_STEPS cartFault guard (DESIGN.md §54).
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'doom');
+  await page.waitForTimeout(250);
+  const doomStart = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    return {x: player.props[0], y: player.props[1], angle: player.props[6], hp: player.props[5], entityCount: w.entities.length, fault: w.cartFault};
+  });
+  await page.keyboard.down('ArrowUp'); // forward, DPAD_ACTION bit 4
+  await page.waitForTimeout(500);
+  await page.keyboard.up('ArrowUp');
+  await page.keyboard.down('ArrowRight'); // turn right, bit 2
+  await page.waitForTimeout(200);
+  await page.keyboard.up('ArrowRight');
+  await page.keyboard.down(' '); // shoot, bit 16
+  await page.waitForTimeout(80);
+  await page.keyboard.up(' ');
+  await page.waitForTimeout(300);
+  const doomAfter = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    return {x: player.props[0], y: player.props[1], angle: player.props[6], hp: player.props[5], fault: w.cartFault};
+  });
+  const doomMoved = Math.hypot(doomAfter.x - doomStart.x, doomAfter.y - doomStart.y) > 1;
+  check('Corridor spawns player+camera+3 monsters, walking/turning/shooting all work, no cartFault from the raycast',
+    doomStart.entityCount === 5 && !doomStart.fault && doomMoved && doomAfter.angle !== doomStart.angle && !doomAfter.fault,
+    JSON.stringify({start: doomStart, after: doomAfter}));
+
   // 5d. Race Car's off-road wall: holding Gas dead straight (no steering)
   // drives the player past the track's first turn — the exact scenario
   // that used to just cost you traction (grass friction) and let you keep
@@ -596,7 +635,7 @@ async function main(){
       };
     });
     await page2.goto(`http://localhost:${port2}/index.html`);
-    await page2.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 10000});
+    await page2.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 9, {timeout: 10000});
     check('carts still register when deflate-raw compression is unsupported', true);
 
     await page2.click('#newCartBtn');
@@ -628,7 +667,7 @@ async function main(){
     const subErrors = [];
     subPage.on('pageerror', e => subErrors.push(e.message));
     await subPage.goto(`${subBase}/index.html`);
-    await subPage.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 8000});
+    await subPage.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 9, {timeout: 8000});
     check('root runtime loads under a subpath deployment', true);
 
     await subPage.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, keys[0]);
