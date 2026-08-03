@@ -2519,7 +2519,19 @@ Both cart values are now in range (race car: `baseHue:220, accentOffset:240` →
 
 **Verification.** Headless: `generatePalette()` driven directly through a range of shipped carts' real `paletteParams`, comparing accent-ramp hue/saturation/lightness before and after at matching ramp positions. Visual: real Playwright screenshots of every affected game (not just the numeric metric, which — per the backwards-floor bug above — can look fine while the actual render doesn't) both before and after each iteration of the fix. `test/smoke.js` gained three checks: every procedural-palette shelf cart's accent ramp is hue-separated, saturated, and lighter than its base ramp at the same ramp position; `encodeCart` rejects an out-of-range `paletteParams` byte instead of silently wrapping it (checked against a real decoded shipped cart with one field mutated, not a from-scratch object, so only the field under test is exercised); and the existing golf/plant checks still pass unchanged.
 
-## 42. Open questions
+## 42. A compact palette grid for the Debug tab, with the terrain/entity split called out where it's real
+
+The Assets tab's palette view used to reuse the same card-list layout as Sprites and Tiles: one `.inspect-tile` per color, a swatch plus a two-line caption (index, then the full `hsl(...)`/`#hex` string) underneath, laid out with `grid-template-columns:repeat(auto-fill,minmax(96px,1fr))`. That layout makes sense for sprites and tiles, where each cell's *content* varies (a whole rendered image per cell) — for a palette, where every cell is one flat color, the caption line spread 16 colors out over multiple screens' worth of scrolling for no information a compact grid couldn't show just as well.
+
+Replaced with a dense 8-wide swatch strip (`.pal-strip`, new `.pal-swatch`): each color is one small square, the index is an overlaid badge (white text with a dark blurred halo — legible against any background color without computing per-swatch contrast), and the full color string moved to a `title` tooltip rather than always-on caption text.
+
+**The terrain/entity split, called out — but only when it's real.** §41 established that `generatePalette()`'s procedural mode (`paletteMode:1`) *structurally* generates two different ramps: indices 0-7 from a muted "base" range, 8-15 from a brighter, more saturated, hue-separated "accent" range — a real, code-enforced guarantee for every procedural cart. So for `paletteMode:1`, the grid renders as two labeled groups, "Terrain / backdrop (0-7)" and "Entities (8-15)."
+
+For `paletteMode:0` (curated banks), that same split does *not* hold: `CURATED_BANK`'s own header comments show bank 0 (flappy) puts its entity colors — bird, pipes — at indices 0-7 and its *backdrop* colors (sky, ground) at 8-9, the opposite of bank 1's (dungeon) convention, where 0-7 is terrain and 8-15 is the player/monster. A hand-picked bank has no fixed index-role convention at all; labeling it "terrain/entities" would assert something that particular bank doesn't do. So curated-mode carts render as one flat, unlabeled 16-swatch grid — an honest reflection of "here are 16 colors" rather than a guess dressed up as structure.
+
+`test/smoke.js` gained two checks: a curated cart's Assets tab renders exactly 16 swatches and zero group labels; a procedural cart's renders exactly 16 swatches under exactly two labels, "Terrain..." and "Entities...".
+
+## 43. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

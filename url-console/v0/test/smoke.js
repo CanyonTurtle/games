@@ -247,6 +247,35 @@ async function main(){
   });
   check('compile state starts known-good for the paused game (computed before any tab click)', !!compileOk);
 
+  // 2b. The Assets-tab palette grid (DESIGN.md §42): a curated-bank cart
+  // (paletteMode:0 — keys[0] is 'flappy') gets one flat 16-swatch strip
+  // and no terrain/entity labels, since CURATED_BANK's own index
+  // convention isn't consistent enough to label truthfully. A
+  // procedural cart (paletteMode:1 — 'racer') gets exactly two labeled
+  // 8-swatch groups, because generatePalette() *does* structurally
+  // guarantee that split for every procedural cart (DESIGN.md §41).
+  await page.click('.inspect-tab[data-tab="Assets"]');
+  await page.waitForTimeout(150);
+  const curatedPaletteDom = await page.evaluate(() => ({
+    swatchCount: document.querySelectorAll('.pal-swatch').length,
+    groupCount: document.querySelectorAll('.pal-group-label').length,
+  }));
+  check('curated-bank palette renders one flat 16-swatch grid, no terrain/entity labels',
+    curatedPaletteDom.swatchCount === 16 && curatedPaletteDom.groupCount === 0, JSON.stringify(curatedPaletteDom));
+
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.racer.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Assets"]');
+  await page.waitForTimeout(150);
+  const proceduralPaletteDom = await page.evaluate(() => ({
+    swatchCount: document.querySelectorAll('.pal-swatch').length,
+    groupLabels: Array.from(document.querySelectorAll('.pal-group-label')).map(e => e.textContent),
+  }));
+  check('procedural-palette cart\'s Assets tab labels the terrain/entity split',
+    proceduralPaletteDom.swatchCount === 16 && proceduralPaletteDom.groupLabels.length === 2 &&
+    /terrain/i.test(proceduralPaletteDom.groupLabels[0]) && /entities/i.test(proceduralPaletteDom.groupLabels[1]),
+    JSON.stringify(proceduralPaletteDom));
+
   await page.click('.inspect-tab[data-tab="Source"]');
   await page.waitForTimeout(100);
   const sourceText1 = await page.inputValue('#debugSourceInput');

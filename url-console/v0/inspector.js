@@ -199,13 +199,36 @@ function renderInspectOverview(cart){
   return html;
 }
 
+// A dense 8-wide swatch grid, not a card list — see index.html's .pal-*
+// CSS comment for why. `paletteMode:1` (procedural) carts get their
+// 0-7/8-15 split called out with real section labels, because that
+// split is a structural guarantee of generatePalette() itself (DESIGN.md
+// §41): every procedural cart's entities really do come from a
+// distinctly-hued, brighter accent ramp, not just "the second half of
+// the array." `paletteMode:0` (curated) banks don't get that same
+// labeling — CURATED_BANK's own comments show the split isn't
+// consistent there (bank 0's backdrop colors sit at 8-9, its entities
+// at 0-7; bank 1 is the reverse), so labeling it "terrain/entities"
+// would be asserting a convention that particular bank doesn't follow.
+function renderPaletteStrip(colors, startIndex){
+  return '<div class="pal-strip">' + colors.map((c,i) => `
+    <div class="pal-swatch" style="background:${c}" title="${startIndex+i}: ${esc(c)}"><span>${startIndex+i}</span></div>
+  `).join('') + '</div>';
+}
 function renderInspectPalette(cart){
   const pal = generatePalette(cart);
-  return '<div class="inspect-grid">' + pal.map((c,i) => `
-    <div class="inspect-tile">
-      <div style="aspect-ratio:1;border-radius:3px;border:1px solid var(--rule);background:${c}"></div>
-      <p>${i}<br>${esc(c)}</p>
-    </div>`).join('') + '</div>';
+  if(cart.paletteMode === 1){
+    return `
+      <div class="pal-group">
+        <p class="pal-group-label">Terrain / backdrop (0-7)</p>
+        ${renderPaletteStrip(pal.slice(0,8), 0)}
+      </div>
+      <div class="pal-group">
+        <p class="pal-group-label">Entities (8-15)</p>
+        ${renderPaletteStrip(pal.slice(8,16), 8)}
+      </div>`;
+  }
+  return `<div class="pal-group">${renderPaletteStrip(pal, 0)}</div>`;
 }
 
 function spritesListHtml(cart){
