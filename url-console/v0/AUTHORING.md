@@ -568,19 +568,23 @@ pattern is used by every shipped cart with destructible entities.
   running anything.
 - **The shipped carts with source in this repo**: `carts/flappy-bird.js`,
   `carts/race-car.js`, `carts/cave-crawler.js`, `carts/run-and-jump.js`,
-  `carts/castle-crusher.js`, `carts/breakout.js`, `carts/plant.js`, and
-  `carts/mini-golf.js` (each exporting one `build*Cart()` function) are
-  complete, real, working examples of every generator and hook pattern
-  above, in combination — richer worked examples than any prose
-  walkthrough (`plant.js` in particular for pointer input + `on_draw`;
-  `mini-golf.js` for reusing the track generator/`aimLine`/checkpoints
-  for a genre none of them were originally built for — see DESIGN.md
-  §37). `carts/shared-sprites.js` has the small blob-silhouette helpers
-  more than one of them reuses. `breakout.js` is itself worth reading
-  as a worked example of a *different* kind: it's a decompilation
-  (numeric operands only, no named constants — see its own header
-  comment), not hand-authored source, and still compiles and plays
-  identically.
+  `carts/castle-crusher.js`, `carts/breakout.js`, `carts/plant.js`,
+  `carts/mini-golf.js`, and `carts/doom-like.js` (each exporting one
+  `build*Cart()` function) are complete, real, working examples of every
+  generator and hook pattern above, in combination — richer worked
+  examples than any prose walkthrough (`plant.js` in particular for
+  pointer input + `on_draw`; `mini-golf.js` for reusing the track
+  generator/`aimLine`/checkpoints for a genre none of them were
+  originally built for, DESIGN.md §37; `doom-like.js` for a screen-column
+  raycaster built entirely from one stationary entity's `on_draw` and
+  `DRAW_LINE` — reusing the cave generator purely as a `GETTILE` grid,
+  never drawn top-down — see DESIGN.md §54 for the opcode-budget math
+  that makes it fit under `MAX_STEPS`). `carts/shared-sprites.js` has the
+  small blob-silhouette helpers more than one of them reuses.
+  `breakout.js` is itself worth reading as a worked example of a
+  *different* kind: it's a decompilation (numeric operands only, no
+  named constants — see its own header comment), not hand-authored
+  source, and still compiles and plays identically.
 - The shelf can also carry carts with no source in this repo at all —
   an already-compiled fragment built entirely against this document
   and the live Debug view, by a human or another agent, registered
