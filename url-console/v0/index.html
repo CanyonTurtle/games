@@ -59,9 +59,7 @@
      exactly like any pasted link would be), name + author read straight
      out of the fragment's own envelope, no hand-authored blurb/genre/
      stat block per cart. */
-  #cartList{display:grid;gap:20px;grid-template-columns:1fr;margin-top:28px;}
-  @media (min-width:480px){ #cartList{grid-template-columns:1fr 1fr;} }
-  @media (min-width:820px){ #cartList{grid-template-columns:1fr 1fr 1fr;} }
+  #cartList{display:grid;gap:14px;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));margin-top:28px;}
   .cart{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
     overflow:hidden;position:relative;}
   .cart:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.25);
@@ -193,12 +191,13 @@
     padding:calc(10px + var(--safe-t)) calc(10px + var(--safe-r)) 20px calc(10px + var(--safe-l));
     background:linear-gradient(to bottom, rgba(0,0,0,.5), transparent);
     pointer-events:none;}
-  /* backBtn (left) — hud (center, takes remaining space) — debugBtn
-     (right): a real element balancing each side is what centers the HUD
-     text, not a hand-tuned padding offset for a lopsided one-button bar. */
+  /* topbar-left (back + restart) — hud (center, takes remaining space) —
+     debugBtn (right): a real element balancing each side is what centers
+     the HUD text, not a hand-tuned padding offset for a lopsided bar. */
+  .topbar-left{flex:0 0 auto;display:flex;gap:10px;pointer-events:none;}
   #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
     text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;}
-  #backBtn, #debugBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
+  #backBtn, #restartBtn, #debugBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
     border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
     font-family:var(--mono);font-size:12px;letter-spacing:.03em;
     /* no backdrop-filter: it forces a re-sample of whatever's behind it on every
@@ -206,7 +205,7 @@
        avoidable GPU cost on mobile, found while chasing a reported touch
        stutter. A flatter, more opaque background reads almost identically. */
     touch-action:manipulation;}
-  #backBtn:hover, #debugBtn:hover{border-color:var(--accent);color:var(--accent);}
+  #backBtn:hover, #restartBtn:hover, #debugBtn:hover{border-color:var(--accent);color:var(--accent);}
 
   #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
     z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
@@ -237,35 +236,37 @@
 
 <div id="menu" class="view">
   <div class="faceplate">
-    <p class="model">Model V0 &middot; static runtime, no server</p>
+    <p class="model">Games that live in a link</p>
     <h1>The Urlcade <span class="dim">// cartridge shelf</span></h1>
   </div>
-  <p>Every cart below is fully described by the URL fragment on its link — the
-  runtime on this page is the only thing that isn't in the URL. Copy a link,
-  the recipient gets the exact game, no install, no account.
-  Want to build your own? See the <a href="spec/">game authoring API</a>.</p>
+  <p>Pick a game below and play — nothing to install, no account, no wait.
+  Every game here is small enough to fit entirely inside its own link, so
+  sharing one is just sharing a link: whoever opens it gets the exact same
+  game, instantly.
+  Curious how that works, or want to make your own? See the <a href="spec/">how it works &amp; build guide</a>.</p>
   <p class="new-cart-cta"><button type="button" id="newCartBtn" class="btn-secondary">+ New Cart</button>
-  — start from a small working example, edit it live, get a link back.</p>
+  — start from a small working example and make it your own.</p>
   <div id="cartList"></div>
   <div class="inspect-loader">
-    <p class="lede-small">Paste any Urlcade link (or just its <code>#</code> fragment) to play
-    it — any validly-encoded cart works, not only the ones above. Once it's running, hit
-    <b>Debug</b> for its Assets (palette/sprites/tiles), Logic (entities/map/every hook's
-    bytecode decompiled to a labeled listing and a flowchart), and Source — edit and
-    recompile it live, right there.</p>
+    <p class="lede-small">Got a link to one of these games? Paste it below to play it.
+    Once it's running, hit <b>Debug</b> to look under the hood — its art,
+    its logic, and its source, editable live.</p>
     <form id="inspectForm">
-      <input id="inspectInput" type="text" placeholder="Paste a cart link or fragment…" autocomplete="off" spellcheck="false" />
+      <input id="inspectInput" type="text" placeholder="Paste a game link…" autocomplete="off" spellcheck="false" />
       <button type="submit">&#9654; Play</button>
     </form>
     <p id="inspectError" class="inspect-error"></p>
   </div>
-  <footer>Raw, uncompressed encoding (V0 scope cut — see the <a href="spec/">spec</a>).
-  Byte-packed encoding and the preset-dictionary compressor are future work.</footer>
+  <footer>Built with plain, uncompressed links for now — smaller, compressed
+  links are on the way. See the <a href="spec/">technical spec</a> for details.</footer>
 </div>
 
 <div id="gameWrap" class="view">
   <div class="topbar">
-    <button id="backBtn">&larr; shelf</button>
+    <div class="topbar-left">
+      <button id="backBtn">&larr; shelf</button>
+      <button id="restartBtn" title="Restart this game">&#8635; restart</button>
+    </div>
     <div id="hud"></div>
     <button id="debugBtn">Debug</button>
   </div>

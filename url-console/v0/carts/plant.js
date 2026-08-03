@@ -14,6 +14,7 @@ const { assemble, HOOK_NAMES, TOUCH_TEMPLATE_NONE, SHAPE_ELLIPSE } = K;
 const PLANT_CONST_NAMES = {
   DROP_FALL_SPEED:0, SOIL_Y:1, WIN_THRESHOLD:2, DROP_SPAWN_INTERVAL:3, DROP_START_Y:4,
   PLANT_X:5, STEM_STEP:6, MAX_STEM_H:7, BRANCH_UNLOCK_1:8, BRANCH_UNLOCK_2:9, BRANCH_LEN:10,
+  MIN_STEM_H:11, BRANCH_UNLOCK_3:12, BRANCH_LEN2:13, SMALL_BLOOM_LEN:14,
 };
 const PLANT_GLOBAL_NAMES = { g_plant:0, g_water:1, g_won:2, g_drag_timer:3, g_scratch:4 };
 const PLANT_SYM = {constants:PLANT_CONST_NAMES, globals:PLANT_GLOBAL_NAMES};
@@ -107,13 +108,19 @@ const PLANT_HOOKS_SRC = {
   `,
   // Immediate-mode: runs at render time against the plant entity (self),
   // never at tick time — see kernel.js's HOOK_NAMES comment. Stem height
-  // is a pure function of g_water (clamped to MAX_STEM_H), stashed in the
-  // plant's own ext field 8 via STORE_SELF/LOAD_SELF exactly like any
+  // is a pure function of g_water (clamped to MAX_STEM_H, and floored to
+  // MIN_STEM_H so the plant is never literally nothing to look at — a
+  // seedling is visible from the very first frame, not just an empty pot,
+  // which also makes the shelf thumbnail — always this hook's water=0
+  // frame — read as a plant rather than a blank rectangle), stashed in
+  // the plant's own ext field 8 via STORE_SELF/LOAD_SELF exactly like any
   // other per-entity scratch value, then reused by every DRAW_LINE below
   // that needs it — on_draw isn't a different kind of hook, just one that
-  // happens to run on a different clock. Side branches unlock at
-  // BRANCH_UNLOCK_1 waterings, a small bloom at BRANCH_UNLOCK_2 — the
-  // plant visibly grows in real time as its own global changes, not in
+  // happens to run on a different clock. A low pair of side branches
+  // unlocks at BRANCH_UNLOCK_1 waterings, a small always-visible bud
+  // grows into the full bloom at BRANCH_UNLOCK_2, and a second, higher
+  // and shorter pair of branches unlocks at BRANCH_UNLOCK_3 — the plant
+  // visibly grows in real time as its own global changes, not in
   // discrete sprite-swap stages.
   on_draw: `
     LOADG g_water
@@ -121,6 +128,13 @@ const PLANT_HOOKS_SRC = {
     MUL
     PUSHC MAX_STEM_H
     CLAMP_ABS
+    DUP
+    PUSHC MIN_STEM_H
+    CMPLT
+    JZ have_stem
+    POP
+    PUSHC MIN_STEM_H
+    have_stem:
     STORE_SELF 8
     PUSHI 0
     PUSHI 0
@@ -132,7 +146,7 @@ const PLANT_HOOKS_SRC = {
     LOADG g_water
     PUSHC BRANCH_UNLOCK_1
     CMPLT
-    JNZ after_branches
+    JNZ after_branch1
     PUSHI 0
     LOAD_SELF 8
     PUSHI 2
@@ -162,11 +176,53 @@ const PLANT_HOOKS_SRC = {
     NEG
     PUSHI 5
     DRAW_LINE
-    after_branches:
+    after_branch1:
+    LOADG g_water
+    PUSHC BRANCH_UNLOCK_3
+    CMPLT
+    JNZ after_branch2
+    PUSHI 0
+    LOAD_SELF 8
+    PUSHI 4
+    DIV
+    PUSHI 3
+    MUL
+    NEG
+    PUSHC BRANCH_LEN2
+    NEG
+    LOAD_SELF 8
+    PUSHI 4
+    DIV
+    PUSHI 3
+    MUL
+    PUSHC BRANCH_LEN2
+    ADD
+    NEG
+    PUSHI 5
+    DRAW_LINE
+    PUSHI 0
+    LOAD_SELF 8
+    PUSHI 4
+    DIV
+    PUSHI 3
+    MUL
+    NEG
+    PUSHC BRANCH_LEN2
+    LOAD_SELF 8
+    PUSHI 4
+    DIV
+    PUSHI 3
+    MUL
+    PUSHC BRANCH_LEN2
+    ADD
+    NEG
+    PUSHI 5
+    DRAW_LINE
+    after_branch2:
     LOADG g_water
     PUSHC BRANCH_UNLOCK_2
     CMPLT
-    JNZ done
+    JNZ small_bud
     PUSHI -6
     LOAD_SELF 8
     NEG
@@ -188,6 +244,34 @@ const PLANT_HOOKS_SRC = {
     LOAD_SELF 8
     NEG
     PUSHI 6
+    ADD
+    PUSHI 2
+    DRAW_LINE
+    JMP done
+    small_bud:
+    PUSHC SMALL_BLOOM_LEN
+    NEG
+    LOAD_SELF 8
+    NEG
+    PUSHC SMALL_BLOOM_LEN
+    SUB
+    PUSHC SMALL_BLOOM_LEN
+    LOAD_SELF 8
+    NEG
+    PUSHC SMALL_BLOOM_LEN
+    ADD
+    PUSHI 2
+    DRAW_LINE
+    PUSHC SMALL_BLOOM_LEN
+    LOAD_SELF 8
+    NEG
+    PUSHC SMALL_BLOOM_LEN
+    SUB
+    PUSHC SMALL_BLOOM_LEN
+    NEG
+    LOAD_SELF 8
+    NEG
+    PUSHC SMALL_BLOOM_LEN
     ADD
     PUSHI 2
     DRAW_LINE
@@ -231,8 +315,12 @@ function buildPlantCart(){
     // time's first drop lands) that's ~4s of continuous dragging to fully
     // bloom, not under 1s. STEM_STEP dropped from 9 to 3 to match (still
     // ~MAX_STEM_H/WIN_THRESHOLD, so full growth still lands right at the
-    // clamp instead of hitting it almost immediately).
-    constants: [3, 130, 24, 10, 8, 80, 3, 70, 6, 14, 18],
+    // clamp instead of hitting it almost immediately). MIN_STEM_H(11) is
+    // the floor a brand-new, unwatered plant is drawn at — never zero.
+    // BRANCH_UNLOCK_3(12)/BRANCH_LEN2(13) add a second, higher, shorter
+    // branch pair a mature plant grows once past BRANCH_UNLOCK_2. See
+    // on_draw's own comment for how each is used.
+    constants: [3, 130, 24, 10, 8, 80, 3, 70, 6, 14, 18, 12, 20, 10, 3],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:8, extFieldCount:0}, // 0: water drop
       {renderKind:2, assetIndex:0, rotateFlag:0, collisionW:1, collisionH:1, extFieldCount:1}, // 1: plant — ext 8 = current stem height, see on_draw

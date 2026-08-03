@@ -99,6 +99,18 @@ async function boot(){
 }
 
 document.getElementById('backBtn').addEventListener('click', goToMenu);
+// startGame() re-decodes the current fragment from scratch and rebuilds
+// the World, re-running on_init — exactly what "start this game over"
+// means, with no special-cased reset path needed per cart.
+document.getElementById('restartBtn').addEventListener('click', async () => {
+  const fragment = Runtime.getCurrentFragment();
+  if(!fragment) return;
+  try{
+    await Runtime.startGame(fragment);
+  } catch(err){
+    console.error('restart failed:', err);
+  }
+});
 document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDebug);
 document.getElementById('debugBtn').addEventListener('click', () => {
   location.hash = 'debug:' + Runtime.getCurrentFragment();

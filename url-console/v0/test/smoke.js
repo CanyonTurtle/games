@@ -266,6 +266,22 @@ async function main(){
   check('dragging on the plant cart grows it (pointer input reaches hooks, water > 0)',
     plantState.ok && !plantState.fault && plantState.water > 0, JSON.stringify(plantState));
 
+  // 5b2. The restart button: startGame() re-decodes the fragment and
+  // rebuilds the World from scratch, re-running on_init — clicking it
+  // on the still-watered plant from the drag test above should drop
+  // g_water back to exactly 0, and it must be a genuinely new World
+  // instance, not the same one with its globals reset in place.
+  const worldBeforeRestart = await page.evaluate(() => window.__urlcadeDebug.getWorld().__smokeTag = Math.random());
+  await page.click('#restartBtn');
+  await page.waitForTimeout(200);
+  const restartState = await page.evaluate((prevTag) => {
+    const w = window.__urlcadeDebug.getWorld();
+    return w ? {ok: true, fault: w.cartFault, water: w.globals[1], sameInstance: w.__smokeTag === prevTag} : {ok: false};
+  }, worldBeforeRestart);
+  check('restart button resets the plant cart (water back to 0, fresh World instance)',
+    restartState.ok && !restartState.fault && restartState.water === 0 && !restartState.sameInstance,
+    JSON.stringify(restartState));
+
   // 5c. Mini Golf's two-press timing swing: press once to start charging,
   // again to release — a real behavioral check that the state machine
   // (aiming -> charging -> in motion) actually advances and the ball
