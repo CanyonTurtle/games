@@ -449,7 +449,6 @@ function encodeCart(cart){
   const w = new ByteWriter();
   w.u8(cart.formatVersion);
   w.u8(cart.cartType); // advisory/display metadata only — never a runtime dispatch key, see DESIGN.md §14
-  w.u8(cart.paletteMode);
   w.u8(cart.rngSeed);
   w.u8(cart.modeFlags);
   w.u16(cart.screenW);
@@ -556,15 +555,13 @@ function encodeCart(cart){
   return w.toUint8Array();
 }
 
-// Bumped from 1 to 2 for on_draw/renderKind:2/DRAW_LINE/pointer input and
-// the inputWantsPointer field (DESIGN.md §36) — a real binary-layout
-// change (a 6th hook, one more header byte), so old formatVersion:1
-// fragments now fail loudly here instead of decoding into garbage. No
-// compatibility branch for version 1 on purpose: this project is still
-// pre-v1 for all intents and purposes, and any cart worth keeping can be
-// decompiled under the old kernel and recompiled fresh (see how
-// carts/breakout.js was vendored, same §36).
-const SUPPORTED_FORMAT_VERSIONS = [2];
+// Bumped from 2 to 3 for the palette-mode collapse (DESIGN.md §43):
+// paletteMode's one header byte is gone (generatePalette no longer
+// branches on anything — every cart is procedural now, see below), one
+// byte shorter than formatVersion 2. Same no-compatibility-branch policy
+// as the 1->2 bump: this project is still pre-v1, and any cart worth
+// keeping can be decompiled under the old kernel and recompiled fresh.
+const SUPPORTED_FORMAT_VERSIONS = [3];
 function decodeCart(bytes){
   const r = new ByteReader(bytes);
   const cart = {};
@@ -573,7 +570,6 @@ function decodeCart(bytes){
     throw new Error('unsupported cart format_version '+cart.formatVersion+' (this kernel understands: '+SUPPORTED_FORMAT_VERSIONS.join(', ')+') — either a corrupted fragment or a newer/older format than this runtime');
   }
   cart.cartType = r.u8();
-  cart.paletteMode = r.u8();
   cart.rngSeed = r.u8();
   cart.modeFlags = r.u8();
   cart.screenW = r.u16();
@@ -690,112 +686,88 @@ function decodeCart(bytes){
 }
 
 /* ============================================================
-   6. Palette generation — DESIGN.md §6
+   6. Palette generation — DESIGN.md §6, §41, §43
+
+   One algorithm, no mode switch: every cart's 16 colors are pure math
+   from an 8-byte paletteParams block — no hand-picked bank baked into
+   the runtime (that used to exist as CURATED_BANK/paletteMode:0; see
+   DESIGN.md §43 for why it was collapsed into this). Three ramps split
+   the 16 indices:
+     0-7   "terrain"  — backdrop/tiles, 8 shades, one hue
+     8-11  "entity A" — the cart's first character/object, 4 shades
+     12-15 "entity B" — a second, independently-colored character/object
    ============================================================ */
-const CURATED_BANK = [
-  // 0: "sky/grass" — outline, body, beak, pipe edge/fill/highlight, white,
-  //    then a sky blue and a ground green for the backdrop generator (§16)
-  ['#000000','#3b2a20','#f4d35e','#ee8b2b','#1b6b2e','#3a9d4f','#a8e6b5','#ffffff',
-   '#8ecae6','#4a7c3a','#000000','#000000','#000000','#000000','#000000','#000000'],
-  // 1: "dungeon" (Cave Crawler) — hand-picked rather than procedurally
-  // hue-rotated on purpose. See DESIGN.md §14/§15.1 for why: a generated
-  // palette put player and monster on the same accent hue ramp, so a
-  // curated bank keeps walls/floor/stairs in one earthy family (0-7)
-  // while player and monster each get their own independent hue.
-  ['#000000','#3a2a1a','#6b4a2f','#8a6540','#4a3520','#5f4530','#c9a86a','#f0e6c8',
-   '#2e86de','#54a0ff','#1b4f8a','#f6e58d','#e84118','#ff7675','#7a0c0c','#ffd700'],
-];
 function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
-// Procedural mode (paletteMode 1) generates two 8-color ramps from one
-// compact param block: indices 0-7 ("base") for terrain/backdrop, 8-15
-// ("accent") for entities — see DESIGN.md §14 for the split and §41 for
-// why the accent ramp is generated the way it is below.
+// The terrain ramp is whatever the cart authors: satMin/satMax/lightMin/
+// lightMax at a fixed hue, exactly as before (DESIGN.md §41) — terrain
+// is allowed to be muted (stone, dirt, grass), that was never the bug.
 //
-// The original version ran both ramps through the *same*
-// satMin/satMax/lightMin/lightMax, varying only hue. That's backwards
-// for how these two ramps get used: a cart author picking a muted,
-// low-saturation range for believable terrain (stone, dirt, grass —
-// several shipped carts do exactly this, satMax as low as 20%) got that
-// same low saturation forced onto every entity color too, since nothing
-// about "this is the accent ramp" asked for anything different. Low
-// saturation reads as gray regardless of hue, so a desaturated blue car
-// on a desaturated green road doesn't read as "blue on green" at all —
-// it reads as "gray on gray," i.e. exactly the reported bug. A small
-// accentOffset compounded this: hue alone, with no saturation or
-// lightness contrast to back it up, is a weak separator — two colors
-// 30-40deg apart in hue but both near-gray are still nearly
-// indistinguishable, especially on the small, low-contrast displays
-// this runtime targets.
+// Each entity ramp gets its own saturation/lightness floor (well above
+// what muted terrain tends to use — §41's fix, unchanged) and its own
+// hue-shifted shading (cooler shadow end, warmer highlight end,
+// ACCENT_HUE_DRIFT degrees each way — same reasoning as before).
 //
-// Color theory fix, not a per-cart data fix: entities need to *read as
-// foreground* wherever they're placed, which takes hue distance, a
-// saturation floor, a *lightness* floor, and hue-shifted shading — the
-// classic "figure-ground" contrast rule (a silhouette separates from
-// its background by differing on more than one channel, not hue
-// alone), plus the equally classic ramp-shading rule that a color ramp
-// built from tint/shade of one fixed hue reads as flatter and muddier
-// than one that also drifts hue a little — cooler/bluer toward the
-// shadow end, warmer/less-blue toward the highlight end (the same
-// reason a lot of hand-painted pixel-art ramps outperform a naive
-// lightness-only gradient). So the accent ramp now:
-//   1. is pushed at least MIN_ACCENT_HUE_SEPARATION degrees from the
-//      base hue (clamped, not just added — a small authored offset like
-//      20-40deg, intended as "a nearby shade," is precisely the case
-//      that caused blending, so it's corrected rather than honored);
-//   2. gets its own saturation floor, well above what muted terrain
-//      tends to use, so entities stay vivid even when the terrain ramp
-//      is deliberately closer to grayscale;
-//   3. gets its own, considerably brighter lightness floor *and*
-//      ceiling — entities read as foreground by being lighter (higher
-//      perceptual value), not merely a different, equally dark hue.
-//      This used to be `Math.min(lightMin, ACCENT_LIGHT_MIN)` for the
-//      floor, which is backwards: given a cart with a *dark* base
-//      lightMin (common for a moody terrain ramp), that took the
-//      smaller (darker) of the two, undoing the floor entirely instead
-//      of enforcing it. Both bounds now take the brighter of the two
-//      (`Math.max`), so a dark terrain range can no longer drag the
-//      entity ramp down with it.
-//   4. shifts hue per ramp step rather than holding it fixed — the
-//      shadow end (t=0) leans toward the "cooler" side of the hue
-//      wheel (higher hue value; how far "cooler" reads depends on
-//      where the base accent hue sits, same as it would for a painter)
-//      and the highlight end (t=1) leans toward the "warmer" side
-//      (lower hue value), a fixed ACCENT_HUE_DRIFT degrees each way.
-// This runs for every paletteMode:1 cart, including ones authored after
-// this change, without needing any cart to opt in.
-const MIN_ACCENT_HUE_SEPARATION = 100;
+// What's new is *where* each entity hue sits. §41 picked one accent hue
+// by clamping an author-supplied offset into [100,260]deg from the
+// terrain hue — workable for one entity, but Cave Crawler needs two
+// (player and monster) independently colored, and two independently-
+// clamped offsets can still land close to *each other* even when each
+// is individually far from the terrain hue (DESIGN.md §43's design
+// note). A true triad sidesteps that: entity A anchors at
+// terrainHue+120deg, entity B at terrainHue+240deg — the same
+// relationship as red/yellow/blue on a color wheel — so all three hues
+// are 120deg apart by construction, not by clamping toward a target
+// after the fact. Each entity keeps a small, author-steerable
+// ENTITY_HUE_WIGGLE around its anchor (mapped from an 0-255 byte) for
+// creative control, bounded tightly enough that every pairwise hue
+// distance stays >=90deg no matter what any cart picks — it is not
+// possible to author a cart where two of the three ramps collide.
 const ACCENT_SAT_MIN = 55, ACCENT_SAT_MAX = 90;
 const ACCENT_LIGHT_MIN = 45, ACCENT_LIGHT_MAX = 88;
-const ACCENT_HUE_DRIFT = 18;
-function generatePalette(cart){
-  if(cart.paletteMode === 0){
-    return CURATED_BANK[cart.paletteParams[0]] || CURATED_BANK[0];
+// The >=90deg guarantee above is on the *rendered* hue of every swatch,
+// not just the two anchors — each entity ramp's own hue-drift shading
+// (ACCENT_HUE_DRIFT either side of its anchor) swings its actual colors
+// closer to its neighbor than the anchor-to-anchor 120deg suggests, and
+// the wiggle does too. Worst case, entity A's closest swatch to entity B
+// sits at (anchorA + ENTITY_HUE_WIGGLE + ACCENT_HUE_DRIFT), and
+// symmetrically for B leaning back toward A — so the true floor between
+// two entity ramps is 120 - 2*(WIGGLE+DRIFT), and between terrain and an
+// entity ramp it's 120 - (WIGGLE+DRIFT). Keeping WIGGLE+DRIFT <= 15 (9+6
+// here) is what makes both of those come out to >=90 and >=105
+// respectively — verified by brute-force sweep, not just this arithmetic
+// (an earlier draft used 15+18=33 here, which "looked" like it should
+// still be fine and actually only guaranteed 54deg between two entities —
+// see DESIGN.md §43).
+const ACCENT_HUE_DRIFT = 6;
+const ENTITY_HUE_WIGGLE = 9;
+function entityHueFromWiggleByte(anchor, wiggleByte){
+  return anchor + (wiggleByte/255)*2*ENTITY_HUE_WIGGLE - ENTITY_HUE_WIGGLE;
+}
+// Shared by both entity ramps — `count` shades (4, for the 8-11/12-15
+// split), starting at `startIndex` in `pal`, radiating out from `hue`
+// exactly like §41's single accent ramp did, just over fewer steps.
+function fillEntityRamp(pal, startIndex, count, hue, satMin, satMax, lightMin, lightMax){
+  const accentSatMin = Math.max(satMin, ACCENT_SAT_MIN);
+  const accentSatMax = Math.max(satMax, ACCENT_SAT_MAX, accentSatMin);
+  const accentLightMin = Math.max(lightMin, ACCENT_LIGHT_MIN);
+  const accentLightMax = Math.max(lightMax, ACCENT_LIGHT_MAX, accentLightMin + 20);
+  for(let i=0;i<count;i++){
+    const t = i/(count-1);
+    const hueAtT = hue + ACCENT_HUE_DRIFT - 2*ACCENT_HUE_DRIFT*t;
+    pal[startIndex+i] = hsl(hueAtT, accentSatMin+(accentSatMax-accentSatMin)*t, accentLightMin+(accentLightMax-accentLightMin)*t);
   }
-  // procedural harmony mode
-  const [baseHue,,satMin,satMax,lightMin,lightMax,accentOffset] = cart.paletteParams;
+}
+function generatePalette(cart){
+  const [baseHue,,satMin,satMax,lightMin,lightMax,wiggleA,wiggleB] = cart.paletteParams;
   const pal = new Array(16);
   for(let i=0;i<8;i++){
     const t = i/7;
     pal[i] = hsl(baseHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
   }
-  // Clamping the raw offset into [MIN_SEP, 360-MIN_SEP] guarantees a
-  // circular hue distance of at least MIN_SEP on whichever side the
-  // author's offset pointed (360-MIN_SEP degrees forward is the same
-  // hue as MIN_SEP degrees backward), without discarding the direction
-  // they chose the way a naive `max(offset, MIN_SEP)` would for
-  // negative offsets.
-  const rawOffset = ((accentOffset % 360) + 360) % 360;
-  const clampedOffset = Math.min(360 - MIN_ACCENT_HUE_SEPARATION, Math.max(MIN_ACCENT_HUE_SEPARATION, rawOffset));
-  const accentHue = baseHue + clampedOffset;
-  const accentSatMin = Math.max(satMin, ACCENT_SAT_MIN);
-  const accentSatMax = Math.max(satMax, ACCENT_SAT_MAX, accentSatMin);
-  const accentLightMin = Math.max(lightMin, ACCENT_LIGHT_MIN);
-  const accentLightMax = Math.max(lightMax, ACCENT_LIGHT_MAX, accentLightMin + 20);
-  for(let i=0;i<8;i++){
-    const t = i/7;
-    const hueAtT = accentHue + ACCENT_HUE_DRIFT - 2*ACCENT_HUE_DRIFT*t;
-    pal[8+i] = hsl(hueAtT, accentSatMin+(accentSatMax-accentSatMin)*t, accentLightMin+(accentLightMax-accentLightMin)*t);
-  }
+  const entityHueA = entityHueFromWiggleByte(baseHue+120, wiggleA);
+  const entityHueB = entityHueFromWiggleByte(baseHue+240, wiggleB);
+  fillEntityRamp(pal, 8, 4, entityHueA, satMin, satMax, lightMin, lightMax);
+  fillEntityRamp(pal, 12, 4, entityHueB, satMin, satMax, lightMin, lightMax);
   return pal;
 }
 
@@ -1288,7 +1260,7 @@ return {
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION, TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
   SHAPE_ELLIPSE, SHAPE_RECT, writeString, readString,
   encodeCart, decodeCart, SUPPORTED_FORMAT_VERSIONS,
-  CURATED_BANK, hsl, generatePalette,
+  hsl, generatePalette,
   TRACK_TOKENS, TILE_ROAD, TILE_RUMBLE, TILE_STARTLINE, MAP_EDGE_TILE, buildTrack,
   CAVE_WALL, CAVE_FLOOR, CAVE_STAIRS, CAVE_GOLD, buildCave,
   PLATFORM_TOKENS, PLATFORM_WIDTH_TOKENS, PLATFORM_OPERAND_TOKENS,

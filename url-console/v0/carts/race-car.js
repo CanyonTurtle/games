@@ -283,18 +283,20 @@ const RACER_HOOKS_SRC = {
 function buildRacerCart(){
   // Rounded body (outline+fill), a windshield band, a roof highlight
   // stripe, and four wheel-bump rects — nose along +x (rotateFlag rotates
-  // the whole sprite to match heading). Accent-bank indices: 8=darkest
-  // (tires/outline), 10='a'=windshield glass, 12='c'=body fill,
-  // 13='d'=roof highlight.
+  // the whole sprite to match heading). Entity B's 4-color ramp (DESIGN.md
+  // §43 — entity B, not A, because +240deg from this cart's blue terrain
+  // hue is what lands on green; entity A would have landed on pink):
+  // 12=darkest (tires/outline), 13=windshield glass, 14=body fill,
+  // 15=roof highlight (brightest).
   const carShapes = [
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:4.6, color:8},
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.0,ry:4.3, color:12},
-    {type:SHAPE_RECT, x:8.3,y:5.2, w:3.3,h:5.6, color:10},
-    {type:SHAPE_RECT, x:3.2,y:6.7, w:5.0,h:2.6, color:13},
-    {type:SHAPE_RECT, x:3.0,y:0.4, w:2.2,h:2.4, color:8},
-    {type:SHAPE_RECT, x:10.8,y:0.4, w:2.2,h:2.4, color:8},
-    {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:8},
-    {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:8},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:4.6, color:12},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.0,ry:4.3, color:14},
+    {type:SHAPE_RECT, x:8.3,y:5.2, w:3.3,h:5.6, color:13},
+    {type:SHAPE_RECT, x:3.2,y:6.7, w:5.0,h:2.6, color:15},
+    {type:SHAPE_RECT, x:3.0,y:0.4, w:2.2,h:2.4, color:12},
+    {type:SHAPE_RECT, x:10.8,y:0.4, w:2.2,h:2.4, color:12},
+    {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:12},
+    {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:12},
   ];
   const particleShapes = [
     {type:SHAPE_ELLIPSE, cx:4,cy:4, rx:3.2,ry:3.2, color:1},
@@ -347,26 +349,23 @@ function buildRacerCart(){
   const screenW = 160, screenH = 160;
 
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Race Car', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14
-    paletteMode: 1,
-    // Track (base ramp) is a cool, dark blue-grey asphalt; cars (accent
-    // ramp) are a light, lively green — not the reverse. A blue accent
-    // on a green base kept reading as flat no matter how much brighter/
-    // more saturated the accent ramp got: blue is the cooler, lower-
-    // perceptual-value hue of the two, so pushing "the accent should be
-    // the brighter one" fights the hue itself instead of working with
-    // it. Green (especially yellow-leaning green, ~accentHue 100) reads
-    // as bright and advancing in a way blue doesn't at equal HSL
-    // lightness — swapping which hue is base vs. accent, not just
-    // tuning saturation/lightness, is what actually fixed it.
-    // accentOffset must stay <=255 (paletteParams packs into 8 unsigned
-    // bytes — see AUTHORING.md's Palette section): 260 here silently
-    // wrapped to 4 through that u8 round-trip, landing the accent hue
-    // back near baseHue+4 (magenta, not green) — caught by actually
-    // screenshotting the result rather than trusting the pre-encode math.
-    paletteParams: [220, 0, 8, 20, 12, 65, 240, 0],
+    // Track (terrain ramp) is a cool, dark blue-grey asphalt; cars
+    // (entity B — its fixed +240deg anchor from this baseHue lands on
+    // green, entity A's +120deg would have landed on pink) are a light,
+    // lively green — not the reverse. A blue accent on a green base kept
+    // reading as flat no matter how much brighter/more saturated the
+    // accent ramp got: blue is the cooler, lower-perceptual-value hue of
+    // the two, so pushing "the accent should be the brighter one" fights
+    // the hue itself instead of working with it (DESIGN.md §41). Which
+    // of the two fixed entity anchors (+120/+240) actually lands on
+    // green, for this particular blue terrain hue, is arithmetic, not a
+    // free choice — see DESIGN.md §43 for the general collapse to a
+    // fixed hue triad, which is also why this cart no longer has a
+    // freely-choosable accentOffset the way it briefly did.
+    paletteParams: [220, 0, 8, 20, 12, 65, 128, 128],
     rngSeed: 17,
     modeFlags: 0,
     screenW, screenH, // square viewport, see DESIGN.md §18 — the track

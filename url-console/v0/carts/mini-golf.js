@@ -301,13 +301,15 @@ const GOLF_HOOKS_SRC = {
 };
 
 function buildMiniGolfCart(){
-  // Accent-ramp colors (8/15), not base-ramp (0-7): the ball has to read
-  // as a foreground object against a fairway that's shades of the *base*
-  // ramp's own hue — two tones of the base ramp (the original choice)
-  // put the ball in the exact same hue family as the grass under it,
-  // See DESIGN.md §41.
+  // Entity B's ramp (12/15), not the terrain ramp (0-7): the ball has to
+  // read as a foreground object against a fairway that's shades of the
+  // *terrain* ramp's own hue — two tones of that ramp (the original
+  // choice) put the ball in the exact same hue family as the grass
+  // under it (DESIGN.md §41). Entity B rather than A because +240deg
+  // from this cart's green terrain hue is what lands near red/warm — A
+  // would have landed on blue (DESIGN.md §43).
   const ballShapes = [
-    {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3.5, ry:3.5, color:8},
+    {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3.5, ry:3.5, color:12},
     {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:2.7, ry:2.7, color:15},
   ];
   // Sprite is drawn centered on the entity's own (x,y) — see
@@ -322,7 +324,7 @@ function buildMiniGolfCart(){
   const flagShapes = [
     {type:SHAPE_ELLIPSE, cx:8, cy:12, rx:4.5, ry:2.5, color:0}, // cup
     {type:SHAPE_RECT, x:7, y:0, w:1, h:12, color:0}, // pole, base at the cup center
-    {type:SHAPE_RECT, x:8, y:1, w:6, h:4, color:9}, // banner
+    {type:SHAPE_RECT, x:8, y:1, w:6, h:4, color:13}, // banner
   ];
   // Fairway/rough/OB tiles map onto grid ids 1-4 (see buildTrack) via
   // [OB, fairway, rough, tee] — same array-position convention race-car.js
@@ -353,17 +355,13 @@ function buildMiniGolfCart(){
   const screenW = 160, screenH = 160;
 
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Mini Golf', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14 (same "racer/golf" family label the actual racer uses)
-    paletteMode: 1, // procedural harmony — green fairway ramp (0-7) + a warm accent ramp (8-15) for the flag/ball/tee
-    // accentOffset must stay <=255 (paletteParams packs into 8 unsigned
-    // bytes — see AUTHORING.md's Palette section): the original 280 here
-    // silently wrapped to 24 through the u8 round-trip (an accent hue
-    // barely past the base hue, not the intended warm red), caught only
-    // once kernel.js's ByteWriter started rejecting out-of-range u8
-    // writes instead of masking them (DESIGN.md §41).
-    paletteParams: [100, 0, 20, 60, 15, 85, 250, 0],
+    // Terrain hue 100 (green fairway). Entity B (+240deg) anchors the
+    // ball/flag at ~340 (warm red) — entity A would have landed on blue
+    // (DESIGN.md §43).
+    paletteParams: [100, 0, 20, 60, 15, 85, 128, 128],
     rngSeed: 1,
     modeFlags: 0,
     screenW, screenH,

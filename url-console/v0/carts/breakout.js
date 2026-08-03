@@ -22,11 +22,12 @@
 
 function buildBreakoutCart(){
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: "Breakout", author: "Claude", // vendored, not authored here — see header comment
     cartType: 1,
-    paletteMode: 1,
-    paletteParams: [220,0,15,70,8,55,140,0],
+    // Terrain hue 220 (dark blue background/bricks). Entity A (+120deg)
+    // anchors the paddle/ball at ~340 (pink/red) — DESIGN.md §43.
+    paletteParams: [220,0,15,70,8,55,128,128],
     rngSeed: 1,
     modeFlags: 0,
     screenW: 160, screenH: 160,
@@ -105,7 +106,7 @@ function buildBreakoutCart(){
             "y": 0,
             "w": 0,
             "h": 8,
-            "color": 13
+            "color": 10
           },
           {
             "type": 1,
@@ -113,7 +114,7 @@ function buildBreakoutCart(){
             "y": 2,
             "w": 28,
             "h": 2,
-            "color": 15
+            "color": 11
           }
         ]
       },
@@ -128,7 +129,7 @@ function buildBreakoutCart(){
             "cy": 4,
             "rx": 3.625,
             "ry": 3.625,
-            "color": 15
+            "color": 11
           }
         ]
       },
