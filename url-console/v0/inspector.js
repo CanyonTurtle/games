@@ -158,7 +158,6 @@ function renderInspectOverview(cart){
     ['format version', cart.formatVersion],
     ['cart type', cart.cartType + ' <span style="color:var(--ink-dim)">(advisory label only, never a runtime dispatch key)</span>'],
     ['screen', `${cart.screenW} × ${cart.screenH}`],
-    ['palette mode', cart.paletteMode + (cart.paletteMode===0 ? ' (curated bank)' : ' (procedural harmony)')],
     ['palette params', esc(cart.paletteParams.join(', '))],
     ['rng seed', cart.rngSeed],
     ['mode flags', '0b' + cart.modeFlags.toString(2).padStart(8,'0')],
@@ -200,35 +199,32 @@ function renderInspectOverview(cart){
 }
 
 // A dense 8-wide swatch grid, not a card list — see index.html's .pal-*
-// CSS comment for why. `paletteMode:1` (procedural) carts get their
-// 0-7/8-15 split called out with real section labels, because that
-// split is a structural guarantee of generatePalette() itself (DESIGN.md
-// §41): every procedural cart's entities really do come from a
-// distinctly-hued, brighter accent ramp, not just "the second half of
-// the array." `paletteMode:0` (curated) banks don't get that same
-// labeling — CURATED_BANK's own comments show the split isn't
-// consistent there (bank 0's backdrop colors sit at 8-9, its entities
-// at 0-7; bank 1 is the reverse), so labeling it "terrain/entities"
-// would be asserting a convention that particular bank doesn't follow.
+// CSS comment for why. Every cart's 16 colors split into three labeled
+// groups now — terrain (0-7) and two independent entity ramps (8-11,
+// 12-15) — because that three-way split is a structural guarantee of
+// generatePalette() itself, not a convention some carts follow and
+// others don't (DESIGN.md §43; there's no longer a curated-bank mode
+// whose own index usage might disagree with the labels).
 function renderPaletteStrip(colors, startIndex){
-  return '<div class="pal-strip">' + colors.map((c,i) => `
+  return '<div class="pal-strip" style="grid-template-columns:repeat(' + colors.length + ',40px)">' + colors.map((c,i) => `
     <div class="pal-swatch" style="background:${c}" title="${startIndex+i}: ${esc(c)}"><span>${startIndex+i}</span></div>
   `).join('') + '</div>';
 }
 function renderInspectPalette(cart){
   const pal = generatePalette(cart);
-  if(cart.paletteMode === 1){
-    return `
-      <div class="pal-group">
-        <p class="pal-group-label">Terrain / backdrop (0-7)</p>
-        ${renderPaletteStrip(pal.slice(0,8), 0)}
-      </div>
-      <div class="pal-group">
-        <p class="pal-group-label">Entities (8-15)</p>
-        ${renderPaletteStrip(pal.slice(8,16), 8)}
-      </div>`;
-  }
-  return `<div class="pal-group">${renderPaletteStrip(pal, 0)}</div>`;
+  return `
+    <div class="pal-group">
+      <p class="pal-group-label">Terrain / backdrop (0-7)</p>
+      ${renderPaletteStrip(pal.slice(0,8), 0)}
+    </div>
+    <div class="pal-group">
+      <p class="pal-group-label">Entity A (8-11)</p>
+      ${renderPaletteStrip(pal.slice(8,12), 8)}
+    </div>
+    <div class="pal-group">
+      <p class="pal-group-label">Entity B (12-15)</p>
+      ${renderPaletteStrip(pal.slice(12,16), 12)}
+    </div>`;
 }
 
 function spritesListHtml(cart){
@@ -491,9 +487,14 @@ async function compileSourceText(){
 // through encode→decode too, consistent with every other path into this
 // view — no separate "nothing decoded yet" state to maintain).
 const STARTER_TEMPLATE = {
-  formatVersion: 2, cartType: 63, paletteMode: 0, paletteParams: [0,0,0,0,0,0,0,0],
+  formatVersion: 3, cartType: 63,
+  // A modest terrain hue plus generatePalette()'s own guaranteed-vivid
+  // entity floors (DESIGN.md §41/§43) is enough to make a first cart
+  // look intentional without the author having to think about palettes
+  // at all yet — see the Palette section of AUTHORING.md.
+  paletteParams: [200, 0, 15, 40, 15, 60, 128, 128],
   rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
-  backdropFillIndex: 8, backdropGroundHeight: 0, backdropGroundIndex: 0,
+  backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
   inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {},
   hudSpec: [
     {kind:0, sourceKind:0, srcA:1, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Frames'},
@@ -505,7 +506,7 @@ const STARTER_TEMPLATE = {
     {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
   ],
   sprites: [
-    {kind:1, w:8, h:8, shapes:[{type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3, ry:3, color:2}]},
+    {kind:1, w:8, h:8, shapes:[{type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3, ry:3, color:9}]},
   ],
   tiles: [],
   mapGenerator: 0,

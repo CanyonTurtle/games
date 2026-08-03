@@ -36,8 +36,9 @@ and it's exercised on every play, not just asserted.
   constants/globals compiles to the same bytecode format the VM
   executes — this is genuinely how both carts were authored, not
   hand-computed bytes.
-- Procedural palette generation (color-theory harmony ramps) and a
-  curated bank, both driving real rendering.
+- Procedural palette generation (color-theory harmony ramps — a fixed
+  hue triad for terrain plus two independent entity colors) driving
+  every cart's rendering; no hand-picked bank exists anymore.
 - The track-piece grammar turtle-interpreting a token sequence into a
   tile grid + checkpoint table at load time.
 - Per-type declared entity fields (not a fixed generic scratch count).

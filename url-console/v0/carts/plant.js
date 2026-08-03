@@ -141,7 +141,7 @@ const PLANT_HOOKS_SRC = {
     PUSHI 0
     LOAD_SELF 8
     NEG
-    PUSHI 5
+    PUSHI 8
     DRAW_LINE
     LOADG g_water
     PUSHC BRANCH_UNLOCK_1
@@ -160,7 +160,7 @@ const PLANT_HOOKS_SRC = {
     PUSHC BRANCH_LEN
     ADD
     NEG
-    PUSHI 5
+    PUSHI 8
     DRAW_LINE
     PUSHI 0
     LOAD_SELF 8
@@ -174,7 +174,7 @@ const PLANT_HOOKS_SRC = {
     PUSHC BRANCH_LEN
     ADD
     NEG
-    PUSHI 5
+    PUSHI 8
     DRAW_LINE
     after_branch1:
     LOADG g_water
@@ -198,7 +198,7 @@ const PLANT_HOOKS_SRC = {
     PUSHC BRANCH_LEN2
     ADD
     NEG
-    PUSHI 5
+    PUSHI 8
     DRAW_LINE
     PUSHI 0
     LOAD_SELF 8
@@ -216,7 +216,7 @@ const PLANT_HOOKS_SRC = {
     PUSHC BRANCH_LEN2
     ADD
     NEG
-    PUSHI 5
+    PUSHI 8
     DRAW_LINE
     after_branch2:
     LOADG g_water
@@ -233,7 +233,7 @@ const PLANT_HOOKS_SRC = {
     NEG
     PUSHI 6
     ADD
-    PUSHI 2
+    PUSHI 11
     DRAW_LINE
     PUSHI 6
     LOAD_SELF 8
@@ -245,7 +245,7 @@ const PLANT_HOOKS_SRC = {
     NEG
     PUSHI 6
     ADD
-    PUSHI 2
+    PUSHI 11
     DRAW_LINE
     JMP done
     small_bud:
@@ -260,7 +260,7 @@ const PLANT_HOOKS_SRC = {
     NEG
     PUSHC SMALL_BLOOM_LEN
     ADD
-    PUSHI 2
+    PUSHI 11
     DRAW_LINE
     PUSHC SMALL_BLOOM_LEN
     LOAD_SELF 8
@@ -273,7 +273,7 @@ const PLANT_HOOKS_SRC = {
     NEG
     PUSHC SMALL_BLOOM_LEN
     ADD
-    PUSHI 2
+    PUSHI 11
     DRAW_LINE
     done:
     HALT
@@ -281,27 +281,33 @@ const PLANT_HOOKS_SRC = {
 };
 
 function buildPlantCart(){
-  // color:7 (white) — deliberately *not* 8 (sky blue), even though sky
-  // blue reads as "water": that's also backdropFillIndex below, so a drop
-  // painted in it would be invisible against its own background. White
-  // reads clearly against both the sky and the soil band it falls past.
+  // Entity B (water, +240deg from a warm terrain hue lands on blue —
+  // DESIGN.md §43), brightest shade — reads clearly against both the
+  // pale terrain sky and the darker soil band it falls past, the same
+  // property the old hand-picked white had, arrived at by the palette
+  // math instead of a hand-picked bank entry.
   const dropShapes = [
-    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:7},
+    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:15},
   ];
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Water the Plant', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 6, // advisory label only — see DESIGN.md §14
-    paletteMode: 0, // curated bank #0 — same sky/grass bank Flappy Bird uses (DESIGN.md §6): sky blue for the water drop, brown for soil, green for the plant, all already in one bank
-    paletteParams: [0,0,0,0,0,0,0,0],
+    // Terrain hue 25 (warm brown) for sky/soil (DESIGN.md §43 — one
+    // hue family, same constraint as every other procedural cart).
+    // Entity A's fixed +120deg anchor lands the plant at ~145 (green —
+    // exactly what a plant should be), entity B's +240deg anchor lands
+    // the water drop at ~265 (blue — exactly what water should be).
+    // Both happy consequences of the triad, not hand-tuned to land there.
+    paletteParams: [25, 0, 15, 50, 20, 85, 128, 128],
     rngSeed: 1,
     modeFlags: 0,
     screenW: 160,
     screenH: 160,
     mapGenerator: 0,
-    backdropFillIndex: 8,   // sky blue
+    backdropFillIndex: 7,   // lightest terrain shade — sky
     backdropGroundHeight: 30,
-    backdropGroundIndex: 1, // soil brown
+    backdropGroundIndex: 0, // darkest terrain shade — soil
     inputActiveButtons: 0,
     inputTouchTemplate: TOUCH_TEMPLATE_NONE, // no discrete buttons at all — dragging on the canvas is the whole interaction
     inputWantsPointer: true,

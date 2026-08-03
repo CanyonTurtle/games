@@ -444,19 +444,29 @@ function buildRoguelikeCart(){
     '44444444','44444440','44444700','44470000',
     '44700000','47000000','00000000','00000000',
   ]);
+  // Gold now stays on the terrain ramp (indices 6/7, its brightest,
+  // most saturated shades) rather than reaching into the old accent
+  // ramp's 14/15 (DESIGN.md §43 — those indices belong to entity B now,
+  // and would render gold in whatever color the monster is). With a
+  // warm terrain hue this reads as a genuine glint rather than a
+  // downgrade: browns and golds are close hues to begin with.
   const goldPixels = hexRowsToPixels([
-    '44444444','44044440','40ffff04','4fffffe4',
-    '4fffffe4','40ffff04','44044440','44444444',
+    '44444444','44044440','40777704','47777764',
+    '47777764','40777704','44044440','44444444',
   ]);
-  // Blue player. Indices 9/10 land squarely in the new curated dungeon
-  // bank's blue range (see CURATED_BANK[1]).
-  const playerShapes = blobPlayerShapes(9, 10);
-  // Red monster, white eyes — deliberately using its own indices (12/14),
-  // not the earthy ones (3/6) the map tiles use. That was the actual bug
-  // behind "enemies blend into the background": the monster's *art*
-  // referenced the same palette slots as the walls/floor, so no palette
-  // swap alone could have fixed it — see DESIGN.md for the postmortem.
-  const monsterShapes = blobMonsterShapes(12, 14, 7, 14);
+  // Entity A (+120deg from the terrain hue) — independent of entity B
+  // (the monster) by construction, not by picking two indices that
+  // happen not to collide (DESIGN.md §43).
+  const playerShapes = blobPlayerShapes(11, 8);
+  // Entity B (+240deg from the terrain hue, and therefore >=90deg from
+  // both the terrain and the player no matter what either author-tuned
+  // hue wiggle is) — this is the exact case the three-ramp system was
+  // built to solve: the original bug here was the monster's *art*
+  // pointing at the same palette family as the walls/floor at all, no
+  // amount of hue-picking could have fixed that from the cart side
+  // alone (see DESIGN.md's postmortem) — now it's structurally
+  // impossible to repeat, for this cart or any other.
+  const monsterShapes = blobMonsterShapes(14, 12, 15, 12);
 
   // Bigger than the original 32x20 (which fit entirely on one screen with
   // no camera, reported as feeling like "one flat map") — big enough that
@@ -473,12 +483,20 @@ function buildRoguelikeCart(){
   const gridW = 48, gridH = 36;
 
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Cave Crawler', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 3, // advisory label only — see DESIGN.md §14
-    paletteMode: 0, // curated bank #1 ("dungeon") — not the procedural
-                     // hue-rotation mode; see CURATED_BANK's comment for why
-    paletteParams: [1, 0, 0, 0, 0, 0, 0, 0],
+    // Terrain hue 35 (warm brown/tan — the earthy walls/floor/stairs
+    // look the old hand-picked "dungeon" bank went for). Entity A
+    // (+120deg) lands the player at ~155, a teal-green; entity B
+    // (+240deg) lands the monster at ~275, a purple — different from
+    // the original blue player/red monster, but the point of this cart
+    // was always "player and monster read as independent, unmistakably
+    // different colors from the terrain and each other," and the triad
+    // guarantees exactly that by construction, for any terrain hue
+    // (DESIGN.md §43) — this was the original motivating case for
+    // building it.
+    paletteParams: [35, 0, 15, 45, 20, 80, 128, 128],
     rngSeed: 11,
     modeFlags: 0,
     screenW: 160, screenH: 160, // square viewport, see DESIGN.md §18 —

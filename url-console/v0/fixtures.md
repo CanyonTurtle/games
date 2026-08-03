@@ -16,7 +16,7 @@ format can describe, useful for checking the header fields alone.
 
 ```js
 {
-  formatVersion: 2, cartType: 0, paletteMode: 0, rngSeed: 1, modeFlags: 0,
+  formatVersion: 3, cartType: 0, rngSeed: 1, modeFlags: 0,
   screenW: 64, screenH: 64,
   paletteParams: [0,0,0,0,0,0,0,0],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -27,28 +27,27 @@ format can describe, useful for checking the header fields alone.
 }
 ```
 
-**Encoded bytes (52):** one byte longer than formatVersion 1's 49 —
-`inputWantsPointer` adds one, and `hooks` now iterates six length
-prefixes (`on_draw` included) instead of five, each still 0 for this
-hookless cart, so that part is a wash:
+**Encoded bytes (51):** one byte shorter than formatVersion 2's 52 —
+`paletteMode` is gone; palette generation is unconditional now (DESIGN.md
+§43), so there's nothing left to select a mode with:
 ```
-02 00 00 01 00 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00 00
+03 00 01 00 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00
 ```
 
-**Raw fragment** (`b64urlEncode`, no compression, 72 chars):
+**Raw fragment** (`b64urlEncode`, no compression, 70 chars):
 ```
-r.AgAAAQBAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_wAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+r.AwABAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD_AAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 **Chosen fragment** (`encodePayload` picks whichever tag is shorter —
-even at just 52 raw bytes, DEFLATE still wins narrowly here, 24 chars
-against the raw form's 72):
+even at just 51 raw bytes, DEFLATE still wins narrowly here, 22 chars
+against the raw form's 70):
 ```
-z.Y2JgYGRwYHBgwAr-YxUFAA
+z.Y2ZgZHBgcGDACv5jFQUA
 ```
-Decompressing this reproduces the exact 52 bytes above.
+Decompressing this reproduces the exact 51 bytes above.
 
 ## Fixture 2: one sprite, one HUD line, one hook
 
@@ -59,7 +58,7 @@ constant into global 0.
 
 ```js
 {
-  formatVersion: 2, cartType: 63, paletteMode: 0, rngSeed: 7, modeFlags: 0,
+  formatVersion: 3, cartType: 63, rngSeed: 7, modeFlags: 0,
   screenW: 32, screenH: 32,
   paletteParams: [10,20,30,40,50,60,70,80],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -94,24 +93,23 @@ operand `00`), `HALT` (opcode `32`). Cross-check against the opcode
 table in `kernel.js`'s `OPS` array (`PUSHC` is index 2 = `0x02`,
 `STOREG` is index 31 = `0x1f`, `HALT` is index 50 = `0x32`).
 
-**Encoded cart bytes (93):** three bytes longer than formatVersion 1's
-90 — one for `inputWantsPointer`, two for the `on_draw` hook's own
-`u16` length prefix (0, since this cart has no `on_draw`):
+**Encoded cart bytes (92):** one byte shorter than formatVersion 2's
+93 — no `paletteMode` byte to write:
 ```
-02 3f 00 07 00 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02
-47 6f 00 01 00 00 00 00 00 ff 00 05 53 63 6f 72 65 01 00 00 60 40 01 00
-00 00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 ff 00 00 00 00 00
-00 00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
-```
-
-**Raw fragment** (126 chars):
-```
-r.Aj8ABwAgACAAChQeKDI8RlAAAAAAAQECR28AAQAAAAAA_wAFU2NvcmUBAABgQAEAAAAICAABARAQAQBAQDAwAAAA_wAAAAAAAAAAAAUAAgAfADIAAAAAAAAAAAAA
+03 3f 07 00 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02 47
+6f 00 01 00 00 00 00 00 ff 00 05 53 63 6f 72 65 01 00 00 60 40 01 00 00
+00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 ff 00 00 00 00 00 00
+00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
 ```
 
-**Chosen fragment** (`encodePayload`, compression wins here, 101 chars):
+**Raw fragment** (125 chars):
 ```
-z.Y7JnYGdQYFBg4BKR0zCycQtgYGBgYGRkcs9nYAQxGf4zsAYn5xelMjIwJDiAhDg4GBgZBQQYGRwcDAzACmCAlYGJQZ7BCM5nAAA
+r.Az8HACAAIAAKFB4oMjxGUAAAAAABAQJHbwABAAAAAAD_AAVTY29yZQEAAGBAAQAAAAgIAAEBEBABAEBAMDAAAAD_AAAAAAAAAAAABQACAB8AMgAAAAAAAAAAAAA
+```
+
+**Chosen fragment** (`encodePayload`, compression wins here, 100 chars):
+```
+z.Y7ZnZ1BgUGDgEpHTMLJxC2BgYGBgZGRyz2dgBDEZ_jOwBifnF6UyMjAkOICEODgYGBkFBBgZHBwMDMAKYICVgYlBnsEIzmcAAA
 ```
 
 **Running `on_init` through `runHook`** (no browser, no World, just a

@@ -101,15 +101,16 @@ async function main(){
   await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 10000});
   check('all 8 shelf carts registered', true);
 
-  // 1b. Palette contrast (DESIGN.md §41): every paletteMode:1 shelf cart's
-  // generated accent ramp (8-15, the ramp entity sprites draw from — see
-  // AUTHORING.md's Palette section) must land far enough in hue from its
-  // own base ramp (0-7, terrain/backdrop) and saturated enough to read as
-  // foreground against it, regardless of how muted a cart author chose
-  // the base ramp to be. A real behavioral check on generatePalette()'s
-  // own output, not just "the cart loads" — this is exactly the class of
-  // bug (blue car, ~15% saturated, on a ~15% saturated green road) that
-  // loaded fine and looked broken.
+  // 1b. Palette contrast (DESIGN.md §41/§43): every shelf cart's two
+  // generated entity ramps (8-11, 12-15 — the ramps entity sprites draw
+  // from, see AUTHORING.md's Palette section) must land far enough in
+  // hue from the terrain ramp (0-7) *and* from each other, and saturated/
+  // lit enough to read as foreground, regardless of how muted a cart
+  // author chose the terrain ramp to be. A real behavioral check on
+  // generatePalette()'s own output, not just "the cart loads" — this is
+  // exactly the class of bug (blue car, ~15% saturated, on a ~15%
+  // saturated green road) that loaded fine and looked broken. There's no
+  // paletteMode branch to check anymore — every cart is procedural now.
   {
     const paletteChecks = await page.evaluate(async () => {
       const K = window.UrlcadeKernel;
@@ -117,7 +118,6 @@ async function main(){
       for(const [key, c] of Object.entries(window.__urlcadeDebug.CARTS)){
         const {payload} = K.decodeCartUrl(c.fragment);
         const cart = K.decodeCart(await K.decodePayloadToBytes(payload));
-        if(cart.paletteMode !== 1) continue;
         out[key] = {baseHue: cart.paletteParams[0], palette: K.generatePalette(cart)};
       }
       return out;
@@ -126,24 +126,28 @@ async function main(){
     for(const [key, {baseHue, palette}] of Object.entries(paletteChecks)){
       const parse = s => s.match(/hsl\(([\d.]+),(\d+)%,(\d+)%\)/).slice(1).map(Number);
       const base = palette.slice(0, 8).map(parse);
-      const accent = palette.slice(8, 16).map(parse);
-      const [accentHue,,accentLight] = accent[4]; // a representative mid-ramp accent color
-      const [, , baseLight] = base[4]; // the base ramp's color at the same ramp position (t)
-      let hueSep = Math.abs(accentHue - baseHue) % 360;
-      if(hueSep > 180) hueSep = 360 - hueSep;
-      const minAccentSat = Math.min(...accent.map(c => c[1]));
+      const entityA = palette.slice(8, 12).map(parse);
+      const entityB = palette.slice(12, 16).map(parse);
+      const circDist = (a,b) => { let d = Math.abs(a-b) % 360; return d > 180 ? 360-d : d; };
+      let minBaseEntitySep = 999, minEntityEntitySep = 999;
+      for(const [h] of entityA) minBaseEntitySep = Math.min(minBaseEntitySep, circDist(h, baseHue));
+      for(const [h] of entityB) minBaseEntitySep = Math.min(minBaseEntitySep, circDist(h, baseHue));
+      for(const [hA] of entityA) for(const [hB] of entityB) minEntityEntitySep = Math.min(minEntityEntitySep, circDist(hA, hB));
+      const minEntitySat = Math.min(...entityA.map(c=>c[1]), ...entityB.map(c=>c[1]));
       // Lightness, not just hue/saturation, is its own check: a prior
-      // version of this fix computed the accent ramp's lightness floor
+      // version of this fix computed the entity ramps' lightness floor
       // with Math.min(cartLightMin, FLOOR) instead of Math.max, which
-      // silently *undid* the floor for any cart with a dark base
+      // silently *undid* the floor for any cart with a dark terrain
       // lightMin — hue/saturation alone passed even with that bug live,
       // so this specifically re-checks that entities land lighter than
       // the terrain at the same ramp position (t), not just differently
-      // hued from it (DESIGN.md §41).
-      const ok = hueSep >= 90 && minAccentSat >= 50 && accentLight >= 55 && accentLight > baseLight + 10;
-      if(!ok){ allOk = false; detail += `${key}: hueSep=${hueSep} minSat=${minAccentSat}% accentLight=${accentLight}% baseLight=${baseLight}%; `; }
+      // hued from it.
+      const [, , baseLightMid] = base[4];
+      const [, , entityALightMid] = entityA[2];
+      const ok = minBaseEntitySep >= 90 && minEntityEntitySep >= 80 && minEntitySat >= 50 && entityALightMid > baseLightMid + 10;
+      if(!ok){ allOk = false; detail += `${key}: baseEntitySep=${minBaseEntitySep.toFixed(0)} entityEntitySep=${minEntityEntitySep.toFixed(0)} minSat=${minEntitySat}%; `; }
     }
-    check('every procedural-palette cart\'s accent ramp is hue-separated, saturated, and lighter than its base ramp at the same t',
+    check('every cart\'s two entity ramps are hue-separated from terrain and each other, saturated, and lighter than terrain',
       allOk, detail || Object.keys(paletteChecks).join(','));
   }
 
@@ -247,34 +251,32 @@ async function main(){
   });
   check('compile state starts known-good for the paused game (computed before any tab click)', !!compileOk);
 
-  // 2b. The Assets-tab palette grid (DESIGN.md §42): a curated-bank cart
-  // (paletteMode:0 — keys[0] is 'flappy') gets one flat 16-swatch strip
-  // and no terrain/entity labels, since CURATED_BANK's own index
-  // convention isn't consistent enough to label truthfully. A
-  // procedural cart (paletteMode:1 — 'racer') gets exactly two labeled
-  // 8-swatch groups, because generatePalette() *does* structurally
-  // guarantee that split for every procedural cart (DESIGN.md §41).
+  // 2b. The Assets-tab palette grid (DESIGN.md §43): every cart now
+  // renders the same three labeled groups — terrain (8 swatches) plus
+  // two independent entity ramps (4 swatches each) — since palette
+  // generation is unconditional; there's no longer a curated-bank cart
+  // that would render differently.
   await page.click('.inspect-tab[data-tab="Assets"]');
   await page.waitForTimeout(150);
-  const curatedPaletteDom = await page.evaluate(() => ({
+  const paletteDom1 = await page.evaluate(() => ({
     swatchCount: document.querySelectorAll('.pal-swatch').length,
-    groupCount: document.querySelectorAll('.pal-group-label').length,
+    groupLabels: Array.from(document.querySelectorAll('.pal-group-label')).map(e => e.textContent),
   }));
-  check('curated-bank palette renders one flat 16-swatch grid, no terrain/entity labels',
-    curatedPaletteDom.swatchCount === 16 && curatedPaletteDom.groupCount === 0, JSON.stringify(curatedPaletteDom));
+  check('Assets tab labels the terrain/entity-A/entity-B split with 16 total swatches',
+    paletteDom1.swatchCount === 16 && paletteDom1.groupLabels.length === 3 &&
+    /terrain/i.test(paletteDom1.groupLabels[0]) && /entity a/i.test(paletteDom1.groupLabels[1]) && /entity b/i.test(paletteDom1.groupLabels[2]),
+    JSON.stringify(paletteDom1));
 
   await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.racer.fragment; });
   await page.waitForTimeout(300);
   await page.click('.inspect-tab[data-tab="Assets"]');
   await page.waitForTimeout(150);
-  const proceduralPaletteDom = await page.evaluate(() => ({
+  const paletteDom2 = await page.evaluate(() => ({
     swatchCount: document.querySelectorAll('.pal-swatch').length,
     groupLabels: Array.from(document.querySelectorAll('.pal-group-label')).map(e => e.textContent),
   }));
-  check('procedural-palette cart\'s Assets tab labels the terrain/entity split',
-    proceduralPaletteDom.swatchCount === 16 && proceduralPaletteDom.groupLabels.length === 2 &&
-    /terrain/i.test(proceduralPaletteDom.groupLabels[0]) && /entities/i.test(proceduralPaletteDom.groupLabels[1]),
-    JSON.stringify(proceduralPaletteDom));
+  check('a second, unrelated cart\'s Assets tab renders the same three-group palette shape',
+    paletteDom2.swatchCount === 16 && paletteDom2.groupLabels.length === 3, JSON.stringify(paletteDom2));
 
   await page.click('.inspect-tab[data-tab="Source"]');
   await page.waitForTimeout(100);

@@ -182,14 +182,18 @@ const FLAPPY_HOOKS_SRC = {
 function buildFlappyCart(){
   // Round body (outline ring + fill), an inset wing patch, a stubby beak
   // (an elongated ellipse rather than a sharp wedge — see the "why only
-  // two primitives" note above), and a white eye with a dark pupil.
+  // two primitives" note above), and a white eye with a dark pupil. All
+  // four distinct shades this needs (outline/pupil, body, wing/beak,
+  // eye) come from entity-A's 4-color ramp (8-11) — see DESIGN.md §43:
+  // this cart used to select a hand-picked bank instead of computing its
+  // colors, the last of three that did.
   const birdShapes = [
-    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.3,ry:6.4, color:1},
-    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.0,ry:6.1, color:2},
-    {type:SHAPE_ELLIPSE, cx:6.0,cy:10.4, rx:3.3,ry:2.2, color:3},
-    {type:SHAPE_ELLIPSE, cx:13.6,cy:7.9, rx:2.2,ry:1.3, color:3},
-    {type:SHAPE_ELLIPSE, cx:10.1,cy:5.3, rx:1.8,ry:1.8, color:7},
-    {type:SHAPE_ELLIPSE, cx:10.9,cy:5.4, rx:0.9,ry:0.9, color:1},
+    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.3,ry:6.4, color:8},
+    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.0,ry:6.1, color:9},
+    {type:SHAPE_ELLIPSE, cx:6.0,cy:10.4, rx:3.3,ry:2.2, color:10},
+    {type:SHAPE_ELLIPSE, cx:13.6,cy:7.9, rx:2.2,ry:1.3, color:10},
+    {type:SHAPE_ELLIPSE, cx:10.1,cy:5.3, rx:1.8,ry:1.8, color:11},
+    {type:SHAPE_ELLIPSE, cx:10.9,cy:5.4, rx:0.9,ry:0.9, color:8},
   ];
   const pipeBody = hexRowsToPixels([
     '44444444','45555554','45555554','45566554',
@@ -200,19 +204,27 @@ function buildFlappyCart(){
     '45555554','45555554','45555554','44444444',
   ]);
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Flappy Bird', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 63, // advisory label only — see DESIGN.md §14
-    paletteMode: 0,
-    paletteParams: [0,0,0,0,0,0,0,0],
+    // Terrain hue 100 (green) — pipes (indices 4/5/6, unchanged pixel
+    // data below) and ground (index 0) share this one hue family, same
+    // constraint every other procedural cart already lives with (DESIGN.md
+    // §41/§43). Entity A's fixed +120deg anchor lands the bird at ~220
+    // (blue) — not the original yellow, but "bluebird over green pipes"
+    // reads as its own coherent, pleasant palette rather than a
+    // compromise; the whole point of the collapse to one algorithm was
+    // accepting exactly this kind of reinterpretation in exchange for
+    // guaranteed contrast (DESIGN.md §43).
+    paletteParams: [100, 0, 20, 55, 20, 85, 128, 128],
     rngSeed: 42,
     modeFlags: 0,
     screenW: 160,
     screenH: 160, // square, matches every other cart now — see DESIGN.md §18
     mapGenerator: 0, // no tilemap — the backdrop generator covers the frame
-    backdropFillIndex: 8,   // sky blue (curated bank #0)
+    backdropFillIndex: 7,   // lightest terrain shade — reads as open sky
     backdropGroundHeight: 16,
-    backdropGroundIndex: 9, // ground green
+    backdropGroundIndex: 0, // darkest terrain shade — ground
     inputActiveButtons: 16, // action bit only
     inputTouchTemplate: TOUCH_TEMPLATE_SINGLE,
     inputButtonLabels: {16: 'Flap'},

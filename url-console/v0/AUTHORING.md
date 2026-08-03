@@ -95,13 +95,12 @@ under the hood, on every edit.
 ```js
 {
   name: '', author: '',    // optional — URL envelope only (see The pipeline above), never reach the binary format
-  formatVersion: 2,        // bump only on a breaking binary-layout change
+  formatVersion: 3,        // bump only on a breaking binary-layout change
   cartType: 0,              // advisory label only (see "cartType" below) — never dispatched on
-  paletteMode: 0,           // 0 = curated bank, 1 = procedural harmony (see Palette)
   rngSeed: 1,               // seeds the deterministic RNG used by RAND_RANGE and any generator
   modeFlags: 0,             // plain bitfield, meaning is entirely cart-defined (a good place for "hard mode" toggles a player can hand-edit)
   screenW: 160, screenH: 160,
-  paletteParams: [/* 8 bytes, meaning depends on paletteMode */],
+  paletteParams: [/* 8 bytes — see Palette */],
 
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
   tileSurfaceOverrides: {},  // { tileId: surfaceId } sparse remap, see Map generators
@@ -140,24 +139,48 @@ menu, not a format decision.
 
 ## Palette
 
-16 colors total, indices 0-15.
+16 colors total, indices 0-15, always computed from `paletteParams` —
+`[baseHue, <unused>, satMin, satMax, lightMin, lightMax, wiggleA, wiggleB]`
+— there is no hand-picked-bank mode; every cart's colors are pure math
+from these 8 bytes. Three ramps:
 
-- **`paletteMode: 0`** (curated): `paletteParams[0]` selects a
-  hand-picked 16-color bank baked into the runtime (`CURATED_BANK`).
-  Use this when procedural hue-rotation would put two things that need
-  to read as distinct (e.g. a player and an enemy) on the same hue
-  ramp.
-- **`paletteMode: 1`** (procedural harmony): `paletteParams` is
-  `[baseHue, <unused>, satMin, satMax, lightMin, lightMax, accentOffset, <unused>]`.
-  Indices 0-7 are a ramp from `(satMin,lightMin)` to `(satMax,lightMax)`
-  at `baseHue`; indices 8-15 are the same ramp at `baseHue +
-  accentOffset` — a second hue for whatever needs to stand out against
-  the first (player/target color, an accent UI element, etc).
-  **`accentOffset` is stored as an unsigned byte (0-255)** — there is no
-  way to express a negative hue shift; only positive offsets from
-  `baseHue` are reachable. Render the palette (the Debug view's Assets
-  tab, or `generatePalette(cart)` directly) before committing to a hue
-  — a chosen offset can land somewhere unexpected.
+- **Terrain, indices 0-7** — a ramp from `(satMin,lightMin)` to
+  `(satMax,lightMax)` at `baseHue`. This is the one you tune freely:
+  muted, dark, whatever the backdrop/tiles need. Use it for
+  backdrop/tile art (`backdropFillIndex`, tile pixel data).
+- **Entity A, indices 8-11** — your first character/object's 4-shade
+  ramp. Its hue is fixed at `baseHue + 120deg`, nudged by `wiggleA`
+  (an unsigned byte, mapped to roughly ±9deg either way) — you don't
+  pick this hue directly, you pick `baseHue` and the +120deg anchor
+  does the rest.
+- **Entity B, indices 12-15** — a second character/object's 4-shade
+  ramp, fixed at `baseHue + 240deg`, nudged by `wiggleB`. Leave a cart's
+  `wiggleA`/`wiggleB` at a neutral middling byte (e.g. 128) if you don't
+  care about the exact placement within the small allowed range.
+
+Both entity ramps get their own saturation/lightness floor (vivid,
+well above whatever the terrain ramp is doing) regardless of what you
+set `satMin`/`satMax`/`lightMin`/`lightMax` to — you cannot author a
+muddy-looking entity by picking a muted terrain range. The three hues
+(terrain, entity A, entity B) are a fixed 120deg-apart triad by
+construction: no combination of `baseHue`/`wiggleA`/`wiggleB` can put
+any two of them within 90deg of each other. If a cart only has one
+character/object worth its own hue, just leave entity B's indices
+(12-15) unreferenced by any sprite — nothing requires using both.
+
+One consequence worth knowing up front: because the two entity hues
+are locked 120deg apart from whatever `baseHue` you pick, you can't
+freely choose "this exact hue for the terrain and that exact hue for
+the entity" the way a fully free-form offset would allow — pick
+`baseHue`, then look at what the fixed anchors land on (the Debug
+view's Assets tab, or `generatePalette(cart)` directly, before
+committing to sprite colors) rather than assuming a specific hue.
+Sometimes that's a real trade (a classic "yellow bird on green grass"
+scheme can't be reproduced exactly, since yellow and green are
+naturally close hues, not 120deg apart); often it lands somewhere
+equally good you wouldn't have picked by hand (a warm terrain hue's
++120/+240 anchors landing on green and blue, for instance — a plant
+and the water that grows it, for free).
 
 ## Backdrop
 

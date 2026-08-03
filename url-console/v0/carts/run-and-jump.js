@@ -372,28 +372,25 @@ function buildPlatformerCart(){
     '00000000','02220222','02220222','00000000',
     '22202220','22202220','00000000','02220222',
   ]);
-  // bodyColor bright, outlineColor dark — the accent ramp's index
-  // ordering ascends in lightness (see kernel.js's generatePalette),
-  // the opposite of a hand-picked curated bank; (9,10) here used to
-  // put both the body *and* the outline near the ramp's dark end
-  // (borrowed from the curated "dungeon" bank's own 9/10, where that
-  // pairing happens to be bright/dark — the two banks don't share an
-  // index convention), which is why the player read as flat and dim.
-  const playerShapes = blobPlayerShapes(14, 8);
-  // On the accent (warm) ramp, a different shade than the player — the
-  // enemy's art used to reference indices 3/6, the same family the AIR/
-  // GROUND/DIRT tiles use, the exact "sprite art points at the wrong
-  // palette family" bug found and fixed for the roguelike's monster;
-  // caught here proactively rather than waiting for the same report twice.
+  // Entity A: bodyColor bright, outlineColor dark — the ramp's index
+  // ordering ascends in lightness (see kernel.js's generatePalette).
+  const playerShapes = blobPlayerShapes(11, 8);
+  // Entity B, not entity A — a genuinely independent hue from the
+  // player rather than a different shade of the same one (DESIGN.md
+  // §43), the same upgrade Cave Crawler's player/monster split got.
   // eyeColor===pupilColor gives a flat single-tone eye instead of the
   // roguelike monster's two-tone white+pupil.
-  const enemyShapes = blobMonsterShapes(13, 8, 8, 8);
+  const enemyShapes = blobMonsterShapes(14, 12, 12, 12);
   // Gold ring, a darker interior fill, and a bright shine patch offset
-  // toward the upper-left like a light source hitting a coin.
+  // toward the upper-left like a light source hitting a coin — kept on
+  // entity A's own ramp (the two middle shades the player's outline/body
+  // extremes don't use) rather than given a third independent hue: a
+  // collectible reads fine as "part of the hero's world," and the two
+  // ramps this cart actually needs distinct are player vs. enemy.
   const coinShapes = [
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.7,ry:5.7, color:15},
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:2.3,ry:2.3, color:11},
-    {type:SHAPE_ELLIPSE, cx:5.8,cy:5.8, rx:2.3,ry:2.3, color:15},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.7,ry:5.7, color:10},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:2.3,ry:2.3, color:9},
+    {type:SHAPE_ELLIPSE, cx:5.8,cy:5.8, rx:2.3,ry:2.3, color:10},
   ];
 
   // Roughly double the original length and with more step/gap/block
@@ -428,11 +425,15 @@ function buildPlatformerCart(){
   const screenW = 160, screenH = 160; // square, matches every other cart — see DESIGN.md §18
 
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Run & Jump', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 4, // advisory label only — see DESIGN.md §14
-    paletteMode: 1,
-    paletteParams: [205, 0, 25, 55, 35, 75, 150, 0],
+    // Terrain hue 205 (blue sky/platforms). Entity A (+120deg) anchors
+    // the player at ~325 (pink), entity B (+240deg) anchors the enemy at
+    // ~85 (yellow-green) — independent hues by construction, not by
+    // reusing two shades of the same one the way this cart's player and
+    // enemy briefly did (DESIGN.md §43).
+    paletteParams: [205, 0, 25, 55, 35, 75, 128, 128],
     rngSeed: 5,
     modeFlags: 0,
     screenW, screenH, // viewport size — the level itself is gridW*8 wide, see camera below

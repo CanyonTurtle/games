@@ -857,8 +857,8 @@ function buildCastleCrusherCart(){
   // greys, which is exactly why it read as bland).
   const ballShapes = [
     {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.5,ry:6.5, color:8},
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:13},
-    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:15},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:10},
+    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:11},
   ];
   // A heavy, square stone block — outline/body/sheen. Base-ramp greys,
   // not the accent ramp — keeps the block reading as "stone structure,"
@@ -880,7 +880,7 @@ function buildCastleCrusherCart(){
     {type:SHAPE_RECT, x:3,y:0.5,w:3,h:3.5, color:0},
     {type:SHAPE_RECT, x:10,y:0.5,w:3,h:3.5, color:0},
   ];
-  const targetShapes = blobMonsterShapes(12, 0, 15, 0);
+  const targetShapes = blobMonsterShapes(14, 0, 15, 0);
 
   const T = PLATFORM_TOKENS;
   // Flat terrain — no STEP_UP anywhere, so nothing between the fixed
@@ -921,11 +921,14 @@ function buildCastleCrusherCart(){
   const levelWpx = gridW*8, levelHpx = platform.gridH*8;
 
   const cart = {
-    formatVersion: 2,
+    formatVersion: 3,
     name: 'Castle Crusher', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 5,
-    paletteMode: 1,
-    paletteParams: [210, 0, 10, 30, 25, 70, 150, 0], // cool stone/grey hue
+    // Terrain hue 210 (cool stone/sky grey). Entity A (+120deg) anchors
+    // the ball at ~330 (red/pink); entity B (+240deg) anchors the
+    // target/monster at ~90 (yellow-green) — independent hues by
+    // construction (DESIGN.md §43).
+    paletteParams: [210, 0, 10, 30, 25, 70, 128, 128],
     rngSeed: 4,
     modeFlags: 0,
     screenW, screenH,
