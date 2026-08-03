@@ -184,47 +184,60 @@ function buildFlappyCart(){
   // (an elongated ellipse rather than a sharp wedge — see the "why only
   // two primitives" note above), and a white eye with a dark pupil. All
   // four distinct shades this needs (outline/pupil, body, wing/beak,
-  // eye) come from entity-A's 4-color ramp (8-11) — see DESIGN.md §43:
-  // this cart used to select a hand-picked bank instead of computing its
-  // colors, the last of three that did.
+  // eye) come from entity A's 4-color ramp (8-11), hinted yellow — see
+  // the cart's own palette comment below and DESIGN.md §44. 8 is the
+  // ramp's shared near-black ink shade, doing double duty as outline
+  // and pupil; 9 is the ramp's most saturated step (hue-shifted warmer),
+  // used for the wing/beak accent; 10 is the ramp's mid step (closer to
+  // the ramp's actual hinted hue), used for the main body fill, so wing
+  // and body read as two distinctly different swatches rather than two
+  // adjacent shades of the same color; 11 is the palest, least-saturated
+  // step, used for the eye highlight.
   const birdShapes = [
     {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.3,ry:6.4, color:8},
-    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.0,ry:6.1, color:9},
-    {type:SHAPE_ELLIPSE, cx:6.0,cy:10.4, rx:3.3,ry:2.2, color:10},
-    {type:SHAPE_ELLIPSE, cx:13.6,cy:7.9, rx:2.2,ry:1.3, color:10},
+    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.0,ry:6.1, color:10},
+    {type:SHAPE_ELLIPSE, cx:6.0,cy:10.4, rx:3.3,ry:2.2, color:9},
+    {type:SHAPE_ELLIPSE, cx:13.6,cy:7.9, rx:2.2,ry:1.3, color:9},
     {type:SHAPE_ELLIPSE, cx:10.1,cy:5.3, rx:1.8,ry:1.8, color:11},
     {type:SHAPE_ELLIPSE, cx:10.9,cy:5.4, rx:0.9,ry:0.9, color:8},
   ];
+  // Pipes drawn from entity B's ramp (12-15), not the terrain ramp —
+  // this cart's terrain hue is the *sky*, not the pipes (see the cart's
+  // palette comment below), so pipe pixels point at entity B's indices
+  // (12=edge/dark, 13=fill, 15=highlight band) instead of the classic
+  // 4/5/6 terrain shades every other cart's tiles use.
   const pipeBody = hexRowsToPixels([
-    '44444444','45555554','45555554','45566554',
-    '45555554','45555554','45555554','44444444',
+    'cccccccc','cddddddc','cddddddc','cddffddc',
+    'cddddddc','cddddddc','cddddddc','cccccccc',
   ]);
   const pipeCap = hexRowsToPixels([
-    '44444444','46666664','46666664','45555554',
-    '45555554','45555554','45555554','44444444',
+    'cccccccc','cffffffc','cffffffc','cddddddc',
+    'cddddddc','cddddddc','cddddddc','cccccccc',
   ]);
   const cart = {
     formatVersion: 3,
     name: 'Flappy Bird', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 63, // advisory label only — see DESIGN.md §14
-    // Terrain hue 100 (green) — pipes (indices 4/5/6, unchanged pixel
-    // data below) and ground (index 0) share this one hue family, same
-    // constraint every other procedural cart already lives with (DESIGN.md
-    // §41/§43). Entity A's fixed +120deg anchor lands the bird at ~220
-    // (blue) — not the original yellow, but "bluebird over green pipes"
-    // reads as its own coherent, pleasant palette rather than a
-    // compromise; the whole point of the collapse to one algorithm was
-    // accepting exactly this kind of reinterpretation in exchange for
-    // guaranteed contrast (DESIGN.md §43).
-    paletteParams: [100, 0, 20, 55, 20, 85, 128, 128],
+    // Terrain hue 210 (blue) is the *sky* here, not pipes/ground the way
+    // every other cart's terrain ramp doubles as its obstacle color —
+    // entity B is borrowed as a second backdrop hue instead (DESIGN.md
+    // §44's "any of the three ramps can be repurposed" note). Hints:
+    // entity A ~54 (yellow, the bird) and entity B ~130 (green, the
+    // pipes/ground) — the actual classic scheme, all three mutually
+    // reachable at once specifically because MIN_HUE_SEPARATION was
+    // tuned down from an earlier draft's 100 to 70 (yellow and green
+    // sit ~70-80deg apart on the wheel; a 100deg floor made this exact,
+    // legitimate combination provably impossible no matter what hints
+    // were chosen — DESIGN.md §44).
+    paletteParams: [210, 0, 20, 55, 20, 85, 38, 92],
     rngSeed: 42,
     modeFlags: 0,
     screenW: 160,
     screenH: 160, // square, matches every other cart now — see DESIGN.md §18
     mapGenerator: 0, // no tilemap — the backdrop generator covers the frame
-    backdropFillIndex: 7,   // lightest terrain shade — reads as open sky
+    backdropFillIndex: 7,   // lightest terrain shade (blue) — open sky
     backdropGroundHeight: 16,
-    backdropGroundIndex: 0, // darkest terrain shade — ground
+    backdropGroundIndex: 12, // entity B's darkest shade (green) — ground, matching the pipes
     inputActiveButtons: 16, // action bit only
     inputTouchTemplate: TOUCH_TEMPLATE_SINGLE,
     inputButtonLabels: {16: 'Flap'},

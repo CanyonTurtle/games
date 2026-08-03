@@ -487,16 +487,17 @@ function buildRoguelikeCart(){
     name: 'Cave Crawler', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 3, // advisory label only — see DESIGN.md §14
     // Terrain hue 35 (warm brown/tan — the earthy walls/floor/stairs
-    // look the old hand-picked "dungeon" bank went for). Entity A
-    // (+120deg) lands the player at ~155, a teal-green; entity B
-    // (+240deg) lands the monster at ~275, a purple — different from
-    // the original blue player/red monster, but the point of this cart
-    // was always "player and monster read as independent, unmistakably
-    // different colors from the terrain and each other," and the triad
-    // guarantees exactly that by construction, for any terrain hue
-    // (DESIGN.md §43) — this was the original motivating case for
-    // building it.
-    paletteParams: [35, 0, 15, 45, 20, 80, 128, 128],
+    // look the old hand-picked "dungeon" bank went for). Entity hue
+    // hints (not offsets — see AUTHORING.md's Palette section): ~182
+    // (teal/cyan) for the player, ~282 (purple) for the monster —
+    // different from the original blue player/red monster, but the
+    // point of this cart was always "player and monster read as
+    // independent, unmistakably different colors from the terrain and
+    // each other," and generatePalette() guarantees exactly that for any
+    // terrain hue and any two hints that aren't aimed at each other
+    // (DESIGN.md §44) — this was the original motivating case for the
+    // whole two-entity-ramp design.
+    paletteParams: [35, 0, 15, 45, 20, 80, 129, 201],
     rngSeed: 11,
     modeFlags: 0,
     screenW: 160, screenH: 160, // square viewport, see DESIGN.md §18 —

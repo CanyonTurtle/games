@@ -25,9 +25,9 @@ function buildBreakoutCart(){
     formatVersion: 3,
     name: "Breakout", author: "Claude", // vendored, not authored here — see header comment
     cartType: 1,
-    // Terrain hue 220 (dark blue background/bricks). Entity A (+120deg)
-    // anchors the paddle/ball at ~340 (pink/red) — DESIGN.md §43.
-    paletteParams: [220,0,15,70,8,55,128,128],
+    // Terrain hue 220 (dark blue background/bricks). Entity hue hint ~32
+    // (orange) for the paddle/ball — DESIGN.md §44.
+    paletteParams: [220,0,15,70,8,55,23,107],
     rngSeed: 1,
     modeFlags: 0,
     screenW: 160, screenH: 160,

@@ -924,11 +924,11 @@ function buildCastleCrusherCart(){
     formatVersion: 3,
     name: 'Castle Crusher', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 5,
-    // Terrain hue 210 (cool stone/sky grey). Entity A (+120deg) anchors
-    // the ball at ~330 (red/pink); entity B (+240deg) anchors the
-    // target/monster at ~90 (yellow-green) — independent hues by
-    // construction (DESIGN.md §43).
-    paletteParams: [210, 0, 10, 30, 25, 70, 128, 128],
+    // Terrain hue 210 (cool stone/sky grey). Entity hue hints: ~12 (red)
+    // for the ball, ~90 (green) for the target/monster — independent
+    // hues by construction, both a real distance from the stone/sky's
+    // own blue-grey (DESIGN.md §44).
+    paletteParams: [210, 0, 10, 30, 25, 70, 9, 64],
     rngSeed: 4,
     modeFlags: 0,
     screenW, screenH,

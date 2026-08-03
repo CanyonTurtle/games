@@ -428,12 +428,14 @@ function buildPlatformerCart(){
     formatVersion: 3,
     name: 'Run & Jump', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 4, // advisory label only — see DESIGN.md §14
-    // Terrain hue 205 (blue sky/platforms). Entity A (+120deg) anchors
-    // the player at ~325 (pink), entity B (+240deg) anchors the enemy at
-    // ~85 (yellow-green) — independent hues by construction, not by
-    // reusing two shades of the same one the way this cart's player and
-    // enemy briefly did (DESIGN.md §43).
-    paletteParams: [205, 0, 25, 55, 35, 75, 128, 128],
+    // Terrain hue 205 (blue sky/platforms). Entity hue hints: ~32
+    // (orange) for the player; ~355 (red) was the original hint for the
+    // enemy, but that's too close to the player's own orange to ever be
+    // a separately-readable entity hue, so generatePalette() moves it to
+    // the nearest safe spot instead — ~330 (pink) — independent hues by
+    // construction, not by reusing two shades of the same one the way
+    // this cart's player and enemy briefly did (DESIGN.md §44).
+    paletteParams: [205, 0, 25, 55, 35, 75, 23, 252],
     rngSeed: 5,
     modeFlags: 0,
     screenW, screenH, // viewport size — the level itself is gridW*8 wide, see camera below
