@@ -2633,7 +2633,15 @@ That fix immediately surfaced a second, adjacent bug of its own: every car spawn
 
 Verified end to end with the same driving-bot methodology as §49/§50's own predecessors: the lap counter now stays at 0 through the entire first circuit (previously ticking up to 1 within the first few milliseconds) and only increments at the same real-time moment the car's position converges on checkpoint 0's actual coordinates — confirmed against the "Lap complete!" HUD flash timing landing at that same moment, not a lap early.
 
-## 51. Open questions
+## 51. A second, explicitly-2x pass on handling — same knobs, same discipline, no fresh guessing
+
+A follow-up to §47's "just a little" tighter-handling request: make it tighter still, by exactly double what changed last time. `TURN_RATE` 2.4->3.2 (+0.8, double §47's own +0.4) and `FRICTION_ROAD` 0.02->0.03 (+0.01, double §47's +0.005) — the request specified the *delta* relative to the previous change, not a new target value, so the previous round's own before/after was the input to this one rather than a fresh judgment call about what "tighter" should mean numerically.
+
+Nothing about *which* two knobs govern "tighter turns" and "more traction" changed from §47's own reasoning (this physics model still has no separate lateral-grip term; `TURN_RATE` is still the only thing that changes how fast heading itself swings, `FRICTION_ROAD` still the only thing that changes how fast old-heading momentum concedes to a new one) — only the magnitude did, by exactly the requested factor. `AI_TURN_GAIN`'s own turn clamp still scales with `TURN_RATE`, so the AI's own cornering tightened proportionally too, same as last time.
+
+At this larger delta, the two failure modes §45/§46 fixed (driving off the track entirely, and an AI car flying past a too-tight waypoint into a permanent loop) were both real risks worth re-checking rather than assuming a "just double it" change couldn't touch — a meaningfully tighter turn radius changes exactly the geometry those fixes depend on. Re-verified with the same tools as every prior handling change on this cart: the sloppy-bot lap test (150ms reaction, 15deg dead zone) still completes multiple clean laps, `test/smoke.js`'s AI-progress regression check still passes at the higher `AI_TURN_GAIN`-scaled clamp, and a headless spin-in-place measurement showed the turning circle visibly tighter and noticeably faster to settle into a stable radius than §47's own (55px steady-state diameter, reached almost immediately, versus §47's wider and slower-to-settle spiral).
+
+## 52. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
