@@ -851,7 +851,17 @@ function fillEntityRamp(pal, startIndex, count, hue, satMin, satMax, lightMin, l
 // numeric token, no format impact (track.tokens is already just a raw
 // byte array; this is a new value inside it, not a new field).
 const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4, WAYPOINT:5 };
-const TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
+// TILE_CHECKPOINT is its own id, not a second use of TILE_STARTLINE — a
+// cart that wants its actual start/finish line to look distinct from an
+// ordinary mid-lap CHECKPOINT gate (DESIGN.md §49) needs two different
+// tile ids to supply two different bitmaps for in its own `tiles` array;
+// sharing one id means sharing one bitmap, no matter what that bitmap
+// looks like. A cart that doesn't care (mini-golf, whose CHECKPOINT is
+// "the hole" rather than a lap gate, and marks it with a separate flag
+// entity instead of relying on tile art) can just point both ids at the
+// same pixel data and the same tileSurfaceOverrides target — nothing
+// requires the two to look or behave differently.
+const TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4, TILE_CHECKPOINT=5;
 // Convention, not a hardcoded special case: tile id 1 is whatever a
 // generator considers its "solid/boundary" tile, returned for any
 // off-grid query. Every map generator so far happens to put that tile
@@ -864,6 +874,21 @@ function buildTrack(track){
   const DIRV = [[1,0],[0,1],[-1,0],[0,-1]];
   let gx = track.startGX, gy = track.startGY, dir = track.startDir;
   const checkpoints = [];
+  // START_FINISH/CHECKPOINT's own marker stamp is recorded here rather
+  // than written to the grid immediately, and re-applied in one final
+  // pass after the whole walk finishes (DESIGN.md §49). A *closed* track
+  // necessarily curves back around near its own start to close the loop
+  // — the walk's last CURVE_R90/L90 fills a trackWidth-square block
+  // whose position is only a function of how the walk happens to end,
+  // with no way to know in advance whether it'll land close enough to
+  // the start to overlap it — and on this cart's own track it does:
+  // the closing curve's fill block covers the exact tile the start/
+  // finish line stamped, silently overwriting it with plain road before
+  // a single frame ever renders. Not a corner case: any lap-based
+  // track's own closing curve is, by definition, near the start. Only a
+  // final re-stamp pass — guaranteed to run after every other write —
+  // can survive that regardless of the specific loop shape.
+  const pendingMarkers = [];
   function setTile(x,y,v){ if(x>=0&&y>=0&&x<track.gridW&&y<track.gridH) grid[y][x]=v; }
   function stampPerp(cx,cy,dir,width,marker){
     const perp = DIRV[(dir+1)%4];
@@ -885,13 +910,17 @@ function buildTrack(track){
       for(let dx=-half;dx<=half;dx++) for(let dy=-half;dy<=half;dy++) setTile(gx+dx,gy+dy,TILE_ROAD);
       dir = (dir + (tok===TRACK_TOKENS.CURVE_R90?1:3)) % 4;
       gx += DIRV[dir][0]; gy += DIRV[dir][1];
-    } else if(tok === TRACK_TOKENS.START_FINISH || tok === TRACK_TOKENS.CHECKPOINT){
-      stampPerp(gx,gy,dir,track.trackWidth, TILE_STARTLINE);
+    } else if(tok === TRACK_TOKENS.START_FINISH){
+      pendingMarkers.push({gx,gy,dir,marker:TILE_STARTLINE});
+      checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
+    } else if(tok === TRACK_TOKENS.CHECKPOINT){
+      pendingMarkers.push({gx,gy,dir,marker:TILE_CHECKPOINT});
       checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
     } else if(tok === TRACK_TOKENS.WAYPOINT){
       checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
     }
   }
+  for(const m of pendingMarkers) stampPerp(m.gx, m.gy, m.dir, track.trackWidth, m.marker);
   return {grid, checkpoints, startGX:track.startGX, startGY:track.startGY, startDir:track.startDir};
 }
 
@@ -1334,7 +1363,7 @@ return {
   SHAPE_ELLIPSE, SHAPE_RECT, writeString, readString,
   encodeCart, decodeCart, SUPPORTED_FORMAT_VERSIONS,
   hsl, generatePalette,
-  TRACK_TOKENS, TILE_ROAD, TILE_RUMBLE, TILE_STARTLINE, MAP_EDGE_TILE, buildTrack,
+  TRACK_TOKENS, TILE_ROAD, TILE_RUMBLE, TILE_STARTLINE, TILE_CHECKPOINT, MAP_EDGE_TILE, buildTrack,
   CAVE_WALL, CAVE_FLOOR, CAVE_STAIRS, CAVE_GOLD, buildCave,
   PLATFORM_TOKENS, PLATFORM_WIDTH_TOKENS, PLATFORM_OPERAND_TOKENS,
   PLATFORM_AIR, PLATFORM_GROUND, PLATFORM_DIRT, PLATFORM_BRICK, buildPlatformLevel,

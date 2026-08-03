@@ -8,7 +8,7 @@
 const K = window.UrlcadeKernel;
 const {
   assemble, HOOK_NAMES, TOUCH_TEMPLATE_STEER_ACTION, SHAPE_ELLIPSE, SHAPE_RECT,
-  TRACK_TOKENS, TILE_ROAD, TILE_STARTLINE,
+  TRACK_TOKENS, TILE_ROAD, TILE_STARTLINE, TILE_CHECKPOINT,
 } = K;
 import { hexRowsToPixels } from './shared-sprites.js';
 
@@ -18,11 +18,11 @@ import { hexRowsToPixels } from './shared-sprites.js';
 const RACER_CONST_NAMES = {
   ACCEL:0, TURN_RATE:1, FRICTION_ROAD:2, FRICTION_RUMBLE:3, FRICTION_GRASS:4,
   CHECKPOINT_RADIUS:5, TOTAL_LAPS:6, AI_TURN_GAIN:7, PARTICLE_TTL:8, NUM_CHECKPOINTS:9,
-  START_X:10, START_Y:11, BUMP_MIX:12,
+  START_X:10, START_Y:11, BUMP_MIX:12, LAP_FLASH_DURATION:13,
 };
 const RACER_GLOBAL_NAMES = {
   g_car_player:0, g_car_ai1:1, g_car_ai2:2, g_scratch:3, g_finish_counter:4,
-  g_race_over:5, g_cpx:6, g_cpy:7, g_friction:8, g_scratch2:9,
+  g_race_over:5, g_cpx:6, g_cpy:7, g_friction:8, g_scratch2:9, g_lap_flash:10,
 };
 const RACER_SYM = {constants:RACER_CONST_NAMES, globals:RACER_GLOBAL_NAMES};
 
@@ -59,6 +59,8 @@ const RACER_HOOKS_SRC = {
     STOREG g_finish_counter
     PUSHI 0
     STOREG g_race_over
+    PUSHI 0
+    STOREG g_lap_flash
     HALT
   `,
   on_input: `
@@ -100,7 +102,19 @@ const RACER_HOOKS_SRC = {
     done:
     HALT
   `,
+  // The "Lap complete!" flash (DESIGN.md §49) counts down here, once per
+  // simulation step regardless of how many cars are active — on_tick
+  // (below) only ever sets it, never decrements it, since on_tick runs
+  // once per car per step and a per-car decrement would tick it down 3x
+  // too fast.
   on_frame: `
+    LOADG g_lap_flash
+    JZ chk_race_over
+    LOADG g_lap_flash
+    PUSHI 1
+    SUB
+    STOREG g_lap_flash
+    chk_race_over:
     LOADE g_car_player 11
     JZ done
     LOADE g_car_ai1 11
@@ -263,6 +277,19 @@ const RACER_HOOKS_SRC = {
     PUSHI 1
     ADD
     STORE_SELF 10
+    ; This lap-complete branch runs for every car, AI included (the
+    ; checkpoint-index wrap it's gated on isn't player-specific) — the
+    ; "Lap complete!" HUD flash should only ever be about the player's
+    ; own crossing, so it's gated separately here on prop 7 (self's own
+    ; id) matching g_car_player, same identity check on_tick already
+    ; uses to decide whose input drives this car at all.
+    LOAD_SELF 7
+    LOADG g_car_player
+    CMPEQ
+    JZ skip_flash
+    PUSHC LAP_FLASH_DURATION
+    STOREG g_lap_flash
+    skip_flash:
     LOAD_SELF 10
     PUSHC TOTAL_LAPS
     CMPLT
@@ -376,10 +403,22 @@ function buildRacerCart(){
     '44444444','44444444','55555555','55555555',
     '44444444','44444444','55555555','55555555',
   ]);
+  // High-contrast checker (terrain's darkest and lightest shades, not two
+  // adjacent ones) — an earlier version alternated indices 6/7, adjacent
+  // steps on the same ramp barely 8 points of lightness apart, so the
+  // "checkered flag" pattern was there geometrically but nearly invisible
+  // in practice. 0 and 7 are the ramp's two extremes, guaranteed far apart
+  // regardless of the cart's own terrain hue (DESIGN.md §49).
   const startPixels = hexRowsToPixels([
-    '67676767','76767676','67676767','76767676',
-    '67676767','76767676','67676767','76767676',
+    '07070707','70707070','07070707','70707070',
+    '07070707','70707070','07070707','70707070',
   ]);
+  // The actual finish line's own high-contrast checker (above), not
+  // reused here — TILE_CHECKPOINT (DESIGN.md §49) is its own tile id now,
+  // so a mid-lap checkpoint gate can render as plain road instead of an
+  // identical-looking second "finish line," leaving exactly one checkered
+  // stripe on the whole track: the real one.
+  const checkpointPixels = roadPixels;
 
   // A closed rectangular circuit, much bigger than the original small
   // donut, with a "double chicane" (turn off the main heading, jog
@@ -452,9 +491,11 @@ function buildRacerCart(){
                      // genre could invoke for a loop-shaped level, not a
                      // "racer" special case
     backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused: the map generator covers the whole frame
-    tileSurfaceOverrides: {[TILE_STARTLINE]: TILE_ROAD}, // startline tile renders distinctly but
-                                                          // drives like road — cart-declared, not
-                                                          // a runtime special case (DESIGN.md §16)
+    tileSurfaceOverrides: {[TILE_STARTLINE]: TILE_ROAD, [TILE_CHECKPOINT]: TILE_ROAD}, // both
+                                                          // render distinctly (or not, for a plain
+                                                          // checkpoint) but drive like road — cart-
+                                                          // declared, not a runtime special case
+                                                          // (DESIGN.md §16, §49)
     camera: {
       followGlobal: RACER_GLOBAL_NAMES.g_car_player,
       clampMinX: 0, clampMinY: 0,
@@ -466,6 +507,12 @@ function buildRacerCart(){
     inputButtonLabels: {1:'Left', 2:'Right', 4:'Gas'},
     hudSpec: [
       {kind:0, sourceKind:1, srcA:RACER_GLOBAL_NAMES.g_car_player, srcB:10, delta:1, suffixConstIdx:RACER_CONST_NAMES.TOTAL_LAPS, clamp:1, label:'Lap'},
+      // Flag line (label only, shown while its source is nonzero) tied to
+      // g_lap_flash rather than the lap count itself — the persistent
+      // "Lap: X/3" line above already shows the number continuously, so
+      // this only needs to announce the moment, not repeat the count
+      // (DESIGN.md §49).
+      {kind:1, sourceKind:0, srcA:RACER_GLOBAL_NAMES.g_lap_flash, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Lap complete!'},
       {kind:2, sourceKind:1, srcA:RACER_GLOBAL_NAMES.g_car_player, srcB:11, delta:0, suffixConstIdx:255, clamp:0, label:'Finished #'},
       {kind:1, sourceKind:0, srcA:RACER_GLOBAL_NAMES.g_race_over, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Race over!'},
     ],
@@ -508,7 +555,11 @@ function buildRacerCart(){
     // checkpoint 5 at radius 24, completed multiple full laps cleanly at
     // radius 40. The AI still completes laps at 40 too, if anything more
     // reliably than at 24.
-    constants: [0.075, 2.4, 0.02, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3],
+    // LAP_FLASH_DURATION (DESIGN.md §49): ticks the "Lap complete!" HUD
+    // line stays up after the player crosses the finish line — 90 at this
+    // cart's 60Hz sim is 1.5s, long enough to actually read, short enough
+    // to be gone well before the next lap if the player is quick.
+    constants: [0.075, 2.4, 0.02, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3, 90],
     // Type 2 (the AI cars' own car type) is identical to type 0 in every
     // way that matters to physics/collision — same collisionW/H, same
     // extFieldCount, so the same props layout every car-handling hook
@@ -527,6 +578,7 @@ function buildRacerCart(){
     tiles: [
       {w:8,h:8,pixels:grassPixels}, {w:8,h:8,pixels:roadPixels},
       {w:8,h:8,pixels:rumblePixels}, {w:8,h:8,pixels:startPixels},
+      {w:8,h:8,pixels:checkpointPixels},
     ],
     track: {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH},
     hooks: {},
