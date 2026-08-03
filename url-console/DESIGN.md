@@ -2492,7 +2492,34 @@ click, checked for absence after) — not the same instance with its
 globals reset in place, which would be an easy-to-write-by-accident bug
 that happened to look identical for this one cart's HUD.
 
-## 41. Open questions
+## 41. Procedural palette overhaul: figure-ground contrast, hue-shifted shading, and a silent byte-overflow bug
+
+Reported live: "all games except flappy bird, cave crawler, and breakout suffer from strange color palettes, where the entities are often desaturated or blend in almost entirely with the stage." Those three exceptions are exactly the tell — flappy and cave crawler use `paletteMode: 0` (a hand-picked `CURATED_BANK` entry), and while breakout uses `paletteMode: 1` (procedural), it happened to be authored with a wide `satMax` (70%). Every affected cart shared the same root cause in `generatePalette()` itself, not a per-cart tuning mistake.
+
+**The original bug.** Procedural mode generates two 8-color ramps — indices 0-7 ("base," for terrain/backdrop) and 8-15 ("accent," for entities) — from one `[baseHue, satMin, satMax, lightMin, lightMax, accentOffset, ...]` param block. The original code ran *both* ramps through the exact same saturation/lightness range, varying only hue. A cart author picking a muted, low-saturation terrain range (stone, dirt, grass — several shipped carts go as low as 8-20% saturation, for good reason: believable terrain) got that same near-grayscale range forced onto every entity color too. Low saturation reads as gray regardless of hue, so a desaturated blue car on a desaturated green road doesn't read as "blue on green" — it reads as "gray on gray."
+
+**The fix, in `generatePalette()`:** the accent ramp is no longer a hue-only variation of the base ramp. It now:
+1. is pushed at least `MIN_ACCENT_HUE_SEPARATION` (100°) from the base hue, circularly clamped (not just added) so a small authored offset — "a nearby shade," exactly the case that caused blending — is corrected rather than honored;
+2. gets its own saturation floor (55-90%), independent of whatever the base ramp is doing;
+3. gets its own, considerably brighter lightness floor *and* ceiling (45-88%) — entities need to read as foreground by being lighter, not merely a different, equally dark hue;
+4. shifts hue per ramp step rather than holding it fixed: the shadow end leans toward the cooler side of the wheel, the highlight end toward the warmer side (`ACCENT_HUE_DRIFT`, ±18°) — the same reason hand-painted pixel-art ramps outperform a naive lightness-only gradient, raised directly by the live report ("aesthetic palettes can be constructed by hopping from darker, bluer hues to lighter, less blue hues").
+
+This runs for every `paletteMode:1` cart automatically, including ones authored after this change — no cart has to opt in.
+
+**A backwards floor, caught by screenshotting, not by the math.** The first version of the lightness-floor fix computed `Math.min(cartLightMin, ACCENT_LIGHT_MIN)` — which, for any cart with a *dark* authored `lightMin` (the common case for moody terrain), picks the darker of the two and silently undoes the floor entirely. The numeric contrast metric used to validate the fix (a WCAG-style luminance ratio) didn't catch this because saturation alone had already improved it; only an actual rendered screenshot of the race car — "still seem out of place... too low of a color value" — made the bug visible. Fixed to `Math.max` on both bounds, which cannot be dragged down by a dark terrain range.
+
+**Two cart-level index mistakes, once the ramp itself could be trusted.** With the ramp fixed, three sprites still read as flat:
+- Run & Jump's player used `blobPlayerShapes(9, 10)` — both index 9 and 10 sit near the *dark* end of the ascending-brightness accent ramp (t≈0.14-0.29). That pairing was copied from the curated "dungeon" bank, where index 9 happens to be the bright one and 10 the dark one — a hand-picked bank has no ascending-brightness convention at all, so the same numbers mean something entirely different there. Fixed to `blobPlayerShapes(14, 8)` (bright body, dark outline, matching the ramp's actual ordering).
+- Castle Crusher's wrecking ball used indices 0/1/7 — the *base* ramp, the same family as the sky and stone blocks it's aimed at. Fixed to use the accent ramp (8/13/15) instead, the same treatment already given to the blob-monster targets.
+- Mini Golf's ball used indices 1/7 (also base ramp, two shades of the fairway's own green). Fixed to 8/15 (accent).
+
+**The real find: a silent byte-overflow bug, independent of all of the above.** While tuning the race car's hue per the live suggestion to swap which side is base vs. accent (track = dark blue, car = light green — "green is warmer than blue... what if the track was the darker blue and the cars lighter green"), the result rendered *pink*, not green. Cause: `paletteParams` packs into 8 *unsigned bytes* (`AUTHORING.md` documents this: "stored as an unsigned byte (0-255)"), and `accentOffset: 260` — one past the max — silently wrapped to 4 through `ByteWriter.u8`'s old `v & 0xFF`, landing the accent hue at `baseHue + 4` instead of the intended value. Nothing in the compile pipeline said anything; the cart compiled cleanly and only *looked* wrong. Grepping for the same class of bug turned up a second, pre-existing instance: Mini Golf's `accentOffset: 280` had been silently wrapping to 24 since the procedural-palette cart shipped, landing its "warm accent ramp" (per its own code comment) on a cool blue instead of the intended red.
+
+Both cart values are now in range (race car: `baseHue:220, accentOffset:240` → track a dark blue-grey, cars a light green; golf: `accentOffset:250` → the intended warm red/pink). But the systemic fix is in `ByteWriter.u8()` itself, the single choke point every one of the format's many byte fields writes through: it now throws on a non-integer or out-of-range value instead of masking it. This turns the same mistake, for any field, into a compile-time error naming the bad value — for anyone authoring a cart, not just this session.
+
+**Verification.** Headless: `generatePalette()` driven directly through a range of shipped carts' real `paletteParams`, comparing accent-ramp hue/saturation/lightness before and after at matching ramp positions. Visual: real Playwright screenshots of every affected game (not just the numeric metric, which — per the backwards-floor bug above — can look fine while the actual render doesn't) both before and after each iteration of the fix. `test/smoke.js` gained three checks: every procedural-palette shelf cart's accent ramp is hue-separated, saturated, and lighter than its base ramp at the same ramp position; `encodeCart` rejects an out-of-range `paletteParams` byte instead of silently wrapping it (checked against a real decoded shipped cart with one field mutated, not a from-scratch object, so only the field under test is exercised); and the existing golf/plant checks still pass unchanged.
+
+## 42. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

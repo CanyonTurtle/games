@@ -351,7 +351,22 @@ function buildRacerCart(){
     name: 'Race Car', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14
     paletteMode: 1,
-    paletteParams: [100, 0, 8, 20, 12, 65, 140, 0],
+    // Track (base ramp) is a cool, dark blue-grey asphalt; cars (accent
+    // ramp) are a light, lively green — not the reverse. A blue accent
+    // on a green base kept reading as flat no matter how much brighter/
+    // more saturated the accent ramp got: blue is the cooler, lower-
+    // perceptual-value hue of the two, so pushing "the accent should be
+    // the brighter one" fights the hue itself instead of working with
+    // it. Green (especially yellow-leaning green, ~accentHue 100) reads
+    // as bright and advancing in a way blue doesn't at equal HSL
+    // lightness — swapping which hue is base vs. accent, not just
+    // tuning saturation/lightness, is what actually fixed it.
+    // accentOffset must stay <=255 (paletteParams packs into 8 unsigned
+    // bytes — see AUTHORING.md's Palette section): 260 here silently
+    // wrapped to 4 through that u8 round-trip, landing the accent hue
+    // back near baseHue+4 (magenta, not green) — caught by actually
+    // screenshotting the result rather than trusting the pre-encode math.
+    paletteParams: [220, 0, 8, 20, 12, 65, 240, 0],
     rngSeed: 17,
     modeFlags: 0,
     screenW, screenH, // square viewport, see DESIGN.md §18 — the track

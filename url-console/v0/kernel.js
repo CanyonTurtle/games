@@ -390,10 +390,21 @@ function decodeCartUrl(fragment){
    ============================================================ */
 class ByteWriter {
   constructor(){ this.bytes = []; }
-  u8(v){ this.bytes.push(v & 0xFF); }
+  // `v & 0xFF` used to silently wrap out-of-range input (e.g. 260 -> 4)
+  // instead of erroring — found the hard way authoring a palette's
+  // accentOffset (DESIGN.md §41): the cart *compiled* fine, and only
+  // rendered a plainly wrong hue once actually screenshotted, with
+  // nothing in between pointing at why. A thrown error at the one choke
+  // point every u8 field writes through (paletteParams, collision
+  // bounds, hudSpec, entity fields, ...) turns that into a compile-time
+  // error naming the exact bad value instead of a silent miscolor.
+  u8(v){
+    if(!Number.isInteger(v) || v < 0 || v > 255) throw new Error('u8 value out of range (0-255): '+v);
+    this.bytes.push(v);
+  }
   u16(v){ this.bytes.push(v & 0xFF, (v>>8) & 0xFF); }
   f32(v){ const b = new Uint8Array(4); new DataView(b.buffer).setFloat32(0, v, true); this.bytes.push(...b); }
-  bytesRaw(arr){ for(const x of arr) this.bytes.push(x & 0xFF); }
+  bytesRaw(arr){ for(const x of arr) this.u8(x); }
   toUint8Array(){ return new Uint8Array(this.bytes); }
 }
 // Bounds-checked on every read: a hand-edited or truncated fragment used
@@ -695,6 +706,67 @@ const CURATED_BANK = [
    '#2e86de','#54a0ff','#1b4f8a','#f6e58d','#e84118','#ff7675','#7a0c0c','#ffd700'],
 ];
 function hsl(h,s,l){ return `hsl(${((h%360)+360)%360},${Math.max(0,Math.min(100,s)).toFixed(0)}%,${Math.max(0,Math.min(100,l)).toFixed(0)}%)`; }
+// Procedural mode (paletteMode 1) generates two 8-color ramps from one
+// compact param block: indices 0-7 ("base") for terrain/backdrop, 8-15
+// ("accent") for entities — see DESIGN.md §14 for the split and §41 for
+// why the accent ramp is generated the way it is below.
+//
+// The original version ran both ramps through the *same*
+// satMin/satMax/lightMin/lightMax, varying only hue. That's backwards
+// for how these two ramps get used: a cart author picking a muted,
+// low-saturation range for believable terrain (stone, dirt, grass —
+// several shipped carts do exactly this, satMax as low as 20%) got that
+// same low saturation forced onto every entity color too, since nothing
+// about "this is the accent ramp" asked for anything different. Low
+// saturation reads as gray regardless of hue, so a desaturated blue car
+// on a desaturated green road doesn't read as "blue on green" at all —
+// it reads as "gray on gray," i.e. exactly the reported bug. A small
+// accentOffset compounded this: hue alone, with no saturation or
+// lightness contrast to back it up, is a weak separator — two colors
+// 30-40deg apart in hue but both near-gray are still nearly
+// indistinguishable, especially on the small, low-contrast displays
+// this runtime targets.
+//
+// Color theory fix, not a per-cart data fix: entities need to *read as
+// foreground* wherever they're placed, which takes hue distance, a
+// saturation floor, a *lightness* floor, and hue-shifted shading — the
+// classic "figure-ground" contrast rule (a silhouette separates from
+// its background by differing on more than one channel, not hue
+// alone), plus the equally classic ramp-shading rule that a color ramp
+// built from tint/shade of one fixed hue reads as flatter and muddier
+// than one that also drifts hue a little — cooler/bluer toward the
+// shadow end, warmer/less-blue toward the highlight end (the same
+// reason a lot of hand-painted pixel-art ramps outperform a naive
+// lightness-only gradient). So the accent ramp now:
+//   1. is pushed at least MIN_ACCENT_HUE_SEPARATION degrees from the
+//      base hue (clamped, not just added — a small authored offset like
+//      20-40deg, intended as "a nearby shade," is precisely the case
+//      that caused blending, so it's corrected rather than honored);
+//   2. gets its own saturation floor, well above what muted terrain
+//      tends to use, so entities stay vivid even when the terrain ramp
+//      is deliberately closer to grayscale;
+//   3. gets its own, considerably brighter lightness floor *and*
+//      ceiling — entities read as foreground by being lighter (higher
+//      perceptual value), not merely a different, equally dark hue.
+//      This used to be `Math.min(lightMin, ACCENT_LIGHT_MIN)` for the
+//      floor, which is backwards: given a cart with a *dark* base
+//      lightMin (common for a moody terrain ramp), that took the
+//      smaller (darker) of the two, undoing the floor entirely instead
+//      of enforcing it. Both bounds now take the brighter of the two
+//      (`Math.max`), so a dark terrain range can no longer drag the
+//      entity ramp down with it.
+//   4. shifts hue per ramp step rather than holding it fixed — the
+//      shadow end (t=0) leans toward the "cooler" side of the hue
+//      wheel (higher hue value; how far "cooler" reads depends on
+//      where the base accent hue sits, same as it would for a painter)
+//      and the highlight end (t=1) leans toward the "warmer" side
+//      (lower hue value), a fixed ACCENT_HUE_DRIFT degrees each way.
+// This runs for every paletteMode:1 cart, including ones authored after
+// this change, without needing any cart to opt in.
+const MIN_ACCENT_HUE_SEPARATION = 100;
+const ACCENT_SAT_MIN = 55, ACCENT_SAT_MAX = 90;
+const ACCENT_LIGHT_MIN = 45, ACCENT_LIGHT_MAX = 88;
+const ACCENT_HUE_DRIFT = 18;
 function generatePalette(cart){
   if(cart.paletteMode === 0){
     return CURATED_BANK[cart.paletteParams[0]] || CURATED_BANK[0];
@@ -706,10 +778,23 @@ function generatePalette(cart){
     const t = i/7;
     pal[i] = hsl(baseHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
   }
-  const accentHue = baseHue + accentOffset;
+  // Clamping the raw offset into [MIN_SEP, 360-MIN_SEP] guarantees a
+  // circular hue distance of at least MIN_SEP on whichever side the
+  // author's offset pointed (360-MIN_SEP degrees forward is the same
+  // hue as MIN_SEP degrees backward), without discarding the direction
+  // they chose the way a naive `max(offset, MIN_SEP)` would for
+  // negative offsets.
+  const rawOffset = ((accentOffset % 360) + 360) % 360;
+  const clampedOffset = Math.min(360 - MIN_ACCENT_HUE_SEPARATION, Math.max(MIN_ACCENT_HUE_SEPARATION, rawOffset));
+  const accentHue = baseHue + clampedOffset;
+  const accentSatMin = Math.max(satMin, ACCENT_SAT_MIN);
+  const accentSatMax = Math.max(satMax, ACCENT_SAT_MAX, accentSatMin);
+  const accentLightMin = Math.max(lightMin, ACCENT_LIGHT_MIN);
+  const accentLightMax = Math.max(lightMax, ACCENT_LIGHT_MAX, accentLightMin + 20);
   for(let i=0;i<8;i++){
     const t = i/7;
-    pal[8+i] = hsl(accentHue, satMin+(satMax-satMin)*t, lightMin+(lightMax-lightMin)*t);
+    const hueAtT = accentHue + ACCENT_HUE_DRIFT - 2*ACCENT_HUE_DRIFT*t;
+    pal[8+i] = hsl(hueAtT, accentSatMin+(accentSatMax-accentSatMin)*t, accentLightMin+(accentLightMax-accentLightMin)*t);
   }
   return pal;
 }
