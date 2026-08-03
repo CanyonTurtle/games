@@ -193,6 +193,10 @@ const DESTRUCT_HOOKS_SRC = {
     STOREG g_targets_left
     HALT
   `,
+  // Bit 0 (the left button/key) increases g_angle and bit 1 (right)
+  // decreases it — inverted from the naive "left subtracts, right adds"
+  // mapping on request; MIN_ANGLE/MAX_ANGLE clamping below is unaffected
+  // either way, it just clamps whatever g_angle ends up at.
   on_input: `
     LOADG g_won
     JNZ done
@@ -206,7 +210,7 @@ const DESTRUCT_HOOKS_SRC = {
     JZ chk_right
     LOADG g_angle
     PUSHC ANGLE_RATE
-    SUB
+    ADD
     STOREG g_angle
     chk_right:
     LOAD_INPUT
@@ -214,7 +218,7 @@ const DESTRUCT_HOOKS_SRC = {
     JZ clamp_lo
     LOADG g_angle
     PUSHC ANGLE_RATE
-    ADD
+    SUB
     STOREG g_angle
     clamp_lo:
     LOADG g_angle
@@ -951,7 +955,7 @@ function buildCastleCrusherCart(){
     },
     inputActiveButtons: 1|2|4,
     inputTouchTemplate: TOUCH_TEMPLATE_STEER_ACTION,
-    inputButtonLabels: {1:'Angle -', 2:'Angle +', 4:'Charge/Fire'},
+    inputButtonLabels: {1:'Angle +', 2:'Angle -', 4:'Charge/Fire'},
     hudSpec: [
       {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_shots_left, srcB:0, delta:0, suffixConstIdx:255, label:'Shots'},
       {kind:0, sourceKind:0, srcA:DESTRUCT_GLOBAL_NAMES.g_targets_left, srcB:0, delta:0, suffixConstIdx:255, label:'Targets'},
