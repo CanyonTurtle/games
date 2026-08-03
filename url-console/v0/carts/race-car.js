@@ -26,9 +26,14 @@ const RACER_GLOBAL_NAMES = {
 };
 const RACER_SYM = {constants:RACER_CONST_NAMES, globals:RACER_GLOBAL_NAMES};
 
-function racerInitCarBlock(handleName, xExpr, yExpr){
+// typeId parameterized (not always 0) so the two AI cars can spawn as a
+// second, differently-colored entity type (entityTypes[2], entity A's
+// ramp) instead of the player's own (entityTypes[0], entity B's ramp) —
+// same collisionW/H and extFieldCount as the player's type, same props
+// layout, just a different assetIndex (DESIGN.md §48).
+function racerInitCarBlock(handleName, typeId, xExpr, yExpr){
   return `
-    SPAWN 0
+    SPAWN ${typeId}
     STOREG ${handleName}
     ${xExpr}
     STOREE ${handleName} 0
@@ -47,9 +52,9 @@ function racerInitCarBlock(handleName, xExpr, yExpr){
 
 const RACER_HOOKS_SRC = {
   on_init: `
-    ${racerInitCarBlock('g_car_player', 'PUSHC START_X', 'PUSHC START_Y')}
-    ${racerInitCarBlock('g_car_ai1', 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -10\nADD')}
-    ${racerInitCarBlock('g_car_ai2', 'PUSHC START_X', 'PUSHC START_Y\nPUSHI 10\nADD')}
+    ${racerInitCarBlock('g_car_player', 0, 'PUSHC START_X', 'PUSHC START_Y')}
+    ${racerInitCarBlock('g_car_ai1', 2, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -10\nADD')}
+    ${racerInitCarBlock('g_car_ai2', 2, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI 10\nADD')}
     PUSHI 0
     STOREG g_finish_counter
     PUSHI 0
@@ -282,13 +287,19 @@ const RACER_HOOKS_SRC = {
     tick_end2:
     HALT
   `,
+  // "Is this a car" now checks prop 4 (auto-set to typeId at spawn) !=
+  // the particle type (1), not == the player's own car type (0) — the AI
+  // cars spawn as a second car type (2, entity A's colors) below, and
+  // this bump-mix physics needs to fire for *any* car-vs-car collision,
+  // player or AI, not just player-vs-player (which never happens with
+  // one player car anyway).
   on_collide: `
     LOAD_A 4
-    PUSHI 0
-    CMPEQ
+    PUSHI 1
+    CMPNE
     LOAD_B 4
-    PUSHI 0
-    CMPEQ
+    PUSHI 1
+    CMPNE
     AND
     JZ done3
     LOAD_A 2
@@ -323,9 +334,9 @@ function buildRacerCart(){
   // stripe, and four wheel-bump rects — nose along +x (rotateFlag rotates
   // the whole sprite to match heading). Entity B's 4-color ramp (DESIGN.md
   // §43 — entity B, not A, because +240deg from this cart's blue terrain
-  // hue is what lands on green; entity A would have landed on pink):
-  // 12=darkest (tires/outline), 13=windshield glass, 14=body fill,
-  // 15=roof highlight (brightest).
+  // hue is what lands on green; entity A would have landed on pink) for
+  // the player's own car: 12=darkest (tires/outline), 13=windshield
+  // glass, 14=body fill, 15=roof highlight (brightest).
   const carShapes = [
     {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:4.6, color:12},
     {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.0,ry:4.3, color:14},
@@ -335,6 +346,22 @@ function buildRacerCart(){
     {type:SHAPE_RECT, x:10.8,y:0.4, w:2.2,h:2.4, color:12},
     {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:12},
     {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:12},
+  ];
+  // Identical shapes, entity A's ramp instead of entity B's (8-11, not
+  // 12-15) — the two AI cars spawn as this second car type (entityTypes
+  // index 2 below) purely so they read as a different color from the
+  // player's own car, not just a different shade of the same one
+  // (DESIGN.md §48, the same independent-hue reasoning DESIGN.md §43
+  // already established for telling a cart's own entities apart).
+  const aiCarShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:4.6, color:8},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.0,ry:4.3, color:10},
+    {type:SHAPE_RECT, x:8.3,y:5.2, w:3.3,h:5.6, color:9},
+    {type:SHAPE_RECT, x:3.2,y:6.7, w:5.0,h:2.6, color:11},
+    {type:SHAPE_RECT, x:3.0,y:0.4, w:2.2,h:2.4, color:8},
+    {type:SHAPE_RECT, x:10.8,y:0.4, w:2.2,h:2.4, color:8},
+    {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:8},
+    {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:8},
   ];
   const particleShapes = [
     {type:SHAPE_ELLIPSE, cx:4,cy:4, rx:3.2,ry:3.2, color:1},
@@ -482,11 +509,21 @@ function buildRacerCart(){
     // radius 40. The AI still completes laps at 40 too, if anything more
     // reliably than at 24.
     constants: [0.075, 2.4, 0.02, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3],
+    // Type 2 (the AI cars' own car type) is identical to type 0 in every
+    // way that matters to physics/collision — same collisionW/H, same
+    // extFieldCount, so the same props layout every car-handling hook
+    // above already assumes — only assetIndex differs, pointing at
+    // aiCarShapes instead of carShapes.
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:10, collisionH:10, extFieldCount:4},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:4, collisionH:4, extFieldCount:1},
+      {renderKind:0, assetIndex:2, rotateFlag:1, collisionW:10, collisionH:10, extFieldCount:4},
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:carShapes}, {kind:1, w:8, h:8, shapes:particleShapes} ],
+    sprites: [
+      {kind:1, w:16, h:16, shapes:carShapes},
+      {kind:1, w:8, h:8, shapes:particleShapes},
+      {kind:1, w:16, h:16, shapes:aiCarShapes},
+    ],
     tiles: [
       {w:8,h:8,pixels:grassPixels}, {w:8,h:8,pixels:roadPixels},
       {w:8,h:8,pixels:rumblePixels}, {w:8,h:8,pixels:startPixels},
