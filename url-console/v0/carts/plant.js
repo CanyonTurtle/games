@@ -281,13 +281,15 @@ const PLANT_HOOKS_SRC = {
 };
 
 function buildPlantCart(){
-  // Entity B (water, +240deg from a warm terrain hue lands on blue —
-  // DESIGN.md §43), brightest shade — reads clearly against both the
-  // pale terrain sky and the darker soil band it falls past, the same
-  // property the old hand-picked white had, arrived at by the palette
-  // math instead of a hand-picked bank entry.
+  // Entity B (water, hinted blue — DESIGN.md §44), its most-saturated
+  // visible shade (index 13), not the palest (index 15): the palest
+  // shade sits at ~88% lightness, barely darker than the pale terrain
+  // sky itself (~85%), so the drop washed out against the background it
+  // falls across. Index 13 is both darker (45%) and far more saturated
+  // (90% vs. 55%), reading as a real drop of water against the sky and
+  // still clearly lighter than the dark soil band it falls past.
   const dropShapes = [
-    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:15},
+    {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:13},
   ];
   const cart = {
     formatVersion: 3,
