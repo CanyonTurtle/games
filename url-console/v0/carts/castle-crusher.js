@@ -850,10 +850,15 @@ function buildCastleCrusherCart(){
     '00000000','04440444','04440444','00000000',
     '44404440','44404440','00000000','04440444',
   ]);
+  // Accent ramp, not base — this is the one thing the player launches
+  // and tracks every shot, so it needs to read as foreground against
+  // both the sky and the stone blocks it's aimed at, not as one more
+  // grey structural piece (it used to share the block/sky's base-ramp
+  // greys, which is exactly why it read as bland).
   const ballShapes = [
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.5,ry:6.5, color:0},
-    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:1},
-    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:7},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.5,ry:6.5, color:8},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:5.2,ry:5.2, color:13},
+    {type:SHAPE_ELLIPSE, cx:6,cy:6, rx:1.6,ry:1.6, color:15},
   ];
   // A heavy, square stone block — outline/body/sheen. Base-ramp greys,
   // not the accent ramp — keeps the block reading as "stone structure,"

@@ -101,6 +101,84 @@ async function main(){
   await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 10000});
   check('all 8 shelf carts registered', true);
 
+  // 1b. Palette contrast (DESIGN.md §41): every paletteMode:1 shelf cart's
+  // generated accent ramp (8-15, the ramp entity sprites draw from — see
+  // AUTHORING.md's Palette section) must land far enough in hue from its
+  // own base ramp (0-7, terrain/backdrop) and saturated enough to read as
+  // foreground against it, regardless of how muted a cart author chose
+  // the base ramp to be. A real behavioral check on generatePalette()'s
+  // own output, not just "the cart loads" — this is exactly the class of
+  // bug (blue car, ~15% saturated, on a ~15% saturated green road) that
+  // loaded fine and looked broken.
+  {
+    const paletteChecks = await page.evaluate(async () => {
+      const K = window.UrlcadeKernel;
+      const out = {};
+      for(const [key, c] of Object.entries(window.__urlcadeDebug.CARTS)){
+        const {payload} = K.decodeCartUrl(c.fragment);
+        const cart = K.decodeCart(await K.decodePayloadToBytes(payload));
+        if(cart.paletteMode !== 1) continue;
+        out[key] = {baseHue: cart.paletteParams[0], palette: K.generatePalette(cart)};
+      }
+      return out;
+    });
+    let allOk = true, detail = '';
+    for(const [key, {baseHue, palette}] of Object.entries(paletteChecks)){
+      const parse = s => s.match(/hsl\(([\d.]+),(\d+)%,(\d+)%\)/).slice(1).map(Number);
+      const base = palette.slice(0, 8).map(parse);
+      const accent = palette.slice(8, 16).map(parse);
+      const [accentHue,,accentLight] = accent[4]; // a representative mid-ramp accent color
+      const [, , baseLight] = base[4]; // the base ramp's color at the same ramp position (t)
+      let hueSep = Math.abs(accentHue - baseHue) % 360;
+      if(hueSep > 180) hueSep = 360 - hueSep;
+      const minAccentSat = Math.min(...accent.map(c => c[1]));
+      // Lightness, not just hue/saturation, is its own check: a prior
+      // version of this fix computed the accent ramp's lightness floor
+      // with Math.min(cartLightMin, FLOOR) instead of Math.max, which
+      // silently *undid* the floor for any cart with a dark base
+      // lightMin — hue/saturation alone passed even with that bug live,
+      // so this specifically re-checks that entities land lighter than
+      // the terrain at the same ramp position (t), not just differently
+      // hued from it (DESIGN.md §41).
+      const ok = hueSep >= 90 && minAccentSat >= 50 && accentLight >= 55 && accentLight > baseLight + 10;
+      if(!ok){ allOk = false; detail += `${key}: hueSep=${hueSep} minSat=${minAccentSat}% accentLight=${accentLight}% baseLight=${baseLight}%; `; }
+    }
+    check('every procedural-palette cart\'s accent ramp is hue-separated, saturated, and lighter than its base ramp at the same t',
+      allOk, detail || Object.keys(paletteChecks).join(','));
+  }
+
+  // 1c. Two real bugs surfaced while building the check above turned out
+  // to share one root cause: paletteParams packs into 8 unsigned bytes,
+  // but nothing enforced that on the way in — an accentOffset of 260 or
+  // 280 (both used by shipped carts) silently wrapped mod 256 through
+  // ByteWriter.u8's old `v & 0xFF`, landing the accent hue somewhere the
+  // cart's own source never asked for, with no error anywhere to point
+  // at why. Fixed at the one choke point every u8 field writes through,
+  // so it can't recur silently for this field or any other. Checked
+  // directly (not by re-finding an in-range shipped cart, which
+  // wouldn't exercise the guard at all): a deliberately out-of-range
+  // value must throw, and a valid one must still encode.
+  {
+    const u8GuardResult = await page.evaluate(async () => {
+      const K = window.UrlcadeKernel;
+      // Round-trip a real, already-valid shipped cart (flappy) through
+      // decodeCart so every *other* field is already well-formed — the
+      // point is isolating the check to the one field being mutated,
+      // not also exercising "is this a complete cart object."
+      const {payload} = K.decodeCartUrl(window.__urlcadeDebug.CARTS.flappy.fragment);
+      const cart = K.decodeCart(await K.decodePayloadToBytes(payload));
+      let threw = false;
+      try{ K.encodeCart({...cart, paletteParams:[100,0,0,0,0,0,260,0]}); }
+      catch(e){ threw = true; }
+      let validStillWorks = false;
+      try{ K.encodeCart({...cart, paletteParams:[100,0,0,0,0,0,240,0]}); validStillWorks = true; }
+      catch(e){ /* leave false */ }
+      return {threw, validStillWorks};
+    });
+    check('encodeCart rejects an out-of-range (>255) paletteParams byte instead of silently wrapping it',
+      u8GuardResult.threw && u8GuardResult.validStillWorks, JSON.stringify(u8GuardResult));
+  }
+
   // Each cart's own fragment carries its name/author in the URL envelope
   // (DESIGN.md §34) — never a manual title/genre/accentIdx passed to a
   // registerCart() call (that whole call shape is gone, see carts/

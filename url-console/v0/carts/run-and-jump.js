@@ -372,7 +372,14 @@ function buildPlatformerCart(){
     '00000000','02220222','02220222','00000000',
     '22202220','22202220','00000000','02220222',
   ]);
-  const playerShapes = blobPlayerShapes(9, 10);
+  // bodyColor bright, outlineColor dark — the accent ramp's index
+  // ordering ascends in lightness (see kernel.js's generatePalette),
+  // the opposite of a hand-picked curated bank; (9,10) here used to
+  // put both the body *and* the outline near the ramp's dark end
+  // (borrowed from the curated "dungeon" bank's own 9/10, where that
+  // pairing happens to be bright/dark — the two banks don't share an
+  // index convention), which is why the player read as flat and dim.
+  const playerShapes = blobPlayerShapes(14, 8);
   // On the accent (warm) ramp, a different shade than the player — the
   // enemy's art used to reference indices 3/6, the same family the AIR/
   // GROUND/DIRT tiles use, the exact "sprite art points at the wrong
