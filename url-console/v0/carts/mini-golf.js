@@ -57,6 +57,44 @@ const GOLF_HOOKS_SRC = {
     GET_CHECKPOINT
     STOREG g_hole_y
     STOREG g_hole_x
+    ; buildTrack's own CHECKPOINT stamp (kernel.js) always marks a full
+    ; trackWidth-wide line, edge to edge across the fairway — the same
+    ; "gate," not "single point," convention every other checkpoint/tee
+    ; marker on this generator uses. For an actual hole that reads wrong
+    ; twice over: it looks like landing anywhere across the whole width
+    ; (including right at the rumble edge) sinks the putt, when only the
+    ; exact centerline tile (g_hole_x/g_hole_y, already the line's own
+    ; center) really does. Reverts the other 4 tiles in that line back to
+    ; plain fairway, by hand, at the 4 offsets either side of center —
+    ; this course's fixed dogleg geometry (hand-verified against
+    ; buildTrack(), like the rest of its layout) reaches the hole heading
+    ; +y, so the stamped line runs horizontally (x varies, y fixed) —
+    ; leaving one real hole, at the fairway's actual centerline, not its
+    ; edge.
+    LOADG g_hole_x
+    PUSHI 16
+    SUB
+    LOADG g_hole_y
+    PUSHI 2
+    SETTILE
+    LOADG g_hole_x
+    PUSHI 8
+    SUB
+    LOADG g_hole_y
+    PUSHI 2
+    SETTILE
+    LOADG g_hole_x
+    PUSHI 8
+    ADD
+    LOADG g_hole_y
+    PUSHI 2
+    SETTILE
+    LOADG g_hole_x
+    PUSHI 16
+    ADD
+    LOADG g_hole_y
+    PUSHI 2
+    SETTILE
     SPAWN 1
     STOREG g_scratch
     LOADG g_hole_x
@@ -197,8 +235,38 @@ const GOLF_HOOKS_SRC = {
     STOREG g_prev_input
     HALT
   `,
+  // The flag is the only renderKind:2 entity this cart has, so this hook
+  // only ever runs for it — no per-entity dispatch needed, unlike a cart
+  // where on_draw might serve more than one shape. All coordinates are
+  // entity-local (DRAW_LINE draws relative to self's own position, DESIGN.md
+  // §36), with (0,0) sitting at the hole — a pole running straight up, and
+  // a small triangular pennant (two edges; the pole itself closes the
+  // triangle's third side) rather than a flat rectangle, which read as
+  // exactly that — an unlabeled colored rectangle — rather than a flag.
+  on_draw: `
+    PUSHI 0
+    PUSHI 0
+    PUSHI 0
+    PUSHI -18
+    PUSHI 12
+    DRAW_LINE
+    PUSHI 0
+    PUSHI -18
+    PUSHI 7
+    PUSHI -14
+    PUSHI 13
+    DRAW_LINE
+    PUSHI 7
+    PUSHI -14
+    PUSHI 0
+    PUSHI -11
+    PUSHI 13
+    DRAW_LINE
+    HALT
+  `,
   // Only the ball (type 0) does anything here — the flag (type 1) is
-  // static. Integrates position, applies friction by tile surface
+  // drawn fresh each frame by its own on_draw above, not simulated.
+  // Integrates position, applies friction by tile surface
   // (identical shape to the racer's own on_tick — see race-car.js),
   // then once speed drops below STOP_EPS (checked via DIST(0,0,vx,vy),
   // reusing the two-point distance opcode as a velocity-magnitude one)
@@ -312,20 +380,6 @@ function buildMiniGolfCart(){
     {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:3.5, ry:3.5, color:12},
     {type:SHAPE_ELLIPSE, cx:4, cy:4, rx:2.7, ry:2.7, color:15},
   ];
-  // Sprite is drawn centered on the entity's own (x,y) — see
-  // drawEntityCanvas's `x-spr.width/2, y-spr.height/2` — so the pole's
-  // base (not the sprite's bottom edge) has to land on local (w/2, h/2)
-  // to actually sit at the hole. The cup ellipse there is a real visual
-  // cue for HOLE_RADIUS below, not just decoration — the earlier flag
-  // (pole spanning the whole sprite height, no cup mark at all) gave a
-  // player no way to see how forgiving or tight the sink radius actually
-  // was, which is at least as much of "the hitbox feels like a tiny
-  // point" as HOLE_RADIUS itself being too small (DESIGN.md §39).
-  const flagShapes = [
-    {type:SHAPE_ELLIPSE, cx:8, cy:12, rx:4.5, ry:2.5, color:0}, // cup
-    {type:SHAPE_RECT, x:7, y:0, w:1, h:12, color:0}, // pole, base at the cup center
-    {type:SHAPE_RECT, x:8, y:1, w:6, h:4, color:13}, // banner
-  ];
   // Fairway/rough/OB tiles map onto grid ids 1-4 (see buildTrack) via
   // [OB, fairway, rough, tee] — same array-position convention race-car.js
   // uses for its own grass/road/rumble/start tiles.
@@ -341,6 +395,19 @@ function buildMiniGolfCart(){
   const teePixels = hexRowsToPixels([
     '79797979','97979797','79797979','97979797',
     '79797979','97979797','79797979','97979797',
+  ]);
+  // The hole's own tile (TILE_CHECKPOINT, id 5 — DESIGN.md §49 split this
+  // off from the tee's own id 4 specifically so the two could look
+  // different; this cart just reused the tee's own checkered pattern for
+  // both at the time, which was exactly the "what's the lighter patch at
+  // the end of the track, is that the tee again?" confusion reported
+  // afterward). A real dark, roughly round hole instead: fairway-shade
+  // corners so it blends into the surrounding turf rather than reading as
+  // its own tile, a mid ring, and a near-black center — genuinely hole-
+  // shaped rather than a second checkered marker.
+  const holePixels = hexRowsToPixels([
+    '55555555','54444445','54000045','40000004',
+    '40000004','54000045','54444445','55555555',
   ]);
 
   const T = TRACK_TOKENS;
@@ -390,24 +457,29 @@ function buildMiniGolfCart(){
     // than the ball's own 3px radius, so the ball's *center* had to land
     // almost exactly on the hole's center to sink; see DESIGN.md §39).
     constants: [6, 0.15, 2, 0.035, 0.12, 0.35, 0.15, 12],
+    // Flag is renderKind:2 (custom on_draw, DESIGN.md §36/§53) rather
+    // than a static sprite — an actual flagpole-and-pennant drawn fresh
+    // from lines each frame, the same "draw it, don't sprite it"
+    // technique Water the Plant already uses for its stem, instead of a
+    // flat rectangle that read as exactly that: an unlabeled colored
+    // rectangle, not obviously a flag at all.
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // 0: ball
-      {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:2, collisionH:2, extFieldCount:0}, // 1: flag
+      {renderKind:2, assetIndex:0, rotateFlag:0, collisionW:2, collisionH:2, extFieldCount:0}, // 1: flag, see on_draw
     ],
     sprites: [
       {kind:1, w:8, h:8, shapes:ballShapes},
-      {kind:1, w:16, h:24, shapes:flagShapes},
     ],
-    // A 5th tile for TILE_CHECKPOINT (id 5, now distinct from
-    // TILE_STARTLINE/id 4 — DESIGN.md §49, added so the racer's actual
-    // finish line could look different from an ordinary mid-lap
-    // checkpoint): this course's CHECKPOINT token is the hole, already
-    // marked by the flag entity rather than by tile art, so it just
-    // reuses teePixels — no visual change from before the split.
+    // The 5th tile is TILE_CHECKPOINT (id 5, split from TILE_STARTLINE/id
+    // 4 in DESIGN.md §49 specifically so the two could look different) —
+    // this course's CHECKPOINT token is the hole, now drawn as a real
+    // dark, roughly round hole (holePixels, DESIGN.md §53) instead of
+    // reusing the tee's own checkered pattern, which read as a second tee
+    // rather than a hole.
     tiles: [
       {w:8, h:8, pixels:obPixels}, {w:8, h:8, pixels:fairwayPixels},
       {w:8, h:8, pixels:roughPixels}, {w:8, h:8, pixels:teePixels},
-      {w:8, h:8, pixels:teePixels},
+      {w:8, h:8, pixels:holePixels},
     ],
     mapGenerator: 1,
     track: {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH},
