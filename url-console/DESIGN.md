@@ -2424,7 +2424,75 @@ specific case a `HOLE_RADIUS: 6` cart would have missed (a putt with a
 deliberate 6° aiming error from 30px out) to confirm the fix actually
 buys real, meaningful forgiveness rather than a cosmetic-only bump.
 
-## 40. Open questions
+## 40. A polish round: restart, a plant that's never nothing, friendlier prose, a denser mobile grid
+
+Four independent small requests, batched together since none touched
+the cart format or needed a fixture update:
+
+- **A restart button.** `Runtime.startGame(fragment)` already fully
+  re-decodes a fragment and rebuilds the `World` from scratch, re-
+  running `on_init` — exactly "start this game over," with no per-cart
+  reset logic needed. Added `#restartBtn` next to `#backBtn` in the
+  game view's topbar, wired to `Runtime.startGame(Runtime.getCurrentFragment())`.
+  The topbar's centering trick (DESIGN.md-adjacent code comment: a real
+  element balancing each side of `#hud`, not a padding hack) depended
+  on `.topbar` having exactly 3 flex children — preserved by wrapping
+  `#backBtn` + `#restartBtn` together in a new `.topbar-left` flex
+  container, so `.topbar` still has 3 top-level children and `#hud`
+  still centers correctly.
+- **The plant started as literally nothing.** At `g_water: 0`,
+  `on_draw`'s stem-height calc (`g_water * STEM_STEP`, clamped to
+  `MAX_STEM_H`) evaluated to a zero-length line — invisible — and every
+  branch/bloom was gated behind a `>= BRANCH_UNLOCK_*` check, so an
+  unwatered plant drew nothing at all. Since the shelf's thumbnail for
+  every cart is its own undisturbed first frame, this also made the
+  shelf card for "Water the Plant" a blank rectangle. Fixed with a new
+  `MIN_STEM_H` floor (constant 11) on the stem-height clamp, plus a
+  small always-visible bud (a scaled-down version of the existing X-
+  shaped bloom, gated open rather than closed) drawn at the stem tip
+  below `BRANCH_UNLOCK_2` — so there's a small but real flower from the
+  very first frame, not an empty pot. Also added a second, higher and
+  shorter pair of side branches (`BRANCH_UNLOCK_3`/`BRANCH_LEN2`,
+  constants 12/13) that unlock partway between the existing bloom
+  threshold and full growth, so the mature plant now has two branch
+  tiers instead of one. Verified headlessly by driving `on_draw`
+  directly through `kernel.js`'s `runHook` at a sweep of `g_water`
+  values and inspecting every `DRAW_LINE` call's coordinates and line
+  count at each stage (caught and fixed a real bug this way: the first
+  draft had the bloom-size branch's `JZ`/`JNZ` target backwards,
+  drawing the *full* bloom below the unlock threshold and the *small*
+  bud above it — invisible from reading the assembly, obvious from the
+  captured line list at each water level) before running the full
+  Playwright suite.
+- **Landing-page prose rewritten for non-technical visitors.** The
+  original copy led with "static runtime, no server" and "URL
+  fragment" and pointed at "Debug's Assets/Logic/Source tabs" and "V0
+  scope cut" — accurate, but aimed at a reader who already knows what
+  a runtime or a fragment is. Rewritten to lead with what a casual
+  visitor actually needs to know — pick a game, it plays instantly,
+  no install or account, the whole game fits in the link so sharing it
+  is just sharing a link — with the technical detail (how the format
+  works, how to build one) moved behind a single "how it works & build
+  guide" link rather than inlined into the first paragraph.
+- **Shelf grid, 2 columns on portrait mobile.** `#cartList` used two
+  hardcoded breakpoints (2 columns at 480px, 3 at 820px), so a phone
+  narrower than 480px — most phones, held upright — got a single
+  column. Replaced both with one `grid-template-columns:repeat(auto-fill,
+  minmax(130px, 1fr))` rule (gap trimmed from 20px to 14px to match):
+  content width on a 320px-wide screen is already enough for
+  `2*130 + 14 = 274px`, so even the narrowest common phones now get 2
+  columns, growing to 3+ automatically as the viewport widens — no
+  extra breakpoint needed for that.
+
+Added `test/smoke.js` coverage for the restart button: after the
+existing plant-watering drag test leaves `g_water > 0`, clicking
+`#restartBtn` must bring it back to exactly 0 *and* produce a
+genuinely new `World` instance (tagged with a random marker before the
+click, checked for absence after) — not the same instance with its
+globals reset in place, which would be an easy-to-write-by-accident bug
+that happened to look identical for this one cart's HUD.
+
+## 41. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
