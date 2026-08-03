@@ -353,19 +353,17 @@ function buildRacerCart(){
     name: 'Race Car', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14
     // Track (terrain ramp) is a cool, dark blue-grey asphalt; cars
-    // (entity B — its fixed +240deg anchor from this baseHue lands on
-    // green, entity A's +120deg would have landed on pink) are a light,
-    // lively green — not the reverse. A blue accent on a green base kept
-    // reading as flat no matter how much brighter/more saturated the
-    // accent ramp got: blue is the cooler, lower-perceptual-value hue of
-    // the two, so pushing "the accent should be the brighter one" fights
-    // the hue itself instead of working with it (DESIGN.md §41). Which
-    // of the two fixed entity anchors (+120/+240) actually lands on
-    // green, for this particular blue terrain hue, is arithmetic, not a
-    // free choice — see DESIGN.md §43 for the general collapse to a
-    // fixed hue triad, which is also why this cart no longer has a
-    // freely-choosable accentOffset the way it briefly did.
-    paletteParams: [220, 0, 8, 20, 12, 65, 128, 128],
+    // (entity B, hue hint ~50 — true yellow, not the ~67 yellow-green a
+    // first attempt at this landed on) are light and lively — not the
+    // reverse. A blue accent on a green base kept reading as flat no
+    // matter how much brighter/more saturated the accent ramp got: blue
+    // is the cooler, lower-perceptual-value hue of the two, so pushing
+    // "the accent should be the brighter one" fights the hue itself
+    // instead of working with it (DESIGN.md §41). Cars use entity B
+    // rather than A only because entity A's own hint here (~250, unused
+    // by any sprite) happens to keep it out of yellow's way — see
+    // AUTHORING.md's Palette section for how these hints work.
+    paletteParams: [220, 0, 8, 20, 12, 65, 178, 36],
     rngSeed: 17,
     modeFlags: 0,
     screenW, screenH, // square viewport, see DESIGN.md §18 — the track

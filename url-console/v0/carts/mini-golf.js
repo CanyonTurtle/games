@@ -358,10 +358,9 @@ function buildMiniGolfCart(){
     formatVersion: 3,
     name: 'Mini Golf', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14 (same "racer/golf" family label the actual racer uses)
-    // Terrain hue 100 (green fairway). Entity B (+240deg) anchors the
-    // ball/flag at ~340 (warm red) — entity A would have landed on blue
-    // (DESIGN.md §43).
-    paletteParams: [100, 0, 20, 60, 15, 85, 128, 128],
+    // Terrain hue 100 (green fairway). Entity hue hint ~357 (red) for
+    // the ball/flag — DESIGN.md §44.
+    paletteParams: [100, 0, 20, 60, 15, 85, 107, 254],
     rngSeed: 1,
     modeFlags: 0,
     screenW, screenH,

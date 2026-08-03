@@ -101,7 +101,7 @@ async function main(){
   await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 8, {timeout: 10000});
   check('all 8 shelf carts registered', true);
 
-  // 1b. Palette contrast (DESIGN.md §41/§43): every shelf cart's two
+  // 1b. Palette contrast (DESIGN.md §41/§44): every shelf cart's two
   // generated entity ramps (8-11, 12-15 — the ramps entity sprites draw
   // from, see AUTHORING.md's Palette section) must land far enough in
   // hue from the terrain ramp (0-7) *and* from each other, and saturated/
@@ -111,6 +111,17 @@ async function main(){
   // exactly the class of bug (blue car, ~15% saturated, on a ~15%
   // saturated green road) that loaded fine and looked broken. There's no
   // paletteMode branch to check anymore — every cart is procedural now.
+  // Thresholds (45deg entity-entity, 50deg terrain-entity) match §44's
+  // dynamic, author-steerable hue placement's brute-force-verified floor
+  // — looser than an intermediate draft's 90/80deg on purpose: that
+  // rigidity made a real, legitimate request ("yellow bird, green pipes,
+  // blue sky" — DESIGN.md §44) geometrically impossible, since yellow
+  // and green sit only ~70deg apart on the wheel and no floor above that
+  // can ever honor both as independently placed entity hues. This
+  // threshold is deliberately close to the algorithm's actual proven
+  // floor (not a comfortable-looking round number well above it), so a
+  // future regression that quietly erodes the guarantee gets caught
+  // here rather than only by eye.
   {
     const paletteChecks = await page.evaluate(async () => {
       const K = window.UrlcadeKernel;
@@ -133,22 +144,67 @@ async function main(){
       for(const [h] of entityA) minBaseEntitySep = Math.min(minBaseEntitySep, circDist(h, baseHue));
       for(const [h] of entityB) minBaseEntitySep = Math.min(minBaseEntitySep, circDist(h, baseHue));
       for(const [hA] of entityA) for(const [hB] of entityB) minEntityEntitySep = Math.min(minEntityEntitySep, circDist(hA, hB));
-      const minEntitySat = Math.min(...entityA.map(c=>c[1]), ...entityB.map(c=>c[1]));
+      // Index 0 of each entity ramp is excluded here — it's the ramp's
+      // shared near-black "ink" shade (DESIGN.md §44), deliberately
+      // low-saturation so it reads as a consistent outline color across
+      // every ramp regardless of hue. Only the three visible/hued shades
+      // need to clear the "reads as a saturated foreground color" floor.
+      const minEntitySat = Math.min(...entityA.slice(1).map(c=>c[1]), ...entityB.slice(1).map(c=>c[1]));
       // Lightness, not just hue/saturation, is its own check: a prior
       // version of this fix computed the entity ramps' lightness floor
       // with Math.min(cartLightMin, FLOOR) instead of Math.max, which
       // silently *undid* the floor for any cart with a dark terrain
       // lightMin — hue/saturation alone passed even with that bug live,
-      // so this specifically re-checks that entities land lighter than
-      // the terrain at the same ramp position (t), not just differently
-      // hued from it.
+      // so this specifically re-checks that entities reach meaningfully
+      // lighter than the terrain does. Checked at the ramp's lightest
+      // (highlight) shade specifically — entityA[3], index 11 — rather
+      // than some interior "mid" index: which fractional step of the
+      // 4-shade ramp counts as "the middle one" shifted under §44's ink
+      // step (index 0 of each ramp is now a fixed near-black, not part
+      // of the lightness curve at all, see above), so the one point in
+      // the ramp guaranteed stable across that kind of internal reshuffle
+      // is the top of accentLightMax's own floor.
       const [, , baseLightMid] = base[4];
-      const [, , entityALightMid] = entityA[2];
-      const ok = minBaseEntitySep >= 90 && minEntityEntitySep >= 80 && minEntitySat >= 50 && entityALightMid > baseLightMid + 10;
+      const [, , entityALightMid] = entityA[3];
+      const ok = minBaseEntitySep >= 50 && minEntityEntitySep >= 45 && minEntitySat >= 50 && entityALightMid > baseLightMid + 10;
       if(!ok){ allOk = false; detail += `${key}: baseEntitySep=${minBaseEntitySep.toFixed(0)} entityEntitySep=${minEntityEntitySep.toFixed(0)} minSat=${minEntitySat}%; `; }
     }
     check('every cart\'s two entity ramps are hue-separated from terrain and each other, saturated, and lighter than terrain',
       allOk, detail || Object.keys(paletteChecks).join(','));
+  }
+
+  // 1b2. The 8 shipped carts above only sample a tiny slice of
+  // generatePalette()'s input space — the actual guarantee is supposed
+  // to hold for *any* baseHue/offsetA/offsetB a cart could pick,
+  // including combinations no shipped cart happens to use. Checked
+  // directly by sweeping a dense grid of base hues and every extreme
+  // combination of the two offset bytes and confirming the worst case
+  // found still clears a real floor. This is exactly the check that
+  // would have caught both DESIGN.md §43's and §44's constant
+  // miscalibrations before they were tuned by hand and eyeballed instead
+  // of swept.
+  {
+    const sweepResult = await page.evaluate(() => {
+      const K = window.UrlcadeKernel;
+      const parse = s => s.match(/hsl\(([\d.]+),(\d+)%,(\d+)%\)/).slice(1).map(Number);
+      const circDist = (a,b) => { let d = Math.abs(a-b) % 360; return d > 180 ? 360-d : d; };
+      const bytes = [0,1,32,64,65,100,128,191,192,254,255];
+      let worstBaseEntity = 999, worstEntityEntity = 999;
+      for(let baseHue = 0; baseHue < 360; baseHue += 15){
+        for(const oA of bytes) for(const oB of bytes){
+          const pal = K.generatePalette({paletteParams:[baseHue,0,15,50,20,80,oA,oB]});
+          const baseHues = pal.slice(0,8).map(c => parse(c)[0]);
+          const aHues = pal.slice(8,12).map(c => parse(c)[0]);
+          const bHues = pal.slice(12,16).map(c => parse(c)[0]);
+          for(const bh of baseHues) for(const ah of aHues) worstBaseEntity = Math.min(worstBaseEntity, circDist(bh,ah));
+          for(const bh of baseHues) for(const bbh of bHues) worstBaseEntity = Math.min(worstBaseEntity, circDist(bh,bbh));
+          for(const ah of aHues) for(const bh2 of bHues) worstEntityEntity = Math.min(worstEntityEntity, circDist(ah,bh2));
+        }
+      }
+      return {worstBaseEntity, worstEntityEntity};
+    });
+    check('generatePalette()\'s hue-separation guarantee holds across a dense sweep of base hues and offset bytes, not just shipped carts',
+      sweepResult.worstBaseEntity >= 50 && sweepResult.worstEntityEntity >= 48, JSON.stringify(sweepResult));
   }
 
   // 1c. Two real bugs surfaced while building the check above turned out
