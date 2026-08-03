@@ -365,7 +365,7 @@ function buildMiniGolfCart(){
     modeFlags: 0,
     screenW, screenH,
     backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0, // unused — the map covers the whole frame
-    tileSurfaceOverrides: {4: 2}, // tee behaves exactly like fairway for friction purposes
+    tileSurfaceOverrides: {4: 2, 5: 2}, // tee (4) and hole (5, DESIGN.md §49) both behave like fairway for friction purposes
     // Action bit is 4 (not 16) — TOUCH_TEMPLATE_STEER_ACTION's on-screen
     // action button is hardcoded to send bit 4 (see runtime.js's
     // buildTouchControlsHTML), matching the racer's own on_input, which
@@ -398,9 +398,16 @@ function buildMiniGolfCart(){
       {kind:1, w:8, h:8, shapes:ballShapes},
       {kind:1, w:16, h:24, shapes:flagShapes},
     ],
+    // A 5th tile for TILE_CHECKPOINT (id 5, now distinct from
+    // TILE_STARTLINE/id 4 — DESIGN.md §49, added so the racer's actual
+    // finish line could look different from an ordinary mid-lap
+    // checkpoint): this course's CHECKPOINT token is the hole, already
+    // marked by the flag entity rather than by tile art, so it just
+    // reuses teePixels — no visual change from before the split.
     tiles: [
       {w:8, h:8, pixels:obPixels}, {w:8, h:8, pixels:fairwayPixels},
       {w:8, h:8, pixels:roughPixels}, {w:8, h:8, pixels:teePixels},
+      {w:8, h:8, pixels:teePixels},
     ],
     mapGenerator: 1,
     track: {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH},
