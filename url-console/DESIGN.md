@@ -2681,7 +2681,17 @@ Requested plainly: "Make something crazy awesome: a doom like. Use immediate mod
 
 Verified in three stages, cheapest first: a standalone Node harness driving `kernel.js`'s `runHook` directly against synthetic grids (including a deliberately adversarial fully-open one, to force every ray's march loop to run its full worst-case length with no early exit) confirmed the opcode budget and drawing math before any cart file existed; a `FakeWorld` harness replicating `runtime.js`'s real per-tick/per-hook wiring in plain Node caught the `tileSurfaceOverrides` bug and confirmed movement, monster wander/chase, contact damage, and the shoot hit-scan all behave correctly; and `test/smoke.js`, in a real browser, confirms the shipped cart spawns a player, camera, and three monsters, that walking/turning/shooting all work, and that no `cartFault` is ever raised by the live raycast running every rendered frame. Screenshots confirmed the visual result reads as an actual first-person view — shaded wall columns, a clear ceiling/floor split, a visible monster silhouette, a crosshair — not just a technically-correct wall of numbers.
 
-## 55. Open questions
+## 55. `drawCmds` stopped garbaging an object per `DRAW_LINE`, every frame, forever
+
+Reported plainly, about Corridor specifically: "going from no input to pressing input, it waits for like 1 second. But holding down allows moving quickly" — on touch, with the *whole page* (not just the character) briefly unresponsive, "even the debug button."
+
+Couldn't reproduce a literal 1-second stall directly — a Playwright harness recording real frame-to-frame timestamps around a simulated button press showed movement starting within ~27ms, and repeating that under CDP's `Emulation.setCPUThrottlingRate` at 6x (a rough stand-in for a mid-range phone) didn't turn up anything worse than a ~180ms frame gap, uncorrelated with the press itself. CPU throttling alone can't stand in for a mobile device's actual garbage collector behavior, though, and one real difference between Corridor and every other cart *was* findable by inspection: `World.ctxBase.drawLine` (the sink every `DRAW_LINE` opcode calls) pushed a brand new `{x1,y1,x2,y2,color}` object literal every single call, and `runDrawHook` threw the whole array away (`.length = 0`) at the top of every render, before that renderKind:2 entity's `on_draw` ran again. Water the Plant and Mini Golf's flag call this a handful of times a frame; Corridor's raycaster calls it roughly 480-490 times a frame, every frame, 60 times a second — on the order of 29,000 short-lived objects a second, continuously, whether or not anything on screen is actually changing. That's real, avoidable GC pressure unique to this one cart, and a plausible match for "stutter concentrated right where a burst of other activity (a touch event, a style recalc) lands on top of it," even though the mechanism couldn't be pinned down more precisely than that from this environment.
+
+**Fixed by pooling, the same idiom `World.boxPool` already used for collision AABBs.** `drawLine` now reuses whatever object already sits at each index of `drawCmds` from a previous frame (mutating its fields in place) instead of pushing a fresh literal, allocating a new object only the first time a given index is ever used; `runDrawHook` resets a separate `drawCmdCount` to 0 up front (instead of truncating the array) and trims `drawCmds.length` down to that count only *after* the hook runs, so the pooled objects below that length survive to be reused next frame. Once a cart's draw-call count stabilizes (Corridor's does within the first frame or two — it's a fixed 480 wall-column lines plus up to 6 monster-billboard lines plus a 2-line reticle), steady-state `on_draw` allocates nothing at all for its line-drawing output. Both consumers (`strokeDrawCmds`'s Canvas2D path, `glDrawLine`'s WebGL path) only ever read the returned array synchronously within the same frame and never retain a reference, so reusing object identity across frames is safe by construction, not just by testing.
+
+Verified with `test/smoke.js` (unmodified — Corridor's own gameplay check, and Water the Plant/Mini Golf's `on_draw`-dependent checks, all still pass) and a fresh screenshot confirming the rendered output is pixel-identical to before. Whether this was *the* cause of the reported stall or one contributing factor among several a real device surfaces and this environment can't fully reproduce remains genuinely open — flagged below.
+
+## 56. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
@@ -2746,6 +2756,15 @@ Verified in three stages, cheapest first: a standalone Node harness driving `ker
 - What does "cart fault" (step-budget exceeded, stack overflow) look
   like to a player — a glitch-aesthetic in-universe event, or an
   out-of-universe error screen?
+- §55's `drawCmds` pooling fixed a real, measurable source of per-frame
+  GC pressure unique to `on_draw`-heavy carts, but the specific ~1s
+  touch-input stall it was fixed *in response to* was never actually
+  reproduced in this environment (not headless, not under 6x CPU
+  throttling). Is there a real mobile device this can be re-tested
+  against directly, and if the stall persists after §55, what's the
+  next thing to profile — style recalc from the `.touch-btn.active`
+  class toggle, WebGL driver overhead specific to that device, or
+  something in the touch-event pipeline itself?
 
 **Palette & art**
 - Does procedural-harmony-only risk every cart "feeling generated" the
