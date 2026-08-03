@@ -51,7 +51,18 @@ class World {
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
     this.input = 0;
     this.pointerX = 0; this.pointerY = 0; this.pointerDown = 0; // set once/frame by loop(), see LOAD_POINTER_* below
-    this.drawCmds = []; // scratch, cleared and refilled by runDrawHook() each render call — see DRAW_LINE
+    // Scratch, refilled by runDrawHook() each render call — see DRAW_LINE.
+    // Object *identity* is reused across frames (drawLine mutates an
+    // existing pooled entry in place rather than pushing a fresh literal),
+    // the same pool-not-allocate idiom boxPool above already uses for
+    // collision AABBs. A renderKind:2 cart that draws a lot per frame
+    // (Corridor's raycaster emits ~490 DRAW_LINE calls, 60 times a second)
+    // would otherwise garbage a comparable number of short-lived objects
+    // every single frame regardless of whether anything on screen is
+    // actually changing — real, avoidable GC pressure on constrained
+    // hardware. See DESIGN.md §55.
+    this.drawCmds = [];
+    this.drawCmdCount = 0;
     this.cartFault = false;
     this.cameraX = 0; this.cameraY = 0; // recomputed every render() via updateCamera()
     this.palette = generatePalette(cart);
@@ -111,7 +122,15 @@ class World {
       // (renderKind:2 entities, at render time), but harmless to have here
       // unconditionally: every other hook's bytecode simply never contains
       // a DRAW_LINE instruction, so this never gets called from them.
-      drawLine: (x1,y1,x2,y2,color) => self_.drawCmds.push({x1,y1,x2,y2,color}),
+      // Reuses the pooled object already sitting at this slot from a
+      // previous frame instead of pushing a fresh literal — see the
+      // drawCmds field comment above.
+      drawLine: (x1,y1,x2,y2,color) => {
+        const i = self_.drawCmdCount++;
+        let cmd = self_.drawCmds[i];
+        if(!cmd){ cmd = {x1:0,y1:0,x2:0,y2:0,color:0}; self_.drawCmds[i] = cmd; }
+        cmd.x1 = x1; cmd.y1 = y1; cmd.x2 = x2; cmd.y2 = y2; cmd.color = color;
+      },
     };
     // Reused across every hook call this session (self/a/b/input mutated in
     // place instead of Object.assign-ing a fresh object + copying the ~10
@@ -178,12 +197,21 @@ class World {
   // simulation's determinism depend on the display's actual frame rate —
   // AUTHORING.md flags this as a footgun, not something enforced here.
   runDrawHook(entity){
-    this.drawCmds.length = 0;
+    // Reset the count, not the array — drawLine (see ctxBase above) reuses
+    // whatever pooled object already sits at each index, so truncating the
+    // backing array here would defeat the pooling by forcing every slot to
+    // be reallocated on the very next drawLine call.
+    this.drawCmdCount = 0;
     const bc = this.cart.hooks.on_draw;
     const ctx = this.ctxScratch;
     ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
     ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
     runHook(bc, ctx);
+    // Trim any stale entries left over from a previous, longer frame (e.g.
+    // one more monster billboard was visible then than now) — cheap: this
+    // only drops array *slots*, the pooled objects still below the new
+    // length are untouched and stay reusable next frame.
+    this.drawCmds.length = this.drawCmdCount;
     return this.drawCmds;
   }
   getTileAt(x,y){
