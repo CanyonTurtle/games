@@ -128,6 +128,22 @@
   .inspect-tile canvas{image-rendering:pixelated;border:1px solid var(--rule);
     background:var(--bg-card);width:100%;height:auto;}
   .inspect-tile p{margin:6px 0 0;font-size:11px;color:var(--ink-dim);}
+  /* Compact palette grid (DESIGN.md §42) — a dense 8-wide swatch strip,
+     not the sprite/tile-style card list (name never fit that role: a
+     swatch's whole content is one flat color, a full card's worth of
+     padding and a label line under it just spreads 16 colors out over
+     several screens for no added information). Index is an overlaid
+     badge, not a caption line, so it stays legible against any swatch
+     color (white text + a dark blurred halo) without needing to know
+     the swatch's own lightness. */
+  .pal-group{margin-bottom:14px;}
+  .pal-group:last-child{margin-bottom:0;}
+  .pal-group-label{font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+    color:var(--ink-dim);margin:0 0 6px;}
+  .pal-strip{display:grid;grid-template-columns:repeat(8,1fr);gap:4px;max-width:360px;}
+  .pal-swatch{position:relative;aspect-ratio:1;border-radius:3px;border:1px solid var(--rule);}
+  .pal-swatch span{position:absolute;left:3px;bottom:2px;font-size:9px;line-height:1;
+    font-family:var(--mono);color:#fff;text-shadow:0 0 3px #000,0 0 3px #000,0 0 1px #000;}
   table.inspect-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:18px;}
   table.inspect-table th, table.inspect-table td{text-align:left;padding:6px 10px;
     border-bottom:1px solid var(--rule);}
