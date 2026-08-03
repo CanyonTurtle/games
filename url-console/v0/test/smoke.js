@@ -494,6 +494,33 @@ async function main(){
     golfState.ok && !golfState.fault && golfState.strokes > teeState.strokes && ballMoved,
     JSON.stringify({tee: teeState, after: golfState}));
 
+  // 5d. Race Car's off-road wall: holding Gas dead straight (no steering)
+  // drives the player past the track's first turn — the exact scenario
+  // that used to just cost you traction (grass friction) and let you keep
+  // sailing across open grid. A real behavioral check on the actual
+  // physics (position/tile after real simulated time), not just "the cart
+  // loads": confirms the car comes to rest still on a road/rumble tile
+  // (never grass, tile id 1) with its velocity zeroed by the wall it hit,
+  // instead of ending up parked in the grass (DESIGN.md §45).
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'racer');
+  await page.waitForTimeout(200);
+  await page.keyboard.down('ArrowUp');
+  await page.waitForTimeout(4000);
+  await page.keyboard.up('ArrowUp');
+  await page.waitForTimeout(200);
+  const racerWallState = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.id === w.globals[0] && e.active);
+    const tx = Math.floor(player.props[0]/8), ty = Math.floor(player.props[1]/8);
+    const inBounds = ty>=0 && ty<w.map.grid.length && tx>=0 && tx<w.map.grid[0].length;
+    return {fault: w.cartFault, tile: inBounds ? w.map.grid[ty][tx] : -1, vx: player.props[2], vy: player.props[3]};
+  });
+  check('Race Car\'s player stops at the track edge instead of driving onto grass',
+    !racerWallState.fault && racerWallState.tile !== 1 && racerWallState.vx === 0,
+    JSON.stringify(racerWallState));
+
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of
   // silently doing nothing.
