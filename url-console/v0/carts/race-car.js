@@ -369,11 +369,19 @@ function buildRacerCart(){
   // against a dense grid (gridW*gridH) with plenty of margin either way, so
   // the wider stamp doesn't clip against the grid edge on any curve.
   const trackWidth = 7, segLen = 6, startGX = 8, startGY = 8, startDir = 0, gridW = 80, gridH = 65;
+  // A WAYPOINT right after each of the chicane's 4 turns (DESIGN.md §46) —
+  // the AI only ever steers straight at its current target, with no wall
+  // awareness at all, so a target more than one turn away can point it
+  // straight through a wall it has no way around. That was invisible back
+  // when off-track was just extra friction (the AI could grind across the
+  // "wall" until its straight line to a still-distant checkpoint cleared
+  // again); once grass became solid, both AI cars got permanently stuck at
+  // the first chicane, still aiming at a checkpoint 2 turns further on.
   const CHICANE = [
-    TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
-    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
-    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
-    TRACK_TOKENS.CURVE_R90,
+    TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.WAYPOINT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.WAYPOINT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.WAYPOINT, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
+    TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.WAYPOINT,
   ];
   const S = (n) => new Array(n).fill(TRACK_TOKENS.STRAIGHT);
   const tokens = [
@@ -437,7 +445,24 @@ function buildRacerCart(){
     // ACCEL/TURN_RATE halved, friction retentions square-rooted, PARTICLE_TTL
     // doubled vs the original 30Hz tuning — same reasoning as the flappy
     // cart: the sim now runs at 60Hz, rescaled to keep real-time feel fixed.
-    constants: [0.075, 2, 0.015, 0.041, 0.106, 14, 3, 0.6, 20, 2, startX, startY, 0.3],
+    // NUM_CHECKPOINTS was 2 here — stale from an earlier, shorter version
+    // of this track, silently orphaning half the checkpoints buildTrack
+    // actually registers (GET_CHECKPOINT's index wraps mod NUM_CHECKPOINTS,
+    // so anything past index 1 was simply never targeted). Corrected to 12
+    // to match the real count once the chicane waypoints (DESIGN.md §46)
+    // are included — checked by calling buildTrack() directly and reading
+    // checkpoints.length back, not by counting CHECKPOINT/WAYPOINT tokens
+    // by eye.
+    // CHECKPOINT_RADIUS 14->24: the AI's steering is a plain "turn toward
+    // the target, then accelerate" controller with no braking or turn-
+    // radius awareness, so it approaches a waypoint at full speed and
+    // can out-turn a too-small capture radius entirely — a flyby that
+    // clips past the checkpoint without ever registering "reached," which
+    // just relocks onto the *same* now-behind-it target and loops forever.
+    // Confirmed by simulating both AI cars headlessly for real time: at 14
+    // one of the two reliably got stuck circling the second chicane's
+    // tightest turn; at 24 both complete lap after lap without a flyby.
+    constants: [0.075, 2, 0.015, 0.041, 0.106, 24, 3, 0.6, 20, 12, startX, startY, 0.3],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:10, collisionH:10, extFieldCount:4},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:4, collisionH:4, extFieldCount:1},

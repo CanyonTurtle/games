@@ -846,7 +846,11 @@ function fillEntityRamp(pal, startIndex, count, hue, satMin, satMax, lightMin, l
    injected `rng` (the cave generator's own seeded PRNG, supplied by the
    caller so this stays deterministic without owning the seed itself).
    ============================================================ */
-const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4 };
+// WAYPOINT (DESIGN.md §46) registers an AI steering target the same way
+// CHECKPOINT does, without stamping a visible startline tile — a plain
+// numeric token, no format impact (track.tokens is already just a raw
+// byte array; this is a new value inside it, not a new field).
+const TRACK_TOKENS = { STRAIGHT:0, CURVE_R90:1, CURVE_L90:2, START_FINISH:3, CHECKPOINT:4, WAYPOINT:5 };
 const TILE_ROAD=2, TILE_RUMBLE=3, TILE_STARTLINE=4;
 // Convention, not a hardcoded special case: tile id 1 is whatever a
 // generator considers its "solid/boundary" tile, returned for any
@@ -883,6 +887,8 @@ function buildTrack(track){
       gx += DIRV[dir][0]; gy += DIRV[dir][1];
     } else if(tok === TRACK_TOKENS.START_FINISH || tok === TRACK_TOKENS.CHECKPOINT){
       stampPerp(gx,gy,dir,track.trackWidth, TILE_STARTLINE);
+      checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
+    } else if(tok === TRACK_TOKENS.WAYPOINT){
       checkpoints.push({x:(gx+0.5)*8, y:(gy+0.5)*8});
     }
   }

@@ -521,6 +521,41 @@ async function main(){
     !racerWallState.fault && racerWallState.tile !== 1 && racerWallState.vx === 0,
     JSON.stringify(racerWallState));
 
+  // 5e. Race Car's AI cars actually finish navigating both chicanes, not
+  // just avoid the player's own wall. The AI's steering is a plain "turn
+  // toward the current checkpoint, then accelerate" loop with no braking
+  // or turn-radius awareness — a real regression here isn't a fault or a
+  // dead stop, it's a car that circles its current target forever, having
+  // flown past the capture radius at speed and immediately re-locked onto
+  // the same (now-behind-it) point. Confirmed live: with too few waypoints
+  // through the chicanes, both AI cars got permanently stuck against the
+  // first one once grass became solid (§45); with too small a capture
+  // radius, one of the two would loop the second chicane's tightest turn
+  // forever instead of getting stuck outright (§46). Neither shows up as
+  // cartFault — only a checkpoint index that stops advancing does, so
+  // this reads that directly rather than trusting silence. Reloads the
+  // cart fresh first — reusing the previous check's World would let 4
+  // seconds of the player car parked at the wall (and possibly bumping
+  // an AI car via on_collide) contaminate this run before it even starts.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'racer');
+  await page.waitForTimeout(200);
+  const racerAiProgress = await page.waitForFunction(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const ai1 = w.entities.find(e => e.id === w.globals[1] && e.active);
+    const ai2 = w.entities.find(e => e.id === w.globals[2] && e.active);
+    return ai1 && ai2 && ai1.props[9] >= 8 && ai2.props[9] >= 8;
+  }, {timeout: 30000}).then(() => ({reached: true, fault: false}))
+    .catch(() => page.evaluate(() => {
+      const w = window.__urlcadeDebug.getWorld();
+      const ai1 = w.entities.find(e => e.id === w.globals[1] && e.active);
+      const ai2 = w.entities.find(e => e.id === w.globals[2] && e.active);
+      return {reached: false, fault: w.cartFault, cp1: ai1 && ai1.props[9], cp2: ai2 && ai2.props[9]};
+    }));
+  check('Race Car\'s AI cars navigate past both chicanes instead of looping a corner forever',
+    racerAiProgress.reached === true, JSON.stringify(racerAiProgress));
+
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of
   // silently doing nothing.
