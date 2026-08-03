@@ -453,16 +453,35 @@ function buildRacerCart(){
     // are included — checked by calling buildTrack() directly and reading
     // checkpoints.length back, not by counting CHECKPOINT/WAYPOINT tokens
     // by eye.
-    // CHECKPOINT_RADIUS 14->24: the AI's steering is a plain "turn toward
-    // the target, then accelerate" controller with no braking or turn-
-    // radius awareness, so it approaches a waypoint at full speed and
-    // can out-turn a too-small capture radius entirely — a flyby that
-    // clips past the checkpoint without ever registering "reached," which
-    // just relocks onto the *same* now-behind-it target and loops forever.
-    // Confirmed by simulating both AI cars headlessly for real time: at 14
-    // one of the two reliably got stuck circling the second chicane's
-    // tightest turn; at 24 both complete lap after lap without a flyby.
-    constants: [0.075, 2, 0.015, 0.041, 0.106, 24, 3, 0.6, 20, 12, startX, startY, 0.3],
+    // TURN_RATE 2->2.4, FRICTION_ROAD 0.015->0.02 (DESIGN.md §47): a small
+    // bump to both, on request — tighter turns (the car's heading itself
+    // swings faster per tick of input) and more traction (old-direction
+    // momentum bleeds off faster on-road, so a new heading's acceleration
+    // takes over sooner instead of carrying a wide drift through a turn;
+    // this model has no separate lateral-grip term, so friction is the
+    // only knob that actually changes how quickly velocity "catches up"
+    // to a new heading). AI_TURN_GAIN's own turn clamp scales with
+    // TURN_RATE too, so the AI corners a little tighter for free.
+    // CHECKPOINT_RADIUS 14->24->40 (DESIGN.md §46, then §47): 24 was
+    // enough for the AI's near-optimal, straight-line-seeking path but
+    // not for a real driven line — a car sweeping wide through a turn
+    // (any driven path, not just a sloppy one) can stay on-road the
+    // entire time yet never come within 24px of the exact pivot pixel a
+    // waypoint sits at, silently freezing that car's own checkpoint
+    // index (and, since the HUD's lap counter is that same index wrapping
+    // to 0, the "Lap" readout) forever. Each turn's solid block is a
+    // trackWidth-square (7 tiles = 56px) centered exactly on its
+    // checkpoint, so the true worst case — a path that stays right at the
+    // block's far corner the whole way through — is 28*sqrt(2) =~ 39.6px
+    // from center; 40 covers that worst case outright rather than being
+    // a value that merely tested fine. Reproduced and confirmed headlessly
+    // with a deliberately imprecise bot (150ms reaction ticks, a 15deg
+    // dead zone before correcting — much closer to how a human actually
+    // drives than the AI's own per-tick seek): got permanently stuck at
+    // checkpoint 5 at radius 24, completed multiple full laps cleanly at
+    // radius 40. The AI still completes laps at 40 too, if anything more
+    // reliably than at 24.
+    constants: [0.075, 2.4, 0.02, 0.041, 0.106, 40, 3, 0.6, 20, 12, startX, startY, 0.3],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:1, collisionW:10, collisionH:10, extFieldCount:4},
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:4, collisionH:4, extFieldCount:1},
