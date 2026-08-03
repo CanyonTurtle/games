@@ -107,6 +107,18 @@ const RACER_HOOKS_SRC = {
     done:
     HALT
   `,
+  // skip_ai's position update is axis-separated wall collision against
+  // GETTILE's *raw* tile id (grass, id 1 — MAP_EDGE_TILE, the same id
+  // returned off-grid, so this doubles as a grid-boundary wall for free),
+  // not MOVE_SOLID: MOVE_SOLID tests ctx.tileSurface() !== 0, the exact
+  // function this cart already overloads for its own 3-way friction
+  // lookup below (road/rumble/grass all read as distinct nonzero-ish
+  // surfaces), so reusing it for solidity would either break friction or
+  // make every tile solid. Hand-rolling the same axis-separated check
+  // against the untouched tile id instead keeps both independent: only
+  // grass blocks movement (and zeroes that axis's velocity, so a car
+  // stops at the wall instead of sliding along it), while road/rumble
+  // both stay fully passable with their own friction (DESIGN.md §45).
   on_tick: `
     LOAD_SELF 4
     PUSHI 1
@@ -155,10 +167,36 @@ const RACER_HOOKS_SRC = {
     LOAD_SELF 0
     LOAD_SELF 2
     ADD
+    STOREG g_scratch
+    LOADG g_scratch
+    LOAD_SELF 1
+    GETTILE
+    PUSHI 1
+    CMPEQ
+    JZ x_pass
+    LOAD_SELF 0
+    STOREG g_scratch
+    PUSHI 0
+    STORE_SELF 2
+    x_pass:
+    LOADG g_scratch
     STORE_SELF 0
     LOAD_SELF 1
     LOAD_SELF 3
     ADD
+    STOREG g_scratch2
+    LOAD_SELF 0
+    LOADG g_scratch2
+    GETTILE
+    PUSHI 1
+    CMPEQ
+    JZ y_pass
+    LOAD_SELF 1
+    STOREG g_scratch2
+    PUSHI 0
+    STORE_SELF 3
+    y_pass:
+    LOADG g_scratch2
     STORE_SELF 1
     LOAD_SELF 0
     LOAD_SELF 1
@@ -325,7 +363,12 @@ function buildRacerCart(){
   // math standalone (position/heading only, no tile stamping) and
   // checking the token list actually closes back to the start tile —
   // see DESIGN.md §18 for why that's not just "count carefully by hand."
-  const trackWidth = 5, segLen = 6, startGX = 8, startGY = 8, startDir = 0, gridW = 80, gridH = 65;
+  // trackWidth widened 5->7 (still odd, so stampPerp's +-half loop stays
+  // symmetric around the centerline) — three cars racing side by side had
+  // barely more than their own combined width to work with at 5. Checked
+  // against a dense grid (gridW*gridH) with plenty of margin either way, so
+  // the wider stamp doesn't clip against the grid edge on any curve.
+  const trackWidth = 7, segLen = 6, startGX = 8, startGY = 8, startDir = 0, gridW = 80, gridH = 65;
   const CHICANE = [
     TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
     TRACK_TOKENS.CURVE_L90, TRACK_TOKENS.STRAIGHT, TRACK_TOKENS.STRAIGHT,
