@@ -41,7 +41,13 @@ function racerInitCarBlock(handleName, typeId, xExpr, yExpr){
     STOREE ${handleName} 1
     PUSHI 0
     STOREE ${handleName} 8
-    PUSHI 0
+    ; Checkpoint index starts at 1 (checkpoint 1), not 0 — every car
+    ; spawns exactly on checkpoint 0's own position (it's the finish
+    ; line), and lap-completion now specifically means "reached
+    ; checkpoint 0 while it was the active target" (DESIGN.md §50).
+    ; Starting the index at 0 would satisfy that trivially on the very
+    ; first tick, crediting a whole lap before the car had moved at all.
+    PUSHI 1
     STOREE ${handleName} 9
     PUSHI 0
     STOREE ${handleName} 10
@@ -265,24 +271,26 @@ const RACER_HOOKS_SRC = {
     PUSHC CHECKPOINT_RADIUS
     CMPLT
     JZ tick_end2
+    ; Reached whichever checkpoint this car was currently targeting. A lap
+    ; only completes when that target *was* checkpoint 0 (the actual
+    ; finish line) — checked here, on the *old* index, before it's
+    ; advanced below. The previous version checked the index *after*
+    ; advancing/wrapping it, which meant crossing checkpoint
+    ; NUM_CHECKPOINTS-1 (the last ordinary checkpoint) counted as a
+    ; completed lap immediately, a tick before the car had actually
+    ; driven anywhere near the real finish line (DESIGN.md §50).
     LOAD_SELF 9
-    PUSHI 1
-    ADD
-    PUSHC NUM_CHECKPOINTS
-    MOD
-    STORE_SELF 9
-    LOAD_SELF 9
-    JNZ tick_end2
+    JNZ advance_checkpoint
     LOAD_SELF 10
     PUSHI 1
     ADD
     STORE_SELF 10
-    ; This lap-complete branch runs for every car, AI included (the
-    ; checkpoint-index wrap it's gated on isn't player-specific) — the
-    ; "Lap complete!" HUD flash should only ever be about the player's
-    ; own crossing, so it's gated separately here on prop 7 (self's own
-    ; id) matching g_car_player, same identity check on_tick already
-    ; uses to decide whose input drives this car at all.
+    ; This lap-complete branch runs for every car, AI included (this
+    ; crossing isn't player-specific) — the "Lap complete!" HUD flash
+    ; should only ever be about the player's own crossing, so it's gated
+    ; separately here on prop 7 (self's own id) matching g_car_player,
+    ; same identity check on_tick already uses to decide whose input
+    ; drives this car at all.
     LOAD_SELF 7
     LOADG g_car_player
     CMPEQ
@@ -293,15 +301,22 @@ const RACER_HOOKS_SRC = {
     LOAD_SELF 10
     PUSHC TOTAL_LAPS
     CMPLT
-    JNZ tick_end2
+    JNZ advance_checkpoint
     LOAD_SELF 11
-    JNZ tick_end2
+    JNZ advance_checkpoint
     LOADG g_finish_counter
     PUSHI 1
     ADD
     DUP
     STOREG g_finish_counter
     STORE_SELF 11
+    advance_checkpoint:
+    LOAD_SELF 9
+    PUSHI 1
+    ADD
+    PUSHC NUM_CHECKPOINTS
+    MOD
+    STORE_SELF 9
     JMP tick_end2
     tick_particle:
     LOAD_SELF 8
@@ -434,7 +449,16 @@ function buildRacerCart(){
   // barely more than their own combined width to work with at 5. Checked
   // against a dense grid (gridW*gridH) with plenty of margin either way, so
   // the wider stamp doesn't clip against the grid edge on any curve.
-  const trackWidth = 7, segLen = 6, startGX = 8, startGY = 8, startDir = 0, gridW = 80, gridH = 65;
+  // startGX 8->20, gridW 80->90 (DESIGN.md §50): shifted right to make room
+  // for the finish line's own repositioning below — the walk's own closing
+  // curve turns out to sit right at the original startGX, only 7 tiles from
+  // the grid's left edge, and splitting 12 tiles off the leading straight
+  // to buffer the finish line shifts that whole closing corner 12 tiles
+  // further left with it, clipping the grid. Re-verified via the same
+  // "simulate the walk, count clipped tiles" check as every other track
+  // dimension change on this cart (DESIGN.md §18/§45) rather than guessing
+  // a bigger number and hoping.
+  const trackWidth = 7, segLen = 6, startGX = 20, startGY = 8, startDir = 0, gridW = 90, gridH = 65;
   // A WAYPOINT right after each of the chicane's 4 turns (DESIGN.md §46) —
   // the AI only ever steers straight at its current target, with no wall
   // awareness at all, so a target more than one turn away can point it
@@ -450,9 +474,21 @@ function buildRacerCart(){
     TRACK_TOKENS.CURVE_R90, TRACK_TOKENS.WAYPOINT,
   ];
   const S = (n) => new Array(n).fill(TRACK_TOKENS.STRAIGHT);
+  // START_FINISH used to sit right where the walk's closing curve exits
+  // directly into it — a corner, not a straight, with a "free floating"
+  // dead end on the near side once the checkered tile was actually
+  // visible (DESIGN.md §49 made it visible; only then did the corner
+  // placement become obvious). Moved to the middle of a straight run by
+  // splitting 12 tiles off the leading S(4) (now S(2)) and moving them to
+  // a new trailing S(2) at the very end of the walk, right after the
+  // closing curve — same total straight length, just redistributed
+  // across the wrap point, so the loop still closes identically (checked
+  // the same way as always: simulate the walk, confirm it ends back at
+  // startGX/startGY/startDir). The finish line now has a full 7 tiles of
+  // plain road on both sides before hitting anything else (DESIGN.md §50).
   const tokens = [
     TRACK_TOKENS.START_FINISH,
-    ...S(4), ...CHICANE, ...S(4),
+    ...S(2), ...CHICANE, ...S(4),
     TRACK_TOKENS.CURVE_R90,
     ...S(3), TRACK_TOKENS.CHECKPOINT, ...S(5),
     TRACK_TOKENS.CURVE_R90,
@@ -461,6 +497,7 @@ function buildRacerCart(){
     TRACK_TOKENS.CURVE_R90,
     ...S(3), TRACK_TOKENS.CHECKPOINT, ...S(5),
     TRACK_TOKENS.CURVE_R90,
+    ...S(2),
   ];
   const startX = (startGX+0.5)*8, startY = (startGY+0.5)*8;
   const screenW = 160, screenH = 160;
