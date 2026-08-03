@@ -611,8 +611,30 @@ function buildCardThumbnail(cart){
   const off = document.createElement('canvas');
   off.width = cart.screenW; off.height = cart.screenH;
   const c = off.getContext('2d');
+  // A cart with a scrolling camera (DESIGN.md §18) generates a map far
+  // bigger than one screen, and its own spawn point can land anywhere in
+  // that map — Race Car's own start sits well past x=160 on an 800px-plus-
+  // wide track. Drawing at a fixed (0,0), the way this used to, only ever
+  // showed the map's top-left corner, regardless of where actual play
+  // starts; on a track whose corner is off in open grid, that's an empty
+  // thumbnail with every car rendered off the right edge of the canvas,
+  // since entity draws below used the same un-offset raw world position.
+  // Mirrors updateCamera()'s own clamped "center on the followed entity"
+  // math (DESIGN.md §36), just computed once here against this throwaway
+  // World's post-on_init state instead of every render() against the live
+  // one — a static preview needs exactly one camera position, not a
+  // per-frame recompute.
+  let camX = 0, camY = 0;
+  const cam = cart.camera;
+  if(cam && cam.followGlobal !== 255){
+    const followed = w.entities.find(en => en.id === w.globals[cam.followGlobal]);
+    if(followed){
+      camX = Math.max(cam.clampMinX, Math.min(cam.clampMaxX, followed.props[0] - off.width/2));
+      camY = Math.max(cam.clampMinY, Math.min(cam.clampMaxY, followed.props[1] - off.height/2));
+    }
+  }
   if(w.map){
-    c.drawImage(w.mapCanvas, 0, 0);
+    c.drawImage(w.mapCanvas, -camX, -camY);
   } else {
     c.fillStyle = w.palette[cart.backdropFillIndex] || '#222';
     c.fillRect(0, 0, off.width, off.height);
@@ -623,6 +645,7 @@ function buildCardThumbnail(cart){
   }
   for(const e of w.entities){
     const type = cart.entityTypes[e.typeId];
+    const ex = e.props[0] - camX, ey = e.props[1] - camY;
     if(type.renderKind === 1){ // tile column
       const extent = Math.max(0, Math.floor(e.props[8]));
       const capAtTop = e.props[10] === 0;
@@ -630,13 +653,13 @@ function buildCardThumbnail(cart){
       const capCanvas = w.tileCanvases[type.assetIndex+1];
       for(let row=0; row<extent; row++){
         const isCapRow = capAtTop ? row===0 : row===extent-1;
-        c.drawImage(isCapRow?capCanvas:bodyCanvas, e.props[0], e.props[1]+row*8);
+        c.drawImage(isCapRow?capCanvas:bodyCanvas, ex, ey+row*8);
       }
     } else if(type.renderKind === 2){ // custom draw — same on_draw path the live renderer uses
-      strokeDrawCmds(c, e.props[0], e.props[1], w.palette, w.runDrawHook(e));
+      strokeDrawCmds(c, ex, ey, w.palette, w.runDrawHook(e));
     } else {
       const spr = w.spriteCanvases[type.assetIndex];
-      c.drawImage(spr, e.props[0]-spr.width/2, e.props[1]-spr.height/2);
+      c.drawImage(spr, ex-spr.width/2, ey-spr.height/2);
     }
   }
   disposeGLTextures(w);
