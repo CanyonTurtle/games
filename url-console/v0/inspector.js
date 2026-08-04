@@ -35,7 +35,7 @@
 const K = window.UrlcadeKernel;
 const {
   formatDisassembly, renderCFGSvg, compileCartSource, decodeCartUrl,
-  generatePalette, SHAPE_ELLIPSE, HOOK_NAMES, decodeCart, decodePayloadToBytes,
+  generatePalette, SHAPE_ELLIPSE, SHAPE_RECT, HOOK_NAMES, decodeCart, decodePayloadToBytes,
   BUTTON_BITS,
 } = K;
 import { World, disposeGLTextures } from './runtime.js';
@@ -65,6 +65,19 @@ let lastParsedHeader = null;
 // away from the textarea first, and some browsers clear selection state
 // on blur, so insertion can't rely on live ta.selectionStart at click time.
 let lastHookCursorPos = 0;
+// Sprite shape editor state — which shape (by index into that sprite's
+// shapes[] array) is currently selected, keyed by sprite index. Purely
+// ephemeral UI state, deliberately not part of lastParsedHeader (it's
+// not cart data). {spriteIndex: shapeIndex | undefined}.
+let selectedShapeIndex = {};
+// In-progress drag state for the sprite editor's canvas — {spriteIndex,
+// mode:'move'|'resize', shapeIndex, corner (resize only), startPointer,
+// startBox} or null when nothing is being dragged.
+let spriteDragState = null;
+// Internal canvas buffer = sprite.w/h * this — CSS width:100%;height:auto
+// does the actual on-screen magnification (same pattern as every other
+// canvas in this view), this just keeps overlay lines/handles crisp.
+const SPRITE_EDITOR_ZOOM = 8;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
 // takes whatever comes after the last '#' if there is one, else the
@@ -259,17 +272,19 @@ function wireButtonCheckbox(checkboxEl, bit){
   });
 }
 
-// A compact picker for fields that are literally a palette index
-// (backdropFillIndex/backdropGroundIndex) — a single swatch showing the
-// current color plus a dropper icon, not all 16 swatches rendered inline
-// (the full grid used to render open by default here, which is exactly
-// the "color palette" that was wide enough to overflow a mobile
-// viewport). Clicking the trigger opens the full palette as a popover to
-// pick from; picking a color or clicking outside closes it again.
-function renderColorPicker(colors, selectedIndex, fieldName){
+// A compact picker for fields that are literally a palette index — a
+// single swatch showing the current color plus a dropper icon, not all
+// 16 swatches rendered inline (the full grid used to render open by
+// default here, which is exactly the "color palette" that was wide
+// enough to overflow a mobile viewport). Clicking the trigger opens the
+// full palette as a popover to pick from; picking a color or clicking
+// outside closes it again. Generic over *what* picking a color does
+// (backdrop index, a sprite shape's color, ...) via wireColorPickerSlot's
+// onPick callback, rather than hardcoding a single lastParsedHeader path.
+function renderColorPicker(colors, selectedIndex){
   const color = colors[selectedIndex] || '#000';
   return `
-    <div class="color-picker" data-field="${fieldName}">
+    <div class="color-picker">
       <button type="button" class="color-picker-trigger" style="background:${color}" title="${selectedIndex}: ${esc(color)}" aria-label="Pick a color">
         <span class="color-picker-dropper" aria-hidden="true">&#127912;</span>
       </button>
@@ -282,7 +297,7 @@ function renderColorPicker(colors, selectedIndex, fieldName){
     </div>
   `;
 }
-function wireColorPickerSlot(slotId){
+function wireColorPickerSlot(slotId, onPick){
   const slot = document.getElementById(slotId);
   if(!slot) return;
   const picker = slot.querySelector('.color-picker');
@@ -296,10 +311,8 @@ function wireColorPickerSlot(slotId){
     popover.hidden = wasOpen;
   });
   popover.querySelectorAll('.pal-swatch.pickable').forEach(sw => sw.addEventListener('click', () => {
-    lastParsedHeader[picker.dataset.field] = +sw.dataset.index;
     popover.hidden = true;
-    refreshBackdropPickers();
-    scheduleHeaderRecompile();
+    onPick(+sw.dataset.index);
   }));
 }
 function closeAllColorPickerPopovers(){
@@ -314,10 +327,18 @@ function refreshBackdropPickers(){
   const pal = generatePalette(lastParsedHeader);
   const fillSlot = document.getElementById('backdropFillPickerSlot');
   const groundSlot = document.getElementById('backdropGroundPickerSlot');
-  if(fillSlot) fillSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropFillIndex, 'backdropFillIndex');
-  if(groundSlot) groundSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropGroundIndex, 'backdropGroundIndex');
-  wireColorPickerSlot('backdropFillPickerSlot');
-  wireColorPickerSlot('backdropGroundPickerSlot');
+  if(fillSlot) fillSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropFillIndex);
+  if(groundSlot) groundSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropGroundIndex);
+  wireColorPickerSlot('backdropFillPickerSlot', (idx) => {
+    lastParsedHeader.backdropFillIndex = idx;
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  });
+  wireColorPickerSlot('backdropGroundPickerSlot', (idx) => {
+    lastParsedHeader.backdropGroundIndex = idx;
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  });
 }
 
 // paletteParams[1] is a real byte slot (the array must stay 8 long) but
@@ -343,10 +364,10 @@ function renderPaletteEditorSlot(){
     <div id="paletteLivePreviewSlot">${renderPaletteStrip(pal, 0)}</div>
     <div class="inspect-section-title">Backdrop</div>
     <p class="inspect-help">Only used when map generator is 0 — a generated map draws instead and these are ignored.</p>
-    <div class="header-field-row"><label>Fill color</label><div id="backdropFillPickerSlot">${renderColorPicker(pal, h.backdropFillIndex, 'backdropFillIndex')}</div></div>
+    <div class="header-field-row"><label>Fill color</label><div id="backdropFillPickerSlot">${renderColorPicker(pal, h.backdropFillIndex)}</div></div>
     <div class="header-field-row"><label>Ground height</label>
       <input type="number" id="field-backdropGroundHeight" min="0" max="255" value="${h.backdropGroundHeight}"></div>
-    <div class="header-field-row"><label>Ground color</label><div id="backdropGroundPickerSlot">${renderColorPicker(pal, h.backdropGroundIndex, 'backdropGroundIndex')}</div></div>
+    <div class="header-field-row"><label>Ground color</label><div id="backdropGroundPickerSlot">${renderColorPicker(pal, h.backdropGroundIndex)}</div></div>
   `;
   slot.querySelectorAll('input[type=range][data-pp-index]').forEach(rng => rng.addEventListener('input', () => {
     const idx = +rng.dataset.ppIndex;
@@ -357,8 +378,16 @@ function renderPaletteEditorSlot(){
     refreshBackdropPickers();
     scheduleHeaderRecompile();
   }));
-  wireColorPickerSlot('backdropFillPickerSlot');
-  wireColorPickerSlot('backdropGroundPickerSlot');
+  wireColorPickerSlot('backdropFillPickerSlot', (idx) => {
+    lastParsedHeader.backdropFillIndex = idx;
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  });
+  wireColorPickerSlot('backdropGroundPickerSlot', (idx) => {
+    lastParsedHeader.backdropGroundIndex = idx;
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  });
   bindHeaderField(document.getElementById('field-backdropGroundHeight'), ['backdropGroundHeight']);
 }
 
@@ -466,33 +495,336 @@ function renderInspectPalette(cart){
     </div>`;
 }
 
+/* ============================================================
+   Sprite shape editor — interactive canvas for kind:1 (shape-list)
+   sprites: select/add/delete/reorder shapes, drag to move, drag corner
+   handles to resize, recolor via the color-picker popover. Reuses
+   World.buildBitmap() (runtime.js) for the live preview — the exact same
+   rasterization + palette-resolution path the real runtime uses — rather
+   than reimplementing shape rendering here, so a drag never shows
+   something the compiled cart wouldn't actually produce.
+
+   Both shape kinds (ellipse/rect) are normalized to one bounding-box
+   shape for move/resize math via getShapeBox/setShapeBox, so the drag
+   handlers themselves never branch on shape.type.
+   ============================================================ */
+function clampShapeUnit(v){
+  // 1/8px fixed point, ceiling 31.875 (kernel.js's encodeCart rounds
+  // value*8 into a u8 byte) — round to the nearest representable value
+  // and clamp so a drag can never produce something that would silently
+  // wrap or throw at compile time.
+  return Math.max(0, Math.min(31.875, Math.round(v*8)/8));
+}
+function getShapeBox(shape){
+  return shape.type === SHAPE_ELLIPSE
+    ? {x0: shape.cx-shape.rx, y0: shape.cy-shape.ry, x1: shape.cx+shape.rx, y1: shape.cy+shape.ry}
+    : {x0: shape.x, y0: shape.y, x1: shape.x+shape.w, y1: shape.y+shape.h};
+}
+// Normalizes min/max first — a resize dragged past its fixed opposite
+// corner flips naturally instead of producing a negative width/height.
+function setShapeBox(shape, box){
+  const x0 = Math.min(box.x0,box.x1), x1 = Math.max(box.x0,box.x1);
+  const y0 = Math.min(box.y0,box.y1), y1 = Math.max(box.y0,box.y1);
+  if(shape.type === SHAPE_ELLIPSE){
+    shape.cx = clampShapeUnit((x0+x1)/2); shape.cy = clampShapeUnit((y0+y1)/2);
+    shape.rx = clampShapeUnit(Math.max(0.5,(x1-x0)/2)); shape.ry = clampShapeUnit(Math.max(0.5,(y1-y0)/2));
+  } else {
+    shape.x = clampShapeUnit(x0); shape.y = clampShapeUnit(y0);
+    shape.w = clampShapeUnit(Math.max(1,x1-x0)); shape.h = clampShapeUnit(Math.max(1,y1-y0));
+  }
+}
+
+function spriteEditorHtml(spriteIndex){
+  return `
+    <div class="sprite-editor" id="spriteEditor${spriteIndex}">
+      <div class="sprite-editor-canvas-wrap"><canvas id="spriteEditorCanvas${spriteIndex}"></canvas></div>
+      <div id="spriteShapeListSlot${spriteIndex}"></div>
+      <div class="opcode-btns" style="margin-top:6px;">
+        <button type="button" class="opcode-btn" id="spriteAddEllipseBtn${spriteIndex}">+ Ellipse</button>
+        <button type="button" class="opcode-btn" id="spriteAddRectBtn${spriteIndex}">+ Rect</button>
+      </div>
+    </div>
+  `;
+}
+
+// Draws the sprite's current shapes (via inspectWorld.buildBitmap — the
+// real runtime rasterizer, not a reimplementation) scaled up onto the
+// editor's own canvas, then an overlay (bounding box + 4 corner handles)
+// for whichever shape is selected, if any.
+function redrawSpriteEditor(spriteIndex){
+  const canvas = document.getElementById('spriteEditorCanvas'+spriteIndex);
+  if(!canvas) return;
+  const sprite = lastParsedHeader.sprites[spriteIndex];
+  const w = sprite.w, h = sprite.h;
+  canvas.width = w * SPRITE_EDITOR_ZOOM;
+  canvas.height = h * SPRITE_EDITOR_ZOOM;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const bitmap = inspectWorld.buildBitmap({kind:1, w, h, shapes: sprite.shapes}, true);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+  const selIdx = selectedShapeIndex[spriteIndex];
+  const shape = (selIdx !== undefined) ? sprite.shapes[selIdx] : undefined;
+  if(shape){
+    const box = getShapeBox(shape);
+    const x0 = box.x0*SPRITE_EDITOR_ZOOM, y0 = box.y0*SPRITE_EDITOR_ZOOM;
+    const x1 = box.x1*SPRITE_EDITOR_ZOOM, y1 = box.y1*SPRITE_EDITOR_ZOOM;
+    ctx.strokeStyle = '#e0a030'; ctx.lineWidth = 1.5;
+    ctx.strokeRect(x0+0.5, y0+0.5, x1-x0, y1-y0);
+    const hs = 5; // handle half-size, in canvas px
+    ctx.fillStyle = '#e0a030';
+    for(const [hx,hy] of [[x0,y0],[x1,y0],[x0,y1],[x1,y1]]){
+      ctx.fillRect(hx-hs, hy-hs, hs*2, hs*2);
+    }
+  }
+}
+
+// One row per shape — array order is z-order (renderShapeList paints
+// later shapes over earlier ones), so the up/down buttons here are
+// literally "layer" reordering in the user's own sense of the word.
+function renderShapeListPanel(spriteIndex){
+  const slot = document.getElementById('spriteShapeListSlot'+spriteIndex);
+  if(!slot) return;
+  const sprite = lastParsedHeader.sprites[spriteIndex];
+  const pal = generatePalette(lastParsedHeader);
+  const selIdx = selectedShapeIndex[spriteIndex];
+  if(!sprite.shapes.length){
+    slot.innerHTML = '<p class="inspect-empty">No shapes yet — add one below.</p>';
+    return;
+  }
+  slot.innerHTML = '<div class="shape-list">' + sprite.shapes.map((sh,j) => `
+    <div class="shape-row${j===selIdx?' selected':''}" data-shape-index="${j}">
+      <span class="shape-row-label">${sh.type===SHAPE_ELLIPSE?'Ellipse':'Rect'} ${j}</span>
+      <div class="shape-row-color" id="shapeColorSlot${spriteIndex}_${j}">${renderColorPicker(pal, sh.color)}</div>
+      <button type="button" class="shape-btn shape-move-up" data-dir="-1"${j===0?' disabled':''} title="Move up (drawn later = on top)">&#9650;</button>
+      <button type="button" class="shape-btn shape-move-down" data-dir="1"${j===sprite.shapes.length-1?' disabled':''} title="Move down">&#9660;</button>
+      <button type="button" class="shape-btn shape-delete" title="Delete">&#10005;</button>
+    </div>
+  `).join('') + '</div>';
+  wireShapeListPanel(spriteIndex);
+}
+
+// Every handler re-fetches lastParsedHeader.sprites[spriteIndex] fresh at
+// click time rather than closing over a `sprite` reference captured when
+// this function ran — lastParsedHeader is wholesale-replaced by every
+// successful recompile (compileSourceText), so a reference captured at
+// wiring time can be pointing at a detached, orphaned object by the time
+// a button is actually clicked (the same staleness hazard the drag
+// handlers already guard against, see spriteEditorPointerMove).
+function wireShapeListPanel(spriteIndex){
+  const slot = document.getElementById('spriteShapeListSlot'+spriteIndex);
+  if(!slot) return;
+  slot.querySelectorAll('.shape-row').forEach(row => {
+    const j = +row.dataset.shapeIndex;
+    row.addEventListener('click', (e) => {
+      if(e.target.closest('button') || e.target.closest('.color-picker')) return;
+      selectedShapeIndex[spriteIndex] = j;
+      redrawSpriteEditor(spriteIndex);
+      renderShapeListPanel(spriteIndex);
+    });
+    wireColorPickerSlot('shapeColorSlot'+spriteIndex+'_'+j, (idx) => {
+      setHeaderPath(['sprites', spriteIndex, 'shapes', j, 'color'], idx);
+      redrawSpriteEditor(spriteIndex);
+      renderShapeListPanel(spriteIndex);
+      scheduleHeaderRecompile();
+    });
+  });
+  slot.querySelectorAll('.shape-move-up, .shape-move-down').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const sprite = lastParsedHeader.sprites[spriteIndex];
+    const row = btn.closest('.shape-row');
+    const j = +row.dataset.shapeIndex;
+    const k = j + (+btn.dataset.dir);
+    if(k < 0 || k >= sprite.shapes.length) return;
+    const tmp = sprite.shapes[j]; sprite.shapes[j] = sprite.shapes[k]; sprite.shapes[k] = tmp;
+    if(selectedShapeIndex[spriteIndex] === j) selectedShapeIndex[spriteIndex] = k;
+    else if(selectedShapeIndex[spriteIndex] === k) selectedShapeIndex[spriteIndex] = j;
+    redrawSpriteEditor(spriteIndex);
+    renderShapeListPanel(spriteIndex);
+    scheduleHeaderRecompile();
+  }));
+  slot.querySelectorAll('.shape-delete').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const sprite = lastParsedHeader.sprites[spriteIndex];
+    const row = btn.closest('.shape-row');
+    const j = +row.dataset.shapeIndex;
+    sprite.shapes.splice(j, 1);
+    if(selectedShapeIndex[spriteIndex] === j) delete selectedShapeIndex[spriteIndex];
+    else if(selectedShapeIndex[spriteIndex] > j) selectedShapeIndex[spriteIndex]--;
+    redrawSpriteEditor(spriteIndex);
+    renderShapeListPanel(spriteIndex);
+    scheduleHeaderRecompile();
+  }));
+}
+
+function addShape(spriteIndex, type){
+  const sprite = lastParsedHeader.sprites[spriteIndex];
+  const w = sprite.w, h = sprite.h;
+  const size = clampShapeUnit(Math.min(w,h)/2);
+  const shape = type === SHAPE_ELLIPSE
+    ? {type: SHAPE_ELLIPSE, cx: clampShapeUnit(w/2), cy: clampShapeUnit(h/2), rx: clampShapeUnit(size/2), ry: clampShapeUnit(size/2), color: 9}
+    : {type: SHAPE_RECT, x: clampShapeUnit(w/2-size/2), y: clampShapeUnit(h/2-size/2), w: size, h: size, color: 9};
+  sprite.shapes.push(shape);
+  selectedShapeIndex[spriteIndex] = sprite.shapes.length - 1;
+  redrawSpriteEditor(spriteIndex);
+  renderShapeListPanel(spriteIndex);
+  scheduleHeaderRecompile();
+}
+
 function spritesListHtml(cart){
   let html = '';
   cart.sprites.forEach((s,i) => {
     html += `<div class="inspect-section-title">Sprite ${i} — ${s.w}×${s.h}, ${s.kind===1?'shape list':'raw pixels'}</div>`;
-    html += `<div id="spriteSlot${i}" style="max-width:160px;margin-bottom:10px;"></div>`;
     if(s.kind === 1){
-      html += table([
-        ['#','type','params','color'],
-        ...s.shapes.map((sh,k) => [k, sh.type===SHAPE_ELLIPSE?'ellipse':'rect',
-          sh.type===SHAPE_ELLIPSE ? `cx=${sh.cx} cy=${sh.cy} rx=${sh.rx} ry=${sh.ry}` : `x=${sh.x} y=${sh.y} w=${sh.w} h=${sh.h}`,
-          sh.color]),
-      ]);
+      html += spriteEditorHtml(i);
+    } else {
+      html += `<div id="spriteSlot${i}" style="max-width:160px;margin-bottom:10px;"></div>`;
+      html += '<p class="inspect-empty">Raw-pixel editing is a future phase.</p>';
     }
   });
   return html;
 }
+// Only the kind!==1 (raw-pixel) sprites still get the static read-only
+// thumbnail here — kind:1 sprites get the interactive editor's own canvas
+// instead (attachSpriteEditors), which draws straight from the live
+// shapes array rather than the last-compiled inspectWorld.spriteCanvases.
+// replaceChildren, not appendChild — makes this safe to call a second
+// time against the same DOM (refreshAssetCanvasesIfVisible does exactly
+// that after a recompile swaps inspectWorld out from under an
+// already-rendered Assets tab), swapping in the new canvas instead of
+// stacking it behind the stale one.
 function attachSpriteCanvases(cart){
   cart.sprites.forEach((s,i) => {
+    if(s.kind === 1) return;
     const slot = document.getElementById('spriteSlot'+i);
+    if(!slot) return;
     const c = inspectWorld.spriteCanvases[i];
     c.style.width = '100%'; c.style.imageRendering = 'pixelated';
     c.style.border = '1px solid var(--rule)'; c.style.background = 'var(--bg-card)';
-    slot.appendChild(c);
+    slot.replaceChildren(c);
+  });
+}
+// No letterboxing to account for (unlike the full-viewport game canvas'
+// pointerToCartCoords in runtime.js) since this canvas is never object-fit
+// — CSS width:100%/height:auto keeps its aspect ratio locked to the
+// sprite's own, so a straight ratio of displayed-size to sprite-size is
+// enough to land a pointer event in sprite-space coordinates.
+function spriteEditorPointerCoords(canvas, sprite, e){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * sprite.w / rect.width,
+    y: (e.clientY - rect.top) * sprite.h / rect.height,
+  };
+}
+// ~12 *screen* pixels converted to sprite-space, not a fixed sprite-space
+// radius — keeps corner handles comfortably tappable regardless of how
+// zoomed-out a small sprite is displayed (e.g. on a narrow phone).
+function spriteHandleHitRadius(canvas, sprite){
+  const rect = canvas.getBoundingClientRect();
+  return 12 * sprite.w / rect.width;
+}
+function hitTestHandle(box, x, y, radius){
+  for(const [hx,hy] of [[box.x0,box.y0],[box.x1,box.y0],[box.x0,box.y1],[box.x1,box.y1]]){
+    if(Math.abs(x-hx) <= radius && Math.abs(y-hy) <= radius) return [hx===box.x0?'w':'e', hy===box.y0?'n':'s'].join('');
+  }
+  return null;
+}
+function hitTestShapeBox(box, x, y){
+  return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
+}
+// Reverse array order — topmost/last-drawn shape wins, matching
+// renderShapeList's own painter's-algorithm paint order.
+function pickShapeAt(shapes, x, y){
+  for(let j = shapes.length-1; j >= 0; j--){
+    if(hitTestShapeBox(getShapeBox(shapes[j]), x, y)) return j;
+  }
+  return -1;
+}
+
+function spriteEditorPointerDown(spriteIndex, canvas, e){
+  const sprite = lastParsedHeader.sprites[spriteIndex];
+  const p = spriteEditorPointerCoords(canvas, sprite, e);
+  const selIdx = selectedShapeIndex[spriteIndex];
+  // A selected shape's own handles win over starting a new selection
+  // underneath them — standard editor convention.
+  if(selIdx !== undefined && sprite.shapes[selIdx]){
+    const box = getShapeBox(sprite.shapes[selIdx]);
+    const corner = hitTestHandle(box, p.x, p.y, spriteHandleHitRadius(canvas, sprite));
+    if(corner){
+      canvas.setPointerCapture(e.pointerId);
+      spriteDragState = {spriteIndex, mode:'resize', shapeIndex:selIdx, corner, startBox: box};
+      return;
+    }
+  }
+  const hit = pickShapeAt(sprite.shapes, p.x, p.y);
+  if(hit === -1){
+    if(selectedShapeIndex[spriteIndex] !== undefined){
+      delete selectedShapeIndex[spriteIndex];
+      redrawSpriteEditor(spriteIndex);
+      renderShapeListPanel(spriteIndex);
+    }
+    return;
+  }
+  selectedShapeIndex[spriteIndex] = hit;
+  redrawSpriteEditor(spriteIndex);
+  renderShapeListPanel(spriteIndex);
+  canvas.setPointerCapture(e.pointerId);
+  spriteDragState = {spriteIndex, mode:'move', shapeIndex: hit, startPointer: p, startBox: getShapeBox(sprite.shapes[hit])};
+}
+function spriteEditorPointerMove(spriteIndex, canvas, e){
+  if(!spriteDragState || spriteDragState.spriteIndex !== spriteIndex) return;
+  const sprite = lastParsedHeader.sprites[spriteIndex];
+  // Re-fetch the live shape by index every tick — never hold the object
+  // reference captured at pointerdown, since lastParsedHeader is
+  // wholesale-replaced on every successful recompile and a slow drag can
+  // outlast the 400ms debounce.
+  const shape = sprite.shapes[spriteDragState.shapeIndex];
+  if(!shape) { spriteDragState = null; return; }
+  const p = spriteEditorPointerCoords(canvas, sprite, e);
+  if(spriteDragState.mode === 'move'){
+    const dx = p.x - spriteDragState.startPointer.x, dy = p.y - spriteDragState.startPointer.y;
+    const b = spriteDragState.startBox;
+    setShapeBox(shape, {x0: b.x0+dx, y0: b.y0+dy, x1: b.x1+dx, y1: b.y1+dy});
+  } else { // resize — recompute from the fixed opposite corner to the live pointer
+    const b = spriteDragState.startBox;
+    const fixedX = spriteDragState.corner[0] === 'w' ? b.x1 : b.x0;
+    const fixedY = spriteDragState.corner[1] === 'n' ? b.y1 : b.y0;
+    setShapeBox(shape, {x0: fixedX, y0: fixedY, x1: p.x, y1: p.y});
+  }
+  // setShapeBox already mutated `shape` in place — it's a live reference
+  // into lastParsedHeader.sprites[spriteIndex].shapes[...], not a copy —
+  // so there's nothing further to write back, just redraw and recompile.
+  redrawSpriteEditor(spriteIndex);
+  scheduleHeaderRecompile();
+}
+function spriteEditorPointerUp(spriteIndex){
+  if(spriteDragState && spriteDragState.spriteIndex === spriteIndex){
+    renderShapeListPanel(spriteIndex);
+    spriteDragState = null;
+  }
+}
+
+function attachSpriteEditors(cart){
+  cart.sprites.forEach((s,i) => {
+    if(s.kind !== 1) return;
+    redrawSpriteEditor(i);
+    renderShapeListPanel(i);
+    const canvas = document.getElementById('spriteEditorCanvas'+i);
+    canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); spriteEditorPointerDown(i, canvas, e); }, {passive:false});
+    canvas.addEventListener('pointermove', (e) => spriteEditorPointerMove(i, canvas, e));
+    canvas.addEventListener('pointerup', () => spriteEditorPointerUp(i));
+    canvas.addEventListener('pointercancel', () => spriteEditorPointerUp(i));
+    const addEllipseBtn = document.getElementById('spriteAddEllipseBtn'+i);
+    const addRectBtn = document.getElementById('spriteAddRectBtn'+i);
+    if(addEllipseBtn) addEllipseBtn.addEventListener('click', () => addShape(i, SHAPE_ELLIPSE));
+    if(addRectBtn) addRectBtn.addEventListener('click', () => addShape(i, SHAPE_RECT));
   });
 }
 function attachTileCanvases(cart){
   const grid = document.getElementById('tileGrid');
+  if(!grid) return;
+  grid.innerHTML = ''; // safe to call twice — see attachSpriteCanvases' own comment
   cart.tiles.forEach((t,i) => {
     const tile = document.createElement('div');
     tile.className = 'inspect-tile';
@@ -504,6 +836,22 @@ function attachTileCanvases(cart){
     tile.appendChild(p);
     grid.appendChild(tile);
   });
+}
+// The sprite shape editor is the first Assets-tab control that can
+// trigger a recompile while Assets stays the visible tab (every other
+// editable field lives on Logic/Source, tabs Assets isn't shown
+// alongside) — and every recompile swaps inspectWorld = new World(cart)
+// (see compileSourceText), orphaning the *other* kind:0 sprite/tile
+// canvases already appended into the page from the previous inspectWorld.
+// Called from compileSourceText's success branch; a no-op unless Assets
+// is the tab actually on screen right now. The kind:1 editor canvas
+// itself never goes stale this way — it draws fresh from
+// lastParsedHeader on every interaction already, never from
+// inspectWorld.spriteCanvases.
+function refreshAssetCanvasesIfVisible(){
+  if(inspectTab !== 'Assets' || !inspectCartInfo) return;
+  attachSpriteCanvases(inspectCartInfo.cart);
+  attachTileCanvases(inspectCartInfo.cart);
 }
 // Assets tab: palette + sprites + tiles, in sequence — everything that's
 // just pixels, nothing that's behavior. Built as one body.innerHTML pass
@@ -518,6 +866,7 @@ function renderInspectAssets(body, cart){
   html += '<div class="inspect-grid" id="tileGrid"></div>';
   body.innerHTML = html;
   attachSpriteCanvases(cart);
+  attachSpriteEditors(cart);
   attachTileCanvases(cart);
 }
 
@@ -1037,6 +1386,7 @@ async function compileSourceText(){
       inspectWorld = new World(cart);
       inspectCartInfo = {cart, payload: fragment, byteLen: bytes.length, charLen: fragment.length, name, author};
       updateTitle();
+      refreshAssetCanvasesIfVisible();
     } catch(err){
       // Rare — compileCartSource already round-trips through decodeCart
       // — but if the World itself still can't be built, say so and keep

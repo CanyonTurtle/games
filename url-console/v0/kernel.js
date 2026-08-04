@@ -499,7 +499,7 @@ function encodeCart(cart){
       for(const sh of s.shapes){
         w.u8(sh.type);
         const p = sh.type === SHAPE_ELLIPSE ? [sh.cx,sh.cy,sh.rx,sh.ry] : [sh.x,sh.y,sh.w,sh.h];
-        for(const v of p) w.u8(Math.round(v*8) & 0xFF); // fixed-point, 1/8px
+        for(const v of p) w.u8(Math.round(v*8)); // fixed-point, 1/8px — u8() itself throws out-of-range (ceiling 31.875px)
         w.u8(sh.color);
       }
     } else {
