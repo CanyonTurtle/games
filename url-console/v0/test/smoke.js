@@ -484,6 +484,81 @@ async function main(){
   const errAfterNumeric = (await page.textContent('#hookErrorSlot')).trim();
   check('the numeric-fallback line validates too', errAfterNumeric === '', errAfterNumeric);
 
+  // 3d. Editable header/camera/input/backdrop/palette form fields on the
+  // Logic tab's Overview — bidirectionally synced with lastParsedHeader,
+  // reserialized into the Source tab's JSON on every edit.
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.racer.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(150);
+
+  // Plain field round-trip: fill cartType, wait past the debounce, confirm
+  // the Source tab's JSON and the compiled cart both picked it up.
+  await page.fill('#field-cartType', '77');
+  await page.waitForTimeout(600);
+  const cartTypeState = await page.evaluate(() => ({
+    compileOk: window.__urlcadeDebug.getCompileState().ok,
+    cartTypeNow: window.__urlcadeDebug.getInspectCartInfo().cart.cartType,
+  }));
+  check('editing a plain number field (cartType) round-trips into the compiled cart', cartTypeState.compileOk && cartTypeState.cartTypeNow === 77, JSON.stringify(cartTypeState));
+
+  // Palette slider: instant (non-debounced) live preview, well under the
+  // 400ms full-recompile debounce.
+  const swatchBefore = await page.evaluate(() => document.querySelector('#paletteLivePreviewSlot .pal-swatch').style.background);
+  await page.locator('#palSlider0').fill('40');
+  await page.waitForTimeout(80);
+  const swatchAfter = await page.evaluate(() => document.querySelector('#paletteLivePreviewSlot .pal-swatch').style.background);
+  check('dragging the base-hue palette slider updates the live preview near-instantly', swatchAfter !== swatchBefore, `${swatchBefore} -> ${swatchAfter}`);
+
+  // Backdrop swatch picker.
+  await page.click('#backdropFillPickerSlot .pal-swatch[data-index="5"]');
+  await page.waitForTimeout(100);
+  const pickerSelected = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .pal-swatch.selected')?.dataset.index);
+  check('clicking a backdrop swatch marks it selected', pickerSelected === '5', pickerSelected);
+  await page.waitForTimeout(600);
+  const backdropState = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.backdropFillIndex);
+  check('the picked backdrop swatch index reaches the recompiled cart', backdropState === 5, backdropState);
+
+  // Input checkboxes: checking a bit reveals its label input; unchecking
+  // hides it and drops the stale label key rather than leaving it behind.
+  const downLabelVisibleBefore = await page.evaluate(() => document.getElementById('buttonLabelRow8').style.display !== 'none');
+  await page.check('#field-btn8');
+  await page.waitForTimeout(50);
+  const downLabelVisibleAfter = await page.evaluate(() => document.getElementById('buttonLabelRow8').style.display !== 'none');
+  check('checking an input-button box reveals its label field', !downLabelVisibleBefore && downLabelVisibleAfter, `${downLabelVisibleBefore} -> ${downLabelVisibleAfter}`);
+  await page.fill('#field-btnLabel8', 'Brake');
+  await page.waitForTimeout(600);
+  const afterCheckState = await page.evaluate(() => ({
+    activeButtons: window.__urlcadeDebug.getInspectCartInfo().cart.inputActiveButtons,
+    label: window.__urlcadeDebug.getInspectCartInfo().cart.inputButtonLabels[8],
+  }));
+  check('the checked bit + its label reach the recompiled cart', (afterCheckState.activeButtons & 8) === 8 && afterCheckState.label === 'Brake', JSON.stringify(afterCheckState));
+  await page.uncheck('#field-btn8');
+  await page.waitForTimeout(50);
+  const downLabelVisibleUnchecked = await page.evaluate(() => document.getElementById('buttonLabelRow8').style.display !== 'none');
+  check('unchecking hides the label field again', !downLabelVisibleUnchecked, downLabelVisibleUnchecked);
+  await page.waitForTimeout(600);
+  const afterUncheckState = await page.evaluate(() => ({
+    activeButtons: window.__urlcadeDebug.getInspectCartInfo().cart.inputActiveButtons,
+    hasLabel: 8 in window.__urlcadeDebug.getInspectCartInfo().cart.inputButtonLabels,
+  }));
+  check('unchecking drops the bit and its label from the recompiled cart, not just hides the input', (afterUncheckState.activeButtons & 8) === 0 && !afterUncheckState.hasLabel, JSON.stringify(afterUncheckState));
+
+  // Drift-proof round trip: hand-edit a field directly in the Source
+  // tab's textarea, confirm the form on Logic picks it up afterward —
+  // proves the form reads from lastParsedHeader, not a stale snapshot
+  // taken whenever Debug first opened.
+  await page.click('.inspect-tab[data-tab="Source"]');
+  await page.waitForTimeout(100);
+  const headerText2 = await page.inputValue('#debugSourceInput');
+  const headerHandEdited = headerText2.replace(/"cartType":\s*\d+/, '"cartType": 201');
+  await page.fill('#debugSourceInput', headerHandEdited);
+  await page.waitForTimeout(600);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(150);
+  const formPickedUpHandEdit = await page.inputValue('#field-cartType');
+  check('a hand-edit in the Source textarea is reflected back in the form field, not stale', formPickedUpHandEdit === '201', formPickedUpHandEdit);
+
   // 4. Back-from-Debug resumes the *same* paused game (not a fresh decode
   // of it) instead of dropping to the shelf, when Debug was opened on the
   // game that's actually still live. Tags the live World with a marker
