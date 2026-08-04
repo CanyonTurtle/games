@@ -398,6 +398,10 @@ async function main(){
   await page.waitForTimeout(100);
   const hookTextBefore = await page.inputValue('#hookSourceInput');
   const haltCountBefore = (hookTextBefore.match(/^HALT$/gm) || []).length;
+  const opcodeGroupOptions = await page.$$eval('.opcode-group-select option', els => els.map(e => e.value));
+  check('the opcode palette is a category dropdown, not all groups stacked open', opcodeGroupOptions.length === 9 && opcodeGroupOptions.includes('Entity lifecycle'), JSON.stringify(opcodeGroupOptions));
+  await page.selectOption('.opcode-group-select', 'Drawing & control');
+  await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="HALT"]');
   await page.waitForTimeout(100);
   const hookTextAfterHalt = await page.inputValue('#hookSourceInput');
@@ -406,6 +410,8 @@ async function main(){
   const errAfterHalt = (await page.textContent('#hookErrorSlot')).trim();
   check('the newly inserted line still validates (no error)', errAfterHalt === '', errAfterHalt);
 
+  await page.selectOption('.opcode-group-select', 'Entity lifecycle');
+  await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="SPAWN"]');
   await page.waitForTimeout(100);
   const spawnPicker = await page.evaluate(() => ({
@@ -418,6 +424,8 @@ async function main(){
   const hookTextAfterSpawn = await page.inputValue('#hookSourceInput');
   check('clicking an entity-type picker item inserts SPAWN with that type\'s index', /^SPAWN 0$/m.test(hookTextAfterSpawn), hookTextAfterSpawn.slice(-40));
 
+  await page.selectOption('.opcode-group-select', 'Input');
+  await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="TESTBIT"]');
   await page.waitForTimeout(100);
   const testbitRows = await page.$$eval('.operand-picker-row', els => els.map(e => e.textContent.trim()));
@@ -427,6 +435,8 @@ async function main(){
   const hookTextAfterTestbit = await page.inputValue('#hookSourceInput');
   check('clicking "action" inserts TESTBIT 4 (bit index, not bit value)', /^TESTBIT 4$/m.test(hookTextAfterTestbit), hookTextAfterTestbit.slice(-40));
 
+  await page.selectOption('.opcode-group-select', 'World queries');
+  await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="PUSHI"][data-operand-kind="tileId"]');
   await page.waitForTimeout(100);
   const tilePickerEmptyText = await page.textContent('.operand-picker');
@@ -446,6 +456,8 @@ async function main(){
   await page.waitForTimeout(600);
   await page.click('.inspect-tab[data-tab="Logic"]');
   await page.waitForTimeout(100);
+  await page.selectOption('.opcode-group-select', 'Globals');
+  await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="STOREG"]');
   await page.waitForTimeout(100);
   const namedRows = await page.$$eval('.operand-picker-row', els => els.map(e => e.textContent.trim()));
