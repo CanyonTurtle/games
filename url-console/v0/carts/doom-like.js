@@ -32,7 +32,7 @@ const DOOM_CONST_NAMES = {
   MAP_W: 8, MAP_H: 9, SHOOT_RANGE: 10, SHOOT_CONE: 11,
   RAYS_HALF: 12, ANGLE_STEP: 13, STEP_SIZE: 14, FAR_SENTINEL: 15,
   WALL_SCALE: 16, SCREEN_H_F: 17, HALF_H_F: 18, THRESH1: 19, THRESH2: 20,
-  FOV_HALF: 21, BILLBOARD_SCALE: 22,
+  FOV_HALF: 21, BILLBOARD_SCALE: 22, COL_W_F: 23, NUM_RAYS_F: 24,
 };
 // Persistent state (0-8) lives for the whole run; g_s0..g_s12 (9-21) are
 // pure scratch, reused for a different purpose in every hook/loop that
@@ -45,6 +45,8 @@ const DOOM_GLOBAL_NAMES = {
   g_mon0: 4, g_mon1: 5, g_mon2: 6, g_contact_cd: 7, g_prev_shoot: 8,
   g_s0: 9, g_s1: 10, g_s2: 11, g_s3: 12, g_s4: 13, g_s5: 14, g_s6: 15,
   g_s7: 16, g_s8: 17, g_s9: 18, g_s10: 19, g_s11: 20, g_s12: 21,
+  g_s13: 22, // genMarchSteps' own loop counter — shared across all 46 call sites, never needed simultaneously with anything else
+  g_ray_idx: 23, // genWallColumnLoop's own loop counter
 };
 const DOOM_SYM = { constants: DOOM_CONST_NAMES, globals: DOOM_GLOBAL_NAMES };
 
@@ -106,29 +108,47 @@ const MONSTER_COLOR = 14; // entity B ramp — see paletteParams below
 // (id 1) or the budget of MAX_MARCH steps runs out — identical bytecode
 // every time, just parameterized by where to jump on a hit, which is
 // why it's a shared generator rather than copy-pasted three times.
+// A real VM-level loop (g_s13 counts iterations), not 14 unrolled copies —
+// this one function is spliced into all 46 call sites (40 wall rays, 3
+// monster-billboard occlusion checks, 3 shoot hit-scan checks), so it was
+// nearly 60% of the whole cart's instruction count when it was unrolled
+// per site (14 steps x 14 opcodes x 46 sites). Looping costs a handful of
+// extra opcodes *per march step actually taken* (the counter bookkeeping
+// below) versus the unrolled form, which is why the wall-column budget
+// math in the header comment re-measures the real worst case rather than
+// reusing the pre-loop number — see DESIGN.md §57.
 function genMarchSteps(hitLabel) {
-  const lines = [];
-  for (let k = 0; k < MAX_MARCH; k++) {
-    lines.push(
-      'LOADG g_s3', 'LOADG g_s1', 'ADD', 'STOREG g_s3',
-      'LOADG g_s4', 'LOADG g_s2', 'ADD', 'STOREG g_s4',
-      'LOADG g_s3', 'LOADG g_s4', 'GETTILE', 'PUSHI 1', 'CMPEQ', `JNZ ${hitLabel}`,
-    );
-  }
-  return lines;
+  const loopLabel = `${hitLabel}_marchloop`;
+  return [
+    'PUSHI 0', 'STOREG g_s13',
+    `${loopLabel}:`,
+    'LOADG g_s3', 'LOADG g_s1', 'ADD', 'STOREG g_s3',
+    'LOADG g_s4', 'LOADG g_s2', 'ADD', 'STOREG g_s4',
+    'LOADG g_s3', 'LOADG g_s4', 'GETTILE', 'PUSHI 1', 'CMPEQ', `JNZ ${hitLabel}`,
+    'LOADG g_s13', 'PUSHI 1', 'ADD', 'DUP', 'STOREG g_s13',
+    `PUSHI ${MAX_MARCH}`, 'CMPLT', `JNZ ${loopLabel}`,
+  ];
 }
 
-// One ray: compute its angle, march it from the player's real position
-// (read via LOADE, not LOAD_SELF — on_draw's self is the stationary
-// camera entity, never the player), shade by hit distance, then paint
-// COL_W adjacent 1px-wide screen columns with the resulting
-// ceiling/wall/floor split. g_s0=angle, g_s1/g_s2=march step dx/dy,
-// g_s3/g_s4=march position, g_s5=hit distance, g_s6=wall height,
-// g_s7=half height, g_s8/g_s9=wall slice top/bottom y, g_s10=wall color.
-function genWallColumnBlock(i) {
-  const hit = `ray${i}_hit`, after = `ray${i}_after`;
+// All 40 wall rays, as ONE copy of this logic run through a real VM loop
+// (g_ray_idx counts 0..NUM_RAYS-1) instead of 40 JS-unrolled copies —
+// unrolled, this alone was ~40% of the whole cart's compiled size (see
+// DESIGN.md §57); a real loop costs a little more at *runtime* (loop
+// bookkeeping opcodes actually get dispatched, unlike an unrolled copy's
+// implicit fall-through) but is dramatically smaller *compiled*, which is
+// what actually matters for a shareable URL fragment. Per-ray angle
+// offset and each column's x position, previously baked in as compile-
+// time PUSHI constants, are now computed from g_ray_idx at runtime.
+// g_s0=angle, g_s1/g_s2=march step dx/dy, g_s3/g_s4=march position,
+// g_s5=hit distance, g_s6=wall height then (reused, dead by then)
+// colBase, g_s7=half height then (reused) the current column's x,
+// g_s8/g_s9=wall slice top/bottom y, g_s10=wall color.
+function genWallColumnLoop() {
+  const hit = 'wallray_hit', after = 'wallray_after', loopTop = 'wallray_loop';
   let lines = [
-    `PUSHI ${i}`, 'PUSHC RAYS_HALF', 'SUB', 'PUSHC ANGLE_STEP', 'MUL',
+    'PUSHI 0', 'STOREG g_ray_idx',
+    `${loopTop}:`,
+    'LOADG g_ray_idx', 'PUSHC RAYS_HALF', 'SUB', 'PUSHC ANGLE_STEP', 'MUL',
     `LOADE g_player ${ANGLEPROP}`, 'ADD', 'STOREG g_s0',
     'LOADG g_s0', 'COS', 'PUSHC STEP_SIZE', 'MUL', 'STOREG g_s1',
     'LOADG g_s0', 'SIN', 'PUSHC STEP_SIZE', 'MUL', 'STOREG g_s2',
@@ -143,32 +163,37 @@ function genWallColumnBlock(i) {
   lines.push(`${after}:`);
   lines.push(
     'PUSHC WALL_SCALE', 'LOADG g_s5', 'DIV',
-    'DUP', 'PUSHC SCREEN_H_F', 'CMPGT', `JZ ray${i}_noclamp`,
+    'DUP', 'PUSHC SCREEN_H_F', 'CMPGT', 'JZ wallray_noclamp',
     'POP', 'PUSHC SCREEN_H_F',
-    `ray${i}_noclamp:`,
+    'wallray_noclamp:',
     'STOREG g_s6',
     'LOADG g_s6', 'PUSHI 2', 'DIV', 'STOREG g_s7',
     'PUSHC HALF_H_F', 'LOADG g_s7', 'SUB', 'STOREG g_s8',
     'PUSHC HALF_H_F', 'LOADG g_s7', 'ADD', 'STOREG g_s9',
   );
   lines.push(
-    'LOADG g_s5', 'PUSHC THRESH1', 'CMPLT', `JNZ ray${i}_near`,
-    'LOADG g_s5', 'PUSHC THRESH2', 'CMPLT', `JNZ ray${i}_mid`,
-    `PUSHI ${WALL_FAR}`, `JMP ray${i}_colordone`,
-    `ray${i}_near:`, `PUSHI ${WALL_NEAR}`, `JMP ray${i}_colordone`,
-    `ray${i}_mid:`, `PUSHI ${WALL_MID}`,
-    `ray${i}_colordone:`,
+    'LOADG g_s5', 'PUSHC THRESH1', 'CMPLT', 'JNZ wallray_near',
+    'LOADG g_s5', 'PUSHC THRESH2', 'CMPLT', 'JNZ wallray_mid',
+    `PUSHI ${WALL_FAR}`, 'JMP wallray_colordone',
+    'wallray_near:', `PUSHI ${WALL_NEAR}`, 'JMP wallray_colordone',
+    'wallray_mid:', `PUSHI ${WALL_MID}`,
+    'wallray_colordone:',
     'STOREG g_s10',
   );
-  const colBase = i * COL_W;
+  // colBase = g_ray_idx * COL_W, into g_s6 (its "height" job is long done)
+  lines.push('LOADG g_ray_idx', 'PUSHC COL_W_F', 'MUL', 'STOREG g_s6');
   for (let s = 0; s < COL_W; s++) {
-    const x = colBase + s;
     lines.push(
-      `PUSHI ${x}`, 'PUSHI 0', `PUSHI ${x}`, 'LOADG g_s8', `PUSHI ${CEIL_COLOR}`, 'DRAW_LINE',
-      `PUSHI ${x}`, 'LOADG g_s8', `PUSHI ${x}`, 'LOADG g_s9', 'LOADG g_s10', 'DRAW_LINE',
-      `PUSHI ${x}`, 'LOADG g_s9', `PUSHI ${x}`, `PUSHI ${SCREEN_H}`, `PUSHI ${FLOOR_COLOR}`, 'DRAW_LINE',
+      'LOADG g_s6', `PUSHI ${s}`, 'ADD', 'STOREG g_s7', // g_s7 = this column's x (its "half height" job is long done)
+      'LOADG g_s7', 'PUSHI 0', 'LOADG g_s7', 'LOADG g_s8', `PUSHI ${CEIL_COLOR}`, 'DRAW_LINE',
+      'LOADG g_s7', 'LOADG g_s8', 'LOADG g_s7', 'LOADG g_s9', 'LOADG g_s10', 'DRAW_LINE',
+      'LOADG g_s7', 'LOADG g_s9', 'LOADG g_s7', `PUSHI ${SCREEN_H}`, `PUSHI ${FLOOR_COLOR}`, 'DRAW_LINE',
     );
   }
+  lines.push(
+    'LOADG g_ray_idx', 'PUSHI 1', 'ADD', 'DUP', 'STOREG g_ray_idx',
+    `PUSHI ${NUM_RAYS}`, 'CMPLT', `JNZ ${loopTop}`,
+  );
   return lines;
 }
 
@@ -230,8 +255,7 @@ function genMonsterBillboardBlock(k) {
 }
 
 function genOnDraw() {
-  let lines = [];
-  for (let i = 0; i < NUM_RAYS; i++) lines = lines.concat(genWallColumnBlock(i));
+  let lines = genWallColumnLoop();
   for (let k = 0; k < 3; k++) lines = lines.concat(genMonsterBillboardBlock(k));
   // Reticle — a tiny fixed crosshair, drawn last so it's always on top.
   lines = lines.concat([
@@ -809,6 +833,7 @@ function buildDoomCart() {
       10,   // SHOOT_CONE (deg half-angle)
       RAYS_HALF, ANGLE_STEP, STEP_SIZE, FAR_SENTINEL, WALL_SCALE,
       SCREEN_H, HALF_H, THRESH1, THRESH2, FOV_HALF, BILLBOARD_SCALE,
+      COL_W, NUM_RAYS,
     ],
     entityTypes: [
       { renderKind: 0, assetIndex: 0, rotateFlag: 0, collisionW: 6, collisionH: 6, extFieldCount: 0 }, // PLAYER — invisible, never drawn as a sprite
