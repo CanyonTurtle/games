@@ -2717,7 +2717,21 @@ It wasn't simplest form, and the reason is structural: this VM has `JMP`/`JZ`/`J
 
 Verified in the same three stages as §54 originally was: a standalone Node harness against the real cart's bytecode (adversarial worst-case grids, both hooks, no `cartFault`); a `FakeWorld` gameplay simulation (movement, shooting, a monster kill, all still correct); and `test/smoke.js` plus a fresh screenshot in a real browser — pixel-identical to before every change in this section, confirming the size reduction changed nothing about what actually renders.
 
-## 58. Open questions
+## 59. An opcode palette for the Debug view — pick, don't type, an operand
+
+Asked for by name: make Debug's Logic tab easier to tinker in by adding a drawer of clickable opcode buttons that insert a correctly-formed assembly line, with context-aware pickers (real sprite/tile thumbnails, the fixed input-bit list, the cart's own global/constant slots) for opcodes whose operand means something — SPAWN's typeId, TESTBIT's bit index, LOADG/STOREG/LOADE/STOREE's slot, PUSHC's constant index — instead of an author having to already know which numeric index to type.
+
+**The precondition turned out to be architectural, not additive.** Every hook's bytecode lived inside the Source tab's one big free-form JS-object-literal `<textarea>` (`sourceText`, parsed via `new Function(...)` on every edit) — fine for reading, but a palette needs to know exactly which hook and which line position it's inserting into, and locating `on_init: [` and its matching `]` inside arbitrary nested brackets/quotes/comments is a real parsing problem, not a string-splice. The fix: pull hooks out of that blob entirely. Each hook now gets its own `<textarea>` on the Logic tab (reusing its existing per-hook tab strip, previously read-only disassembly + CFG only), holding exactly one hook's line-joined text — no brackets to match, since a hook's on-disk shape was already a flat `string[]`. The Source tab keeps the header fields (still one JS-literal blob); `compileSourceText()` merges the two back together right before calling `compileCartSource()`.
+
+That split paid for itself twice over: it's also what makes fast, un-debounced per-hook validation possible. Every keystroke in a hook's textarea calls `assemble()` directly against just that hook's lines (cheap — a linear scan of an already-short line list) and shows the result in a slot right under the textarea, on top of — not instead of — the existing debounced full-cart recompile that still owns the Source tab's ✓/✕ badge. The two never race: disjoint DOM, and the only state they share (the hook's text) is written synchronously before either validation pass runs.
+
+**Two things learned about the format while wiring the pickers up, neither previously written down anywhere.** First: `GETTILE`, `SETTILE`, and `TILE_SURFACE` have no embedded tile-id operand at all — checked against `OPS` directly, all three are `[]`-operand instructions; the tile id is stack-driven, pushed by a preceding `PUSHI`. So a tile-thumbnail picker can't attach to those opcodes' own operand the way SPAWN's typeId picker attaches to SPAWN — it hangs off a dedicated "PUSHI (tile id)" palette entry instead, keeping "one button click → one inserted line" true for every button in the palette rather than breaking it for one group. Second: `constNames`/`globalNames` — the human-readable name tables a hand-authored cart declares (`STARTER_TEMPLATE` is the existing example: `globalNames: {g_ball:0, g_frames:1}`) — never survive a compile→decode round trip, because they're not part of `encodeCart`'s binary fields at all, only read by `assemble()` at compile time. That's true even for "+ New Cart," which compiles `STARTER_TEMPLATE` to a fragment and then decodes that fragment straight back — so its own Source tab shows bare numeric operands (`STOREG 0`, not `STOREG g_ball`) the instant Debug opens, same as any other decompiled cart. The global/constant pickers account for this directly rather than assuming names exist: every slot always gets a row (0-23 for globals, always render-able), named ones show their name and insert it as the operand token, unnamed ones show `slot N (unnamed)` and insert the bare number — always valid either way, never blocked on a name existing.
+
+Answers, in part, one of §60's own long-standing open questions ("ship a visual editor at v1, or text-based only") — this is neither: still hand-typed assembly, but with the guesswork of "what number goes here" replaced by picking from the cart's own real data.
+
+Verified via `test/smoke.js`: the split (hooks now edited on Logic, Source now header-only), fast per-hook validation surfacing a line-numbered error near-instantly versus the debounced full-cart badge eventually following, the SPAWN picker rendering one real sprite-thumbnail canvas per entity type and inserting the right index, the TESTBIT picker's fixed 5-item list, the tile picker's empty-state message on a cart with no tiles, the named-vs-unnamed global picker behavior on a hand-declared `globalNames` block versus a fully decompiled cart (`breakout`, confirmed to have none), and a Playwright screenshot of the finished editor in both themes.
+
+## 60. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
@@ -2836,9 +2850,13 @@ Verified in the same three stages as §54 originally was: a standalone Node harn
   defining so sites that want one aren't inventing it from scratch?
 
 **Tooling & authoring**
-- Ship a visual editor at v1, or launch with a text-based
+- ~~Ship a visual editor at v1, or launch with a text-based
   assembler/compiler only (better for source control / code review of
-  carts, worse for onboarding non-programmers)?
+  carts, worse for onboarding non-programmers)?~~ §59 lands a middle
+  ground: still hand-typed assembly (kept text, kept diffable), but an
+  opcode palette that picks operands from the cart's own real data
+  instead of the author guessing a number. A fully visual/block editor
+  for hooks themselves is still open.
 - How important is a "cart inspector" / decompiler for trust — should
   the runtime refuse to run a cart without first showing the player
   (or the developer) a human-readable disassembly?

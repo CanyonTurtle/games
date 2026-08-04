@@ -161,7 +161,7 @@ window.__urlcadeDebug = {
   startInspect: Inspector.startInspect, startNewCart: Inspector.startNewCart,
   extractPayloadFromInput: Inspector.extractPayloadFromInput,
   getInspectWorld: Inspector.getInspectWorld, getInspectCartInfo: Inspector.getInspectCartInfo,
-  getCompileState: Inspector.getCompileState,
+  getCompileState: Inspector.getCompileState, getHookTexts: Inspector.getHookTexts,
   decodeCart: K.decodeCart, encodeCart: K.encodeCart, b64urlEncode: K.b64urlEncode, b64urlDecode: K.b64urlDecode,
   disassembleHook: K.disassembleHook, buildCFG: K.buildCFG, formatDisassembly: K.formatDisassembly, renderCFGSvg: K.renderCFGSvg,
   compileCartSource: K.compileCartSource,

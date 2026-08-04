@@ -47,7 +47,23 @@ let inspectWorld = null, inspectCartInfo = null, inspectTab = 'Logic', inspectHo
 // survive a *failed* compile (inspectCartInfo keeps showing the
 // last-known-good cart on Assets/Logic while Source shows what you
 // actually typed and its status block shows why it doesn't work yet).
-let sourceText = '', compileState = null, sourceDebounceTimer = null;
+// sourceText holds header fields only (name/author + everything but
+// hooks) — hooks live in hookTexts, one join('\n')'d string per hook
+// name, edited in the Logic tab so the opcode palette always knows
+// exactly which hook + line it's inserting into, instead of having to
+// locate a hook's array inside one big free-form JS-literal blob.
+let sourceText = '', hookTexts = {}, compileState = null, sourceDebounceTimer = null;
+// The last header object that successfully parsed as JS (new Function
+// didn't throw), independent of whether compileCartSource then failed —
+// this is what the opcode palette's global/constant pickers read names
+// from (lastParsedHeader.globalNames/constNames), so a picker can show
+// real names even while a hook elsewhere is mid-edit and not compiling.
+let lastParsedHeader = null;
+// Last known caret position inside #hookSourceInput — stashed on every
+// input/click/keyup/select because a palette button click steals focus
+// away from the textarea first, and some browsers clear selection state
+// on blur, so insertion can't rely on live ta.selectionStart at click time.
+let lastHookCursorPos = 0;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
 // takes whatever comes after the last '#' if there is one, else the
@@ -60,20 +76,30 @@ function extractPayloadFromInput(raw){
   return s;
 }
 
-// formatDisassembly()'s block-labeled output (B0:, B1:, ...) is
-// deliberately assemble()-compatible (see kernel.js), so a decompiled
-// hook pastes straight into compileCartSource() unmodified — that's
-// what makes the Source tab round-trip. name/author go in front of the
-// binary-only cart fields, matching compileCartSource's own reading of
-// them (see kernel.js) — they never round-trip through decodeCart, only
-// through this object and the fragment's own URL envelope.
+// Header-fields-only view of a decoded cart — everything compileCartSource
+// needs except hooks (those live in hookTexts, built by hooksToTexts
+// below, and merged back in at compile time by compileSourceText). name/
+// author go in front of the binary-only cart fields, matching
+// compileCartSource's own reading of them (see kernel.js) — they never
+// round-trip through decodeCart, only through this object and the
+// fragment's own URL envelope.
 function cartToSourceObject(cart, name, author){
   const out = {name: name || '', author: author || ''};
   Object.assign(out, cart);
-  out.hooks = {};
+  delete out.hooks;
+  return out;
+}
+
+// formatDisassembly()'s block-labeled output (B0:, B1:, ...) is
+// deliberately assemble()-compatible (see kernel.js), so a decompiled
+// hook pastes straight into compileCartSource() unmodified — that's what
+// makes each hook's textarea round-trip. One join('\n')'d string per hook
+// name, matching what a <textarea> holds.
+function hooksToTexts(cart){
+  const out = {};
   for(const hookName of HOOK_NAMES){
     const bc = cart.hooks[hookName];
-    out.hooks[hookName] = (bc && bc.length) ? formatDisassembly(bc).split('\n') : [];
+    out[hookName] = (bc && bc.length) ? formatDisassembly(bc) : '';
   }
   return out;
 }
@@ -102,6 +128,7 @@ async function startInspect(rawFragment){
   const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
   inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
   sourceText = JSON.stringify(cartToSourceObject(cart, name, author), null, 2);
+  hookTexts = hooksToTexts(cart);
   document.getElementById('menu').classList.remove('active');
   document.getElementById('gameWrap').classList.remove('active');
   const iw = document.getElementById('inspectWrap');
@@ -318,27 +345,336 @@ function renderInspectEntities(cart){
   ]);
 }
 
+/* ============================================================
+   Opcode palette — a drawer of grouped buttons next to the active
+   hook's textarea. Each button inserts a correctly-formed assembly
+   line at the last-known caret position; some open a small inline
+   picker first, built from the cart's own real data (entity sprite
+   thumbnails, tile thumbnails, the fixed input-bit list, or the
+   header's declared globals/constants), so you never have to guess an
+   operand number.
+
+   Grouped the same way references/opcodes.md and the learn site's VM
+   section group them — same mental model, agent doc / human doc /
+   editor UI all in sync.
+
+   operandKind is a UI-only classification (which picker, if any, a
+   button opens) — never hand-copied operand *counts*: those come
+   straight from K.OPS so this stays correct if kernel.js's operand
+   shapes ever change.
+     null          — no operand (ADD, HALT, ...)
+     'raw'         — operand(s) are just numbers with no cart-data
+                     meaning (LOAD_SELF/STORE_SELF/LOAD_A/LOAD_B/
+                     STORE_A/STORE_B prop indices, PLAYSOUND id, a bare
+                     PUSHI literal) — insert with '0' placeholder(s),
+                     cursor left on the first one to overtype.
+     'addr'        — JMP/JZ/JNZ: a label doesn't exist yet from a
+                     picker's perspective, so insert the mnemonic plus
+                     a trailing space and leave the caret there for the
+                     author to type a label name by hand.
+     'entityType'  — SPAWN's typeId: pick from cart.entityTypes, shown
+                     with each type's real sprite thumbnail.
+     'testbit'     — TESTBIT's bit index: fixed 5-item left/right/up/
+                     down/action list, no cart data needed.
+     'tileId'      — a dedicated "PUSHI (tile id)" entry (GETTILE/
+                     SETTILE/TILE_SURFACE take their tile id off the
+                     *stack*, not as an embedded operand on the
+                     instruction itself — see K.OPS — so the tile
+                     picker attaches to the PUSHI that precedes one of
+                     them instead of to those opcodes directly, keeping
+                     "one button click -> one inserted line" true for
+                     every button in the palette).
+     'globalSlot'  — LOADG/STOREG's slot: pick from the 24 global
+                     slots, named ones shown by name.
+     'globalHandle'— LOADE/STOREE's first operand: same 24-slot picker
+                     as globalSlot (a global slot holding an entity id,
+                     rather than a plain value) — kept as a distinct
+                     label since the *meaning* differs even though the
+                     picker source is identical. The instruction's
+                     second operand (a prop index) always defaults to
+                     '0', same as a 'raw' opcode's placeholder.
+     'constIdx'    — PUSHC's index: pick from the header's declared
+                     constants[], named ones shown by name.
+   ============================================================ */
+const OPCODE_GROUPS = [
+  {label: 'Stack & arithmetic', ops: [
+    {mnem:'PUSHI', operandKind:'raw'},
+    {mnem:'PUSHC', operandKind:'constIdx'},
+    {mnem:'DUP'}, {mnem:'POP'}, {mnem:'SWAP'},
+    {mnem:'ADD'}, {mnem:'SUB'}, {mnem:'MUL'}, {mnem:'DIV'}, {mnem:'MOD'}, {mnem:'NEG'},
+  ]},
+  {label: 'Comparison & logic', ops: [
+    {mnem:'CMPEQ'}, {mnem:'CMPNE'}, {mnem:'CMPLT'}, {mnem:'CMPLE'}, {mnem:'CMPGT'}, {mnem:'CMPGE'},
+    {mnem:'AND'}, {mnem:'OR'}, {mnem:'NOT'},
+  ]},
+  {label: 'Control flow', ops: [
+    {mnem:'JMP', operandKind:'addr'}, {mnem:'JZ', operandKind:'addr'}, {mnem:'JNZ', operandKind:'addr'},
+  ]},
+  {label: 'Entity state', ops: [
+    {mnem:'LOAD_SELF', operandKind:'raw'}, {mnem:'STORE_SELF', operandKind:'raw'},
+    {mnem:'LOAD_A', operandKind:'raw'}, {mnem:'LOAD_B', operandKind:'raw'},
+    {mnem:'STORE_A', operandKind:'raw'}, {mnem:'STORE_B', operandKind:'raw'},
+    {mnem:'LOADE', operandKind:'globalHandle'}, {mnem:'STOREE', operandKind:'globalHandle'},
+  ]},
+  {label: 'Globals', ops: [
+    {mnem:'LOADG', operandKind:'globalSlot'}, {mnem:'STOREG', operandKind:'globalSlot'},
+  ]},
+  {label: 'World queries', ops: [
+    {mnem:'PUSHI', operandKind:'tileId', label:'PUSHI (tile id)'},
+    {mnem:'RAND_RANGE'}, {mnem:'SIN'}, {mnem:'COS'}, {mnem:'ATAN2'}, {mnem:'DIST'},
+    {mnem:'CLAMP_ABS'}, {mnem:'LERP'}, {mnem:'NORM_ANGLE'},
+    {mnem:'GETTILE'}, {mnem:'TILE_SURFACE'}, {mnem:'GET_CHECKPOINT'},
+  ]},
+  {label: 'Entity lifecycle', ops: [
+    {mnem:'SPAWN', operandKind:'entityType'}, {mnem:'KILL_SELF'}, {mnem:'MOVE_SOLID'}, {mnem:'SETTILE'},
+  ]},
+  {label: 'Input', ops: [
+    {mnem:'TESTBIT', operandKind:'testbit'}, {mnem:'LOAD_INPUT'},
+    {mnem:'LOAD_POINTER_X'}, {mnem:'LOAD_POINTER_Y'}, {mnem:'LOAD_POINTER_DOWN'},
+  ]},
+  {label: 'Drawing & control', ops: [
+    {mnem:'DRAW_LINE'}, {mnem:'PLAYSOUND', operandKind:'raw'}, {mnem:'HALT'},
+  ]},
+];
+const TESTBIT_NAMES = [[0,'left'],[1,'right'],[2,'up'],[3,'down'],[4,'action']];
+
+function renderOpcodePalette(){
+  const slot = document.getElementById('opcodePaletteSlot');
+  if(!slot) return;
+  slot.innerHTML = '<div class="opcode-palette">' + OPCODE_GROUPS.map(g => `
+    <div class="opcode-group">
+      <p class="opcode-group-label">${esc(g.label)}</p>
+      <div class="opcode-btns">${g.ops.map(op => `
+        <button type="button" class="opcode-btn" data-mnem="${op.mnem}" data-operand-kind="${op.operandKind||''}">${esc(op.label||op.mnem)}</button>
+      `).join('')}</div>
+    </div>
+  `).join('') + '</div>';
+  slot.querySelectorAll('.opcode-btn').forEach(btn => btn.addEventListener('click', () => {
+    onOpcodeButtonClick(btn.dataset.mnem, btn.dataset.operandKind || null);
+  }));
+}
+
+// Splits the active hook's text at the last-known caret position, snaps
+// to line boundaries (a palette insert always lands on its own new line,
+// never mid-line), matches the current line's leading whitespace, updates
+// hookTexts + the live textarea, restores focus/caret just after the new
+// line, closes any open picker, and fires the same validation pair a real
+// edit would (setting .value directly doesn't dispatch an input event).
+function insertOpcodeLine(mnem, operandTokens){
+  const text = hookTexts[inspectHookTab] || '';
+  const pos = Math.max(0, Math.min(lastHookCursorPos, text.length));
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
+  const nlAfter = text.indexOf('\n', pos);
+  const lineEnd = nlAfter === -1 ? text.length : nlAfter;
+  const indentMatch = text.slice(lineStart, lineEnd).match(/^[ \t]*/);
+  const indent = indentMatch ? indentMatch[0] : '';
+  const opText = (operandTokens && operandTokens.length) ? mnem + ' ' + operandTokens.join(' ') : mnem;
+  const newLine = indent + opText;
+  const before = text.slice(0, lineEnd);
+  const after = text.slice(lineEnd);
+  const newText = before + (before.length ? '\n' : '') + newLine + after;
+  const insertedAt = before.length + (before.length ? 1 : 0);
+  hookTexts[inspectHookTab] = newText;
+  const ta = document.getElementById('hookSourceInput');
+  const newCursorPos = insertedAt + newLine.length;
+  if(ta){
+    ta.value = newText;
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = newCursorPos;
+  }
+  lastHookCursorPos = newCursorPos;
+  const pickerSlot = document.getElementById('operandPickerSlot');
+  if(pickerSlot) pickerSlot.innerHTML = '';
+  onHookTextChanged();
+}
+
+function onOpcodeButtonClick(mnem, operandKind){
+  if(!operandKind){ insertOpcodeLine(mnem, []); return; }
+  if(operandKind === 'addr'){ insertOpcodeLine(mnem, ['']); return; }
+  if(operandKind === 'raw'){
+    const count = (K.OPS[K.OPINDEX[mnem]][1] || []).length || 1;
+    insertOpcodeLine(mnem, new Array(count).fill('0'));
+    return;
+  }
+  const pickerSlot = document.getElementById('operandPickerSlot');
+  if(!pickerSlot) return;
+  pickerSlot.innerHTML = operandPickerHtml(operandKind);
+  wireOperandPicker(pickerSlot, mnem, operandKind);
+}
+
+// Named vs. numeric-fallback row list for the global/constant pickers —
+// slot/idx -> name comes only from the *header text's own* constNames/
+// globalNames (lastParsedHeader), since a decoded fragment never carries
+// them (not part of the binary format at all — see binary-format.md).
+// Always has *something* to show either way: a named row inserts the
+// name as the operand token (matching how a hand-authored cart writes
+// it — assemble() resolves it via the exact same header object at
+// compile time), an unnamed row inserts the bare numeric slot, which is
+// always a valid operand.
+function nameTableFor(kind){
+  const reverse = {};
+  const names = (kind === 'constIdx')
+    ? ((lastParsedHeader && lastParsedHeader.constNames) || {})
+    : ((lastParsedHeader && lastParsedHeader.globalNames) || {});
+  for(const name in names) reverse[names[name]] = name;
+  return reverse;
+}
+
+function operandPickerHtml(operandKind){
+  if(operandKind === 'entityType'){
+    const cart = inspectCartInfo.cart;
+    if(!cart.entityTypes.length) return '<div class="operand-picker"><p class="inspect-empty">No entity types in this cart yet.</p></div>';
+    return `<div class="operand-picker"><div class="operand-picker-grid">${cart.entityTypes.map((t,i) => `
+      <div class="operand-picker-item" data-value="${i}" tabindex="0"><canvas id="opPickEntity${i}" width="${1}" height="${1}"></canvas><div>#${i}</div></div>
+    `).join('')}</div></div>`;
+  }
+  if(operandKind === 'tileId'){
+    const cart = inspectCartInfo.cart;
+    if(!cart.tiles.length) return '<div class="operand-picker"><p class="inspect-empty">No tiles in this cart yet.</p></div>';
+    return `<div class="operand-picker"><div class="operand-picker-grid">${cart.tiles.map((t,i) => `
+      <div class="operand-picker-item" data-value="${i}" tabindex="0"><canvas id="opPickTile${i}" width="${1}" height="${1}"></canvas><div>tile ${i}</div></div>
+    `).join('')}</div></div>`;
+  }
+  if(operandKind === 'testbit'){
+    return `<div class="operand-picker"><div class="operand-picker-list">${TESTBIT_NAMES.map(([bit,name]) => `
+      <button type="button" class="operand-picker-row" data-value="${bit}">${bit} — ${esc(name)}</button>
+    `).join('')}</div></div>`;
+  }
+  if(operandKind === 'globalSlot' || operandKind === 'globalHandle'){
+    const names = nameTableFor('globalSlot');
+    const rows = [];
+    for(let slot = 0; slot < 24; slot++){
+      const name = names[slot];
+      rows.push(`<button type="button" class="operand-picker-row" data-value="${name || slot}">${
+        name ? `<span class="op-slot-name">${esc(name)}</span> (slot ${slot})` : `slot ${slot} <span class="op-slot-unnamed">(unnamed)</span>`
+      }</button>`);
+    }
+    return `<div class="operand-picker"><div class="operand-picker-list">${rows.join('')}</div></div>`;
+  }
+  if(operandKind === 'constIdx'){
+    const names = nameTableFor('constIdx');
+    const count = (lastParsedHeader && Array.isArray(lastParsedHeader.constants)) ? lastParsedHeader.constants.length : inspectCartInfo.cart.constants.length;
+    if(!count) return '<div class="operand-picker"><p class="inspect-empty">No constants declared in the Source tab yet.</p></div>';
+    const rows = [];
+    for(let idx = 0; idx < count; idx++){
+      const name = names[idx];
+      const value = (lastParsedHeader && Array.isArray(lastParsedHeader.constants)) ? lastParsedHeader.constants[idx] : inspectCartInfo.cart.constants[idx];
+      rows.push(`<button type="button" class="operand-picker-row" data-value="${name || idx}">${
+        name ? `<span class="op-slot-name">${esc(name)}</span> (idx ${idx}, ${value})` : `idx ${idx} <span class="op-slot-unnamed">(unnamed)</span>, ${value}`
+      }</button>`);
+    }
+    return `<div class="operand-picker"><div class="operand-picker-list">${rows.join('')}</div></div>`;
+  }
+  return '';
+}
+
+function wireOperandPicker(pickerSlot, mnem, operandKind){
+  if(operandKind === 'entityType'){
+    const cart = inspectCartInfo.cart;
+    cart.entityTypes.forEach((t,i) => {
+      const src = inspectWorld.spriteCanvases[t.assetIndex];
+      const c = document.getElementById('opPickEntity'+i);
+      if(!c || !src) return;
+      c.width = src.width; c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+    });
+    pickerSlot.querySelectorAll('.operand-picker-item').forEach(el => el.addEventListener('click', () => {
+      insertOpcodeLine(mnem, [el.dataset.value]);
+    }));
+    return;
+  }
+  if(operandKind === 'tileId'){
+    const cart = inspectCartInfo.cart;
+    cart.tiles.forEach((t,i) => {
+      const src = inspectWorld.tileCanvases[i];
+      const c = document.getElementById('opPickTile'+i);
+      if(!c || !src) return;
+      c.width = src.width; c.height = src.height;
+      c.getContext('2d').drawImage(src, 0, 0);
+    });
+    pickerSlot.querySelectorAll('.operand-picker-item').forEach(el => el.addEventListener('click', () => {
+      insertOpcodeLine(mnem, [el.dataset.value]);
+    }));
+    return;
+  }
+  // testbit / globalSlot / globalHandle / constIdx all render as
+  // .operand-picker-row buttons carrying the operand token directly.
+  pickerSlot.querySelectorAll('.operand-picker-row').forEach(el => el.addEventListener('click', () => {
+    const operands = (operandKind === 'globalHandle') ? [el.dataset.value, '0'] : [el.dataset.value];
+    insertOpcodeLine(mnem, operands);
+  }));
+}
+
+// Validates only the active hook's own text against kernel.js's real
+// assembler — cheap (a linear scan of one hook's already-short line list),
+// so it runs synchronously on every keystroke, unlike the debounced full
+// recompile below it which encodes/compresses the whole fragment. Reports
+// only this hook's own verdict — never anything about the header text or
+// any other hook — so it never contradicts or duplicates the Source tab's
+// own ✓/✕ badge, which stays the one place "does the whole cart compile"
+// is answered.
+function validateActiveHook(){
+  const slot = document.getElementById('hookErrorSlot');
+  if(!slot) return;
+  const sym = {
+    constants: (lastParsedHeader && lastParsedHeader.constNames) || {},
+    globals: (lastParsedHeader && lastParsedHeader.globalNames) || {},
+  };
+  try{
+    K.assemble((hookTexts[inspectHookTab] || '').split('\n'), sym);
+    slot.innerHTML = '';
+  } catch(err){
+    slot.innerHTML = `<p class="compile-error">${esc(err.message)}</p>`;
+  }
+}
+
+// Fires on every edit to the active hook's textarea (typed or inserted via
+// the opcode palette): the fast, un-debounced per-hook check above, plus
+// the same debounced full-cart recompile the header textarea already
+// triggers on its own input — both read/write disjoint state and DOM, so
+// they can't race each other.
+function onHookTextChanged(){
+  validateActiveHook();
+  clearTimeout(sourceDebounceTimer);
+  sourceDebounceTimer = setTimeout(compileSourceText, 400);
+}
+
 function renderInspectHooks(body, cart){
-  const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
+  const liveHooks = HOOK_NAMES.filter(n => (hookTexts[n] || '').trim().length > 0);
   if(!liveHooks.includes(inspectHookTab)) inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
   let html = '<div class="hook-tabs">' + HOOK_NAMES.map(n => {
-    const len = (cart.hooks[n]||[]).length;
-    return `<button class="hook-tab${n===inspectHookTab?' active':''}${len===0?' empty':''}" data-hook="${n}">${n} (${len}B)</button>`;
+    const bcLen = (cart.hooks[n]||[]).length;
+    const hasText = (hookTexts[n] || '').trim().length > 0;
+    return `<button class="hook-tab${n===inspectHookTab?' active':''}${hasText?'':' empty'}" data-hook="${n}">${n} (${bcLen}B)</button>`;
   }).join('') + '</div>';
+  html += '<div class="inspect-section-title">Insert opcode</div>';
+  html += '<div id="opcodePaletteSlot"></div>';
+  html += '<div id="operandPickerSlot"></div>';
+  html += '<div class="inspect-section-title">Bytecode source</div>';
+  html += `<textarea id="hookSourceInput" class="debug-textarea hook-textarea" spellcheck="false"
+    autocapitalize="off" autocomplete="off">${esc(hookTexts[inspectHookTab] || '')}</textarea>`;
+  html += '<div id="hookErrorSlot"></div>';
   const bc = cart.hooks[inspectHookTab] || new Uint8Array(0);
-  if(bc.length === 0){
-    html += '<p class="inspect-empty">(empty hook)</p>';
-  } else {
-    html += '<div class="inspect-section-title">Disassembly</div>';
-    html += `<pre class="disasm">${esc(formatDisassembly(bc))}</pre>`;
-    html += '<div class="inspect-section-title">Control-flow graph</div>';
-    html += `<div class="cfg-scroll">${renderCFGSvg(bc)}</div>`;
-  }
+  html += '<div class="inspect-section-title">Control-flow graph</div>';
+  html += bc.length === 0
+    ? '<p class="inspect-empty">(nothing compiled for this hook yet)</p>'
+    : `<div class="cfg-scroll">${renderCFGSvg(bc)}</div>`;
   body.innerHTML = html;
   body.querySelectorAll('.hook-tab').forEach(btn => btn.addEventListener('click', () => {
     inspectHookTab = btn.dataset.hook;
     renderInspectHooks(body, cart);
   }));
+  renderOpcodePalette();
+  const ta = document.getElementById('hookSourceInput');
+  const trackCursor = () => { lastHookCursorPos = ta.selectionStart; };
+  trackCursor();
+  ta.addEventListener('input', () => {
+    hookTexts[inspectHookTab] = ta.value;
+    trackCursor();
+    onHookTextChanged();
+  });
+  ['click','keyup','select'].forEach(evt => ta.addEventListener(evt, trackCursor));
+  validateActiveHook();
 }
 
 // Logic tab: header/camera/input overview, map, entity types, hooks — in
@@ -423,8 +759,8 @@ function renderInspectSourceTab(body){
     <div class="inspect-section-title">Source</div>
     <p class="inspect-help">Plain JS object — header fields as values, plus <code>name</code>/
     <code>author</code> (unencoded text in the URL fragment itself — see
-    <a href="spec/skill/references/binary-format.md">binary-format.md</a> — never part of the binary cart), each hook as an
-    array of assembly-source lines. Recompiles automatically as you edit; status above updates live.</p>
+    <a href="spec/skill/references/binary-format.md">binary-format.md</a> — never part of the binary cart).
+    Hooks are edited on the Logic tab, next to an opcode palette. Recompiles automatically as you edit; status above updates live.</p>
     <textarea id="debugSourceInput" class="debug-textarea" spellcheck="false"
       autocapitalize="off" autocomplete="off">${esc(sourceText)}</textarea>
   `;
@@ -455,6 +791,16 @@ async function compileSourceText(){
     renderCompileStatusSlot();
     return;
   }
+  // Header text parsed cleanly — stash it for the opcode palette's
+  // global/constant pickers to read names from, regardless of whether
+  // compileCartSource below succeeds (a hook can be broken while the
+  // header's own constNames/globalNames are still perfectly good).
+  lastParsedHeader = parsed;
+  // Merge the per-hook textareas (edited in the Logic tab) back into the
+  // header object right before compiling — this is the one place the
+  // split-apart header/hooks representation gets put back together.
+  parsed.hooks = {};
+  for(const hookName of HOOK_NAMES) parsed.hooks[hookName] = (hookTexts[hookName] || '').split('\n');
   try{
     const {cart, bytes, fragment, name, author} = await compileCartSource(parsed);
     compileState = {ok: true, bytes, fragment};
@@ -551,15 +897,20 @@ async function startNewCart(){
 // on the player side).
 function closeInspector(){
   if(inspectWorld){ disposeGLTextures(inspectWorld); inspectWorld = null; inspectCartInfo = null; }
-  sourceText = ''; compileState = null;
+  sourceText = ''; hookTexts = {}; lastParsedHeader = null; compileState = null;
   clearTimeout(sourceDebounceTimer);
   document.getElementById('inspectWrap').classList.remove('active');
 }
 function getInspectWorld(){ return inspectWorld; }
 function getInspectCartInfo(){ return inspectCartInfo; }
 function getCompileState(){ return compileState; }
+// Test-introspection only (see test/smoke.js) — the opcode palette
+// writes hookTexts directly rather than always going through a DOM
+// input event, so tests need a way to read it back without scraping
+// the textarea by hand.
+function getHookTexts(){ return hookTexts; }
 
 export {
   startInspect, startNewCart, closeInspector, extractPayloadFromInput,
-  getInspectWorld, getInspectCartInfo, getCompileState,
+  getInspectWorld, getInspectCartInfo, getCompileState, getHookTexts,
 };
