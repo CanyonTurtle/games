@@ -36,6 +36,7 @@ const K = window.UrlcadeKernel;
 const {
   formatDisassembly, renderCFGSvg, compileCartSource, decodeCartUrl,
   generatePalette, SHAPE_ELLIPSE, HOOK_NAMES, decodeCart, decodePayloadToBytes,
+  BUTTON_BITS,
 } = K;
 import { World, disposeGLTextures } from './runtime.js';
 
@@ -127,8 +128,13 @@ async function startInspect(rawFragment){
   inspectTab = 'Logic';
   const liveHooks = HOOK_NAMES.filter(n => cart.hooks[n] && cart.hooks[n].length > 0);
   inspectHookTab = liveHooks[0] || HOOK_NAMES[0];
-  sourceText = JSON.stringify(cartToSourceObject(cart, name, author), null, 2);
+  const headerObj = cartToSourceObject(cart, name, author);
+  sourceText = JSON.stringify(headerObj, null, 2);
   hookTexts = hooksToTexts(cart);
+  // Seeded synchronously (not left to await compileSourceText() below) so
+  // the very first Logic-tab render — which happens before that await
+  // resolves — always has a real header to read from, not null.
+  lastParsedHeader = headerObj;
   document.getElementById('menu').classList.remove('active');
   document.getElementById('gameWrap').classList.remove('active');
   const iw = document.getElementById('inspectWrap');
@@ -179,30 +185,178 @@ function table(rows){
     `<${i===0?'th':'td'}>${c}</${i===0?'th':'td'}>`).join('') + '</tr>').join('') + '</table>';
 }
 
+// Editable header/camera/input/backdrop/palette fields — everything else
+// on the Logic tab (map, entities, hooks) stays read-only display, driven
+// from the last *compiled* cart. These fields instead read/write
+// lastParsedHeader directly (falling back to the compiled cart only
+// before any edit has happened this session), the same live object the
+// Source tab's textarea round-trips through — so a hand-typed edit in
+// Source and a form edit here can never show conflicting values, and
+// every edit here goes through the exact same debounced recompile path.
+//
+// entityTypes/sprites/tiles, mapGenerator's config block, and hudSpec
+// stay out of scope here — dedicated editors for those are later phases.
+// formatVersion and mapGenerator stay read-only display: the kernel only
+// ever decodes formatVersion 3, and switching mapGenerator needs a whole
+// new valid config sub-block generated, which is that future editor's
+// job, not a plain scalar edit.
+
+function setHeaderPath(path, value){
+  let node = lastParsedHeader;
+  for(let i=0;i<path.length-1;i++) node = node[path[i]];
+  node[path[path.length-1]] = value;
+}
+// Reserializes the whole header back into sourceText (a full wholesale
+// re-render, not a targeted text patch — this component owns the entire
+// object already, and it's the exact same serialization startInspect
+// itself does on every decode) and reuses the Source textarea's own
+// debounce/recompile timer. Silently drops any hand-typed comments or
+// unusual formatting the Source textarea had — same "sourceText is
+// always machine round-tripped" tradeoff the opcode palette already
+// makes for hook text; the Overview section says so once, inline.
+function scheduleHeaderRecompile(){
+  sourceText = JSON.stringify(lastParsedHeader, null, 2);
+  const ta = document.getElementById('debugSourceInput');
+  if(ta) ta.value = sourceText;
+  clearTimeout(sourceDebounceTimer);
+  sourceDebounceTimer = setTimeout(compileSourceText, 400);
+}
+// Covers every plain number/checkbox/select field: reads the control's
+// current value, writes it to lastParsedHeader at `path` (an array, e.g.
+// ['camera','followGlobal']), runs an optional onAfter (a sibling binary
+// readout, etc.), then schedules the recompile.
+function bindHeaderField(el, path, {parse = (v => +v), onAfter} = {}){
+  el.addEventListener('input', () => {
+    const raw = el.type === 'checkbox' ? el.checked : el.value;
+    setHeaderPath(path, parse(raw));
+    if(onAfter) onAfter();
+    scheduleHeaderRecompile();
+  });
+}
+// inputActiveButtons/inputButtonLabels don't fit bindHeaderField's shape:
+// toggling a bit needs to OR/AND it into the bitmask *and* show/hide a
+// sibling label <input> *and* delete the label key on uncheck (encodeCart
+// only ever writes labels for currently-active bits — leaving a stale
+// object key would resurface old text if the box is re-checked later).
+function wireButtonCheckbox(checkboxEl, bit){
+  checkboxEl.addEventListener('change', () => {
+    const h = lastParsedHeader;
+    h.inputActiveButtons = checkboxEl.checked ? (h.inputActiveButtons | bit) : (h.inputActiveButtons & ~bit);
+    const labelRow = document.getElementById('buttonLabelRow'+bit);
+    if(checkboxEl.checked){
+      if(labelRow) labelRow.style.display = '';
+      if(!(bit in h.inputButtonLabels)) h.inputButtonLabels[bit] = '';
+    } else {
+      if(labelRow) labelRow.style.display = 'none';
+      delete h.inputButtonLabels[bit];
+    }
+    scheduleHeaderRecompile();
+  });
+}
+
+// A picker variant of renderPaletteStrip (~line 236) — clickable swatches
+// with a selected-index highlight, for fields that are literally a
+// palette index (backdropFillIndex/backdropGroundIndex) rather than a
+// number an author would rather type.
+function renderIndexPicker(colors, selectedIndex, fieldName){
+  return '<div class="pal-strip" style="grid-template-columns:repeat(' + colors.length + ',40px)">' + colors.map((c,i) => `
+    <div class="pal-swatch pickable${i===selectedIndex?' selected':''}" style="background:${c}"
+      title="${i}: ${esc(c)}" data-index="${i}" data-field="${fieldName}" tabindex="0" role="button"><span>${i}</span></div>
+  `).join('') + '</div>';
+}
+function wireIndexPickerSlot(slotId){
+  const slot = document.getElementById(slotId);
+  if(!slot) return;
+  slot.querySelectorAll('.pal-swatch.pickable').forEach(sw => sw.addEventListener('click', () => {
+    lastParsedHeader[sw.dataset.field] = +sw.dataset.index;
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  }));
+}
+function refreshBackdropPickers(){
+  const pal = generatePalette(lastParsedHeader);
+  const fillSlot = document.getElementById('backdropFillPickerSlot');
+  const groundSlot = document.getElementById('backdropGroundPickerSlot');
+  if(fillSlot) fillSlot.innerHTML = renderIndexPicker(pal, lastParsedHeader.backdropFillIndex, 'backdropFillIndex');
+  if(groundSlot) groundSlot.innerHTML = renderIndexPicker(pal, lastParsedHeader.backdropGroundIndex, 'backdropGroundIndex');
+  wireIndexPickerSlot('backdropFillPickerSlot');
+  wireIndexPickerSlot('backdropGroundPickerSlot');
+}
+
+// paletteParams[1] is a real byte slot (the array must stay 8 long) but
+// generatePalette() never reads it — see cart-object.md's Palette
+// section — so its slider is disabled and labeled, not just silently
+// inert (an author would otherwise spend time tuning a control that
+// visibly does nothing and file it as a bug).
+const PALETTE_SLIDER_LABELS = ['Base hue','(unused — reserved)','Sat min','Sat max','Light min','Light max','Entity A hue hint','Entity B hue hint'];
+function renderPaletteEditorSlot(){
+  const slot = document.getElementById('paletteEditorSlot');
+  if(!slot) return;
+  const h = lastParsedHeader;
+  const pal = generatePalette(h);
+  slot.innerHTML = `
+    <div class="inspect-section-title">Palette</div>
+    <div class="pal-slider-rows">${h.paletteParams.map((v,i) => `
+      <div class="pal-slider-row${i===1?' pal-slider-unused':''}">
+        <label for="palSlider${i}">${esc(PALETTE_SLIDER_LABELS[i])}</label>
+        <input type="range" id="palSlider${i}" min="0" max="255" value="${v}" data-pp-index="${i}"${i===1?' disabled':''}>
+        <span class="pal-slider-readout" id="palReadout${i}">${v}</span>
+      </div>
+    `).join('')}</div>
+    <div id="paletteLivePreviewSlot">${renderPaletteStrip(pal, 0)}</div>
+    <div class="inspect-section-title">Backdrop</div>
+    <p class="inspect-help">Only used when map generator is 0 — a generated map draws instead and these are ignored.</p>
+    <div class="header-field-row"><label>Fill color</label></div>
+    <div id="backdropFillPickerSlot">${renderIndexPicker(pal, h.backdropFillIndex, 'backdropFillIndex')}</div>
+    <div class="header-field-row"><label>Ground height</label>
+      <input type="number" id="field-backdropGroundHeight" min="0" max="255" value="${h.backdropGroundHeight}"></div>
+    <div class="header-field-row"><label>Ground color</label></div>
+    <div id="backdropGroundPickerSlot">${renderIndexPicker(pal, h.backdropGroundIndex, 'backdropGroundIndex')}</div>
+  `;
+  slot.querySelectorAll('input[type=range][data-pp-index]').forEach(rng => rng.addEventListener('input', () => {
+    const idx = +rng.dataset.ppIndex;
+    lastParsedHeader.paletteParams[idx] = +rng.value;
+    document.getElementById('palReadout'+idx).textContent = rng.value;
+    const livePal = generatePalette(lastParsedHeader);
+    document.getElementById('paletteLivePreviewSlot').innerHTML = renderPaletteStrip(livePal, 0);
+    refreshBackdropPickers();
+    scheduleHeaderRecompile();
+  }));
+  wireIndexPickerSlot('backdropFillPickerSlot');
+  wireIndexPickerSlot('backdropGroundPickerSlot');
+  bindHeaderField(document.getElementById('field-backdropGroundHeight'), ['backdropGroundHeight']);
+}
+
 function renderInspectOverview(cart){
+  const h = lastParsedHeader || cart;
   let html = '';
-  html += '<div class="inspect-section-title">Header</div>' + table([
-    ['field','value'],
-    ['format version', cart.formatVersion],
-    ['cart type', cart.cartType + ' <span style="color:var(--ink-dim)">(advisory label only, never a runtime dispatch key)</span>'],
-    ['screen', `${cart.screenW} × ${cart.screenH}`],
-    ['palette params', esc(cart.paletteParams.join(', '))],
-    ['rng seed', cart.rngSeed],
-    ['mode flags', '0b' + cart.modeFlags.toString(2).padStart(8,'0')],
-    ['map generator', cart.mapGenerator + ' — ' + (MAP_GEN_NAMES[cart.mapGenerator] || 'unknown')],
-  ]);
-  html += '<div class="inspect-section-title">Camera</div>' + table([
-    ['field','value'],
-    ['follow global', cart.camera.followGlobal===255 ? '255 (none/static)' : cart.camera.followGlobal],
-    ['clamp x', `${cart.camera.clampMinX} – ${cart.camera.clampMaxX}`],
-    ['clamp y', `${cart.camera.clampMinY} – ${cart.camera.clampMaxY}`],
-  ]);
-  html += '<div class="inspect-section-title">Input</div>' + table([
-    ['field','value'],
-    ['active buttons', '0b' + cart.inputActiveButtons.toString(2).padStart(5,'0') + ' — ' +
-      (Object.entries(cart.inputButtonLabels).map(([bit,label])=>`${bit}=${esc(label)}`).join(', ') || '(none)')],
-    ['touch template', cart.inputTouchTemplate + ' — ' + (TOUCH_TEMPLATE_NAMES[cart.inputTouchTemplate]||'unknown')],
-  ]);
+  html += '<div class="inspect-section-title">Header</div>';
+  html += '<p class="inspect-help">Editing these fields rewrites the Source tab\'s JSON — any comments or custom formatting there will be replaced.</p>';
+  html += `<div class="header-field-row"><label>Format version</label><span>${h.formatVersion} <span class="field-hint">(fixed — only version this kernel decodes)</span></span></div>`;
+  html += `<div class="header-field-row"><label>Cart type</label><input type="number" id="field-cartType" min="0" max="255" value="${h.cartType}"><span class="field-hint">advisory label only, never a runtime dispatch key</span></div>`;
+  html += `<div class="header-field-row"><label>Screen</label><input type="number" id="field-screenW" min="0" max="65535" value="${h.screenW}"> × <input type="number" id="field-screenH" min="0" max="65535" value="${h.screenH}"></div>`;
+  html += `<div class="header-field-row"><label>RNG seed</label><input type="number" id="field-rngSeed" min="0" max="255" value="${h.rngSeed}"></div>`;
+  html += `<div class="header-field-row"><label>Mode flags</label><input type="number" id="field-modeFlags" min="0" max="255" value="${h.modeFlags}"><span class="field-hint" id="modeFlagsBinary">0b${h.modeFlags.toString(2).padStart(8,'0')}</span></div>`;
+  html += `<div class="header-field-row"><label>Map generator</label><span>${h.mapGenerator} — ${MAP_GEN_NAMES[h.mapGenerator] || 'unknown'} <span class="field-hint">(read-only — switching generators needs a full config block, a future editor)</span></span></div>`;
+  html += '<div id="paletteEditorSlot"></div>';
+
+  html += '<div class="inspect-section-title">Camera</div>';
+  html += `<div class="header-field-row"><label>Follow global</label><input type="number" id="field-camFollow" min="0" max="255" value="${h.camera.followGlobal}"><span class="field-hint">255 = none/static</span></div>`;
+  html += `<div class="header-field-row"><label>Clamp X</label><input type="number" id="field-camClampMinX" min="0" max="65535" value="${h.camera.clampMinX}"> – <input type="number" id="field-camClampMaxX" min="0" max="65535" value="${h.camera.clampMaxX}"></div>`;
+  html += `<div class="header-field-row"><label>Clamp Y</label><input type="number" id="field-camClampMinY" min="0" max="65535" value="${h.camera.clampMinY}"> – <input type="number" id="field-camClampMaxY" min="0" max="65535" value="${h.camera.clampMaxY}"></div>`;
+
+  html += '<div class="inspect-section-title">Input</div>';
+  html += '<div class="input-buttons-grid">' + BUTTON_BITS.map((bit,i) => `
+    <label class="input-button-check"><input type="checkbox" id="field-btn${bit}" ${(h.inputActiveButtons & bit) ? 'checked' : ''}> ${esc(TESTBIT_NAMES[i][1])} (bit ${bit})</label>
+    <div class="header-field-row" id="buttonLabelRow${bit}" style="${(h.inputActiveButtons & bit) ? '' : 'display:none'}">
+      <label>Label</label><input type="text" id="field-btnLabel${bit}" value="${esc(h.inputButtonLabels[bit] || '')}">
+    </div>
+  `).join('') + '</div>';
+  html += `<div class="header-field-row"><label>Touch template</label><select id="field-touchTemplate">${
+    Object.entries(TOUCH_TEMPLATE_NAMES).map(([v,name]) => `<option value="${v}"${+v===h.inputTouchTemplate?' selected':''}>${v} — ${esc(name)}</option>`).join('')
+  }</select></div>`;
+  html += `<div class="header-field-row"><label>Wants pointer</label><input type="checkbox" id="field-wantsPointer" ${h.inputWantsPointer?'checked':''}></div>`;
+
   if(Object.keys(cart.tileSurfaceOverrides).length){
     html += '<div class="inspect-section-title">Tile surface overrides</div>' + table([
       ['tile id','surface id'],
@@ -224,6 +378,28 @@ function renderInspectOverview(cart){
     ...cart.constants.map((v,i) => [i, Number.isInteger(v) ? v : v.toFixed(4)]),
   ]);
   return html;
+}
+
+function wireInspectOverview(){
+  bindHeaderField(document.getElementById('field-cartType'), ['cartType']);
+  bindHeaderField(document.getElementById('field-screenW'), ['screenW']);
+  bindHeaderField(document.getElementById('field-screenH'), ['screenH']);
+  renderPaletteEditorSlot();
+  bindHeaderField(document.getElementById('field-rngSeed'), ['rngSeed']);
+  bindHeaderField(document.getElementById('field-modeFlags'), ['modeFlags'], {onAfter: () => {
+    document.getElementById('modeFlagsBinary').textContent = '0b' + lastParsedHeader.modeFlags.toString(2).padStart(8,'0');
+  }});
+  bindHeaderField(document.getElementById('field-camFollow'), ['camera','followGlobal']);
+  bindHeaderField(document.getElementById('field-camClampMinX'), ['camera','clampMinX']);
+  bindHeaderField(document.getElementById('field-camClampMaxX'), ['camera','clampMaxX']);
+  bindHeaderField(document.getElementById('field-camClampMinY'), ['camera','clampMinY']);
+  bindHeaderField(document.getElementById('field-camClampMaxY'), ['camera','clampMaxY']);
+  BUTTON_BITS.forEach(bit => {
+    wireButtonCheckbox(document.getElementById('field-btn'+bit), bit);
+    bindHeaderField(document.getElementById('field-btnLabel'+bit), ['inputButtonLabels', bit], {parse: v => v});
+  });
+  bindHeaderField(document.getElementById('field-touchTemplate'), ['inputTouchTemplate']);
+  bindHeaderField(document.getElementById('field-wantsPointer'), ['inputWantsPointer'], {parse: v => !!v});
 }
 
 // A dense 8-wide swatch grid, not a card list — see index.html's .pal-*
@@ -706,6 +882,7 @@ function renderInspectLogic(body, cart){
   html += renderInspectEntities(cart);
   html += '<div class="inspect-section-title">Hooks</div><div id="hooksSlot"></div>';
   body.innerHTML = html;
+  wireInspectOverview();
   renderInspectHooks(document.getElementById('hooksSlot'), cart);
 }
 
