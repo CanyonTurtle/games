@@ -2755,7 +2755,22 @@ Reported directly: on mobile, tables and "the color palette" were wide enough to
 
 Verified via Playwright at a real mobile viewport (375×812, iPhone-sized) — `document.documentElement.scrollWidth === clientWidth` (no horizontal overflow at all) checked on the Assets tab, the Logic tab's overview, the Logic tab scrolled down to its tables, and with the color-picker popover open — plus screenshots at each of those checkpoints to confirm visually, not just numerically. Also re-confirmed no regression at desktop width (900px) in both themes.
 
-## 62. Open questions
+## 62. An interactive sprite shape editor — pick a shape, drag to move, drag a corner to resize
+
+Third visual-editor phase, matching the original ask word for word: "picking preset shapes in a layer and selecting a layer and resizing the shapes with the cursor." Scoped to kind:1 (shape-list) sprites only — raw-pixel sprites get a "raw-pixel editing is a future phase" message instead; creating brand-new sprites and entity-type CRUD stay separate, later phases.
+
+**Reused rather than reimplemented: `World.buildBitmap()`.** The editor's canvas doesn't rasterize shapes itself — every redraw calls `inspectWorld.buildBitmap({kind:1, w, h, shapes}, true)` (an *instance* method, callable against any hypothetical `{kind,w,h,shapes}` object, not just ones already in `cart.sprites`) and blits the result. That's the exact same `renderShapeList` + palette-resolution path the real runtime uses, so a drag can never show something the compiled cart wouldn't actually produce — no second rendering implementation to keep in sync with the first. Move/resize math normalizes both shape kinds (ellipse's `cx/cy/rx/ry`, rect's `x/y/w/h`) to one bounding-box shape (`getShapeBox`/`setShapeBox`) so the drag handlers themselves never branch on shape type.
+
+**Two real bugs found while building this, both fixed as part of the same round, not left for later:**
+
+1. `encodeCart`'s shape-coordinate write pre-masked with `& 0xFF` before calling `ByteWriter.u8()` — the exact out-of-range guard §41 added for `paletteParams` never got a chance to fire for shape geometry, so a shape dragged past the 1/8px format's 31.875px ceiling would've silently wrapped to a small wrong value with no error anywhere, the identical failure shape §41 fixed for a different field. Dropped the mask; the editor also clamps every geometry value client-side regardless (`clampShapeUnit`), so the guard is a backstop, not something a normal drag would ever actually trip.
+2. **A closure-staleness bug caught by the smoke suite, not by inspection.** `wireShapeListPanel`'s reorder/delete button handlers captured `const sprite = lastParsedHeader.sprites[spriteIndex]` once, outside the click listeners — fine for a same-tick call, wrong here, because `lastParsedHeader` is wholesale-*replaced* (not mutated) on every successful debounced recompile. Click a reorder button more than ~400ms after the sprite last changed, and the closure's `sprite` was already pointing at a detached, orphaned object; the swap happened on a copy nothing else could see, and the visible array order never moved. First three smoke checks (select, move-drag, resize-drag) passed because they all touch the live object within one recompile window; reorder/delete only started failing once enough `waitForTimeout`s had let a recompile land in between — exactly the gap a human clicking at a normal pace would also hit. Fixed by re-reading `lastParsedHeader.sprites[spriteIndex]` fresh inside each handler instead of closing over it — the same discipline the move/resize drag handlers already followed (deliberately, per their own comment) for the identical reason. Left as a pointed comment on `wireShapeListPanel` since this exact mistake is very easy to reintroduce the next time a handler gets added here.
+
+**A third, latent issue fixed pre-emptively rather than after a bug report**: the sprite editor is the first Assets-tab control that can trigger a recompile *while Assets stays the visible tab* — every other editable field lives on Logic/Source, tabs Assets was never shown alongside. Every recompile does `inspectWorld = new World(cart)`, which orphans the other (kind:0/tile) canvases already appended into the page from the previous `inspectWorld` instance. Invisible today only because none of this round's edits change any *other* sprite's or tile's actual pixels — but the underlying inconsistency was real, so `refreshAssetCanvasesIfVisible()` now re-attaches fresh canvases into their existing slots (guarded to only run when Assets is actually on screen), rather than waiting for a future round to make the staleness visible and debuggable from scratch.
+
+Verified via `test/smoke.js`: select-by-click, move-drag (`cx` changes), corner-handle resize (`rx`/`ry` change), "+ Rect" (array grows, correct `type`), reorder (array order flips), recolor via the popover, delete (array shrinks) — all against the "+ New Cart" starter template's one real shape, plus a separate check that a genuinely raw-pixel sprite (Corridor's) shows the future-phase message instead of a broken editor. Two new encoder-guard checks (`paletteParams`-style and the new shape-coordinate one) confirm both `u8` call sites now throw instead of wrapping. Screenshot-verified in both themes plus the 375px mobile viewport from §61, confirming no overflow regression.
+
+## 63. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
@@ -2880,7 +2895,10 @@ Verified via Playwright at a real mobile viewport (375×812, iPhone-sized) — `
   ground: still hand-typed assembly (kept text, kept diffable), but an
   opcode palette that picks operands from the cart's own real data
   instead of the author guessing a number. A fully visual/block editor
-  for hooks themselves is still open.
+  for hooks themselves is still open — but §62 gives the *asset* side a
+  genuinely fully-visual editor (drag shapes with the cursor, no text
+  involved at all) for shape-list sprites; raw-pixel sprites and tiles
+  are the same idea's next, still-open extension.
 - How important is a "cart inspector" / decompiler for trust — should
   the runtime refuse to run a cart without first showing the player
   (or the developer) a human-readable disassembly?

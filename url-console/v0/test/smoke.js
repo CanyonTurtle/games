@@ -243,6 +243,31 @@ async function main(){
       u8GuardResult.threw && u8GuardResult.validStillWorks, JSON.stringify(u8GuardResult));
   }
 
+  // 1d. Same class of bug, found while building the sprite shape editor:
+  // shape-list sprite coordinates (1/8px fixed point) pre-masked with
+  // `& 0xFF` before handing off to ByteWriter.u8() — the exact guard 1c
+  // added never got a chance to fire for this field, so a shape dragged
+  // past the 31.875px ceiling would've silently wrapped to a small wrong
+  // value instead of throwing. Same check shape as 1c: a deliberately
+  // out-of-range coordinate must throw, an in-range one must still work.
+  {
+    const shapeGuardResult = await page.evaluate(async () => {
+      const K = window.UrlcadeKernel;
+      const {payload} = K.decodeCartUrl(window.__urlcadeDebug.CARTS.flappy.fragment);
+      const cart = K.decodeCart(await K.decodePayloadToBytes(payload));
+      const shapeSprite = {kind:1, w:16, h:16, shapes:[{type:0, cx:8, cy:8, rx:3, ry:3, color:1}]};
+      let threw = false;
+      try{ K.encodeCart({...cart, sprites:[{...shapeSprite, shapes:[{...shapeSprite.shapes[0], cx:40}]}]}); }
+      catch(e){ threw = true; }
+      let validStillWorks = false;
+      try{ K.encodeCart({...cart, sprites:[shapeSprite]}); validStillWorks = true; }
+      catch(e){ /* leave false */ }
+      return {threw, validStillWorks};
+    });
+    check('encodeCart rejects an out-of-range (>31.875px) shape coordinate instead of silently wrapping it',
+      shapeGuardResult.threw && shapeGuardResult.validStillWorks, JSON.stringify(shapeGuardResult));
+  }
+
   // Each cart's own fragment carries its name/author in the URL envelope
   // (DESIGN.md §34) — never a manual title/genre/accentIdx passed to a
   // registerCart() call (that whole call shape is gone, see carts/
@@ -319,7 +344,7 @@ async function main(){
   await page.click('.inspect-tab[data-tab="Assets"]');
   await page.waitForTimeout(150);
   const paletteDom1 = await page.evaluate(() => ({
-    swatchCount: document.querySelectorAll('.pal-swatch').length,
+    swatchCount: document.querySelectorAll('.pal-group .pal-swatch').length,
     groupLabels: Array.from(document.querySelectorAll('.pal-group-label')).map(e => e.textContent),
   }));
   check('Assets tab labels the terrain/entity-A/entity-B split with 16 total swatches',
@@ -332,7 +357,7 @@ async function main(){
   await page.click('.inspect-tab[data-tab="Assets"]');
   await page.waitForTimeout(150);
   const paletteDom2 = await page.evaluate(() => ({
-    swatchCount: document.querySelectorAll('.pal-swatch').length,
+    swatchCount: document.querySelectorAll('.pal-group .pal-swatch').length,
     groupLabels: Array.from(document.querySelectorAll('.pal-group-label')).map(e => e.textContent),
   }));
   check('a second, unrelated cart\'s Assets tab renders the same three-group palette shape',
@@ -607,6 +632,79 @@ async function main(){
   check('"+ New Cart" opens Debug landed on the Source tab', newCartState.debugViewActive && newCartState.activeTab === 'Source', JSON.stringify(newCartState));
   const starterCompileOk = await page.evaluate(() => { const c = window.__urlcadeDebug.getCompileState(); return c && c.ok; });
   check('"+ New Cart"\'s starter template compiles cleanly', !!starterCompileOk);
+
+  // 5a. Sprite shape editor (Assets tab, kind:1 sprites) — the starter
+  // template ships exactly one kind:1 sprite with one ellipse shape.
+  await page.click('.inspect-tab[data-tab="Assets"]');
+  await page.waitForTimeout(200);
+  const spriteBefore = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes);
+  check('starter sprite 0 starts as one ellipse', spriteBefore.length === 1 && spriteBefore[0].type === 0, JSON.stringify(spriteBefore));
+
+  const sBox = await page.locator('#spriteEditorCanvas0').boundingBox();
+  const sCx = sBox.x + sBox.width/2, sCy = sBox.y + sBox.height/2;
+  await page.mouse.click(sCx, sCy);
+  await page.waitForTimeout(100);
+  const selectedAfterClick = await page.evaluate(() => document.querySelector('#spriteShapeListSlot0 .shape-row.selected')?.dataset.shapeIndex);
+  check('clicking the shape selects its row in the layer list', selectedAfterClick === '0', selectedAfterClick);
+
+  // A small move (well under half a sprite-pixel of screen-space fraction)
+  // — big enough to prove the drag moved the shape, small enough that its
+  // bounding box (cx=4,rx=3 starts at edges 1..7 of an 8px-wide sprite)
+  // stays safely inside the canvas for the resize-handle test right after.
+  await page.mouse.move(sCx, sCy);
+  await page.mouse.down();
+  await page.mouse.move(sCx + sBox.width*0.06, sCy, {steps: 5});
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const movedShape = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes[0]);
+  check('dragging the shape body moves it and the recompiled cart reflects it', movedShape.cx !== spriteBefore[0].cx, JSON.stringify(movedShape));
+
+  // Resize via the SE corner handle — computed from the shape's current
+  // (post-move) box, same sprite-space-to-canvas-space math the editor
+  // itself uses (spriteEditorPointerCoords, inverted).
+  const seScreenX = sBox.x + (movedShape.cx+movedShape.rx)/8 * sBox.width;
+  const seScreenY = sBox.y + (movedShape.cy+movedShape.ry)/8 * sBox.height;
+  await page.mouse.move(seScreenX, seScreenY);
+  await page.mouse.down();
+  await page.mouse.move(seScreenX + sBox.width*0.1, seScreenY + sBox.height*0.1, {steps: 5});
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const resizedShape = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes[0]);
+  check('dragging a corner handle resizes the shape', resizedShape.rx !== movedShape.rx || resizedShape.ry !== movedShape.ry, JSON.stringify(resizedShape));
+
+  await page.click('#spriteAddRectBtn0');
+  await page.waitForTimeout(600);
+  const afterAdd = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes);
+  check('"+ Rect" appends a rect shape to the sprite', afterAdd.length === 2 && afterAdd[1].type === 1, JSON.stringify(afterAdd));
+
+  await page.click('#spriteShapeListSlot0 .shape-row[data-shape-index="1"] .shape-move-up');
+  await page.waitForTimeout(600);
+  const afterReorder = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes);
+  check('reordering a layer flips array (z-)order', afterReorder[0].type === 1, JSON.stringify(afterReorder));
+
+  await page.click('#spriteShapeListSlot0 .shape-row[data-shape-index="0"] .color-picker-trigger');
+  await page.waitForTimeout(100);
+  await page.click('#spriteShapeListSlot0 .shape-row[data-shape-index="0"] .pal-swatch[data-index="7"]');
+  await page.waitForTimeout(600);
+  const recolored = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes[0]);
+  check('recoloring a shape via the popover reaches the recompiled cart', recolored.color === 7, JSON.stringify(recolored));
+
+  await page.click('#spriteShapeListSlot0 .shape-row[data-shape-index="1"] .shape-delete');
+  await page.waitForTimeout(600);
+  const afterDelete = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.sprites[0].shapes);
+  check('deleting a shape removes it from the sprite', afterDelete.length === 1, JSON.stringify(afterDelete));
+
+  // A raw-pixel sprite (no kind:1 — Corridor's sprite 0 is a plain
+  // {w,h,pixels:[...]}) gets the future-phase message instead of an
+  // editor it can't actually support yet. Scoped to spriteSlot0's own
+  // next sibling, not just "the first .inspect-empty on the page" — a
+  // cart could have other empty-state messages elsewhere in Assets.
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.doom.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Assets"]');
+  await page.waitForTimeout(200);
+  const rawPixelMsg = await page.evaluate(() => document.getElementById('spriteSlot0')?.nextElementSibling?.textContent);
+  check('a raw-pixel sprite shows a future-phase message instead of a broken editor', /Raw-pixel editing is a future phase/.test(rawPixelMsg || ''), rawPixelMsg);
 
   // 5b. Pointer input + on_draw immediate-mode drawing (DESIGN.md §36):
   // dragging across the canvas on the "Water the Plant" cart spawns real
