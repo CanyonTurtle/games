@@ -437,18 +437,34 @@ const OPCODE_GROUPS = [
   ]},
 ];
 const TESTBIT_NAMES = [[0,'left'],[1,'right'],[2,'up'],[3,'down'],[4,'action']];
+// Which OPCODE_GROUPS.label is showing its buttons — one group's worth at
+// a time behind a <select>, not all nine stacked open, since the full
+// list ran to several screens' worth of vertical space for what's meant
+// to be a quick "insert one line" reach, not a page of its own. Persists
+// across re-renders (switching hooks, editing text) so picking a category
+// once holds while you keep working in it.
+let activeOpcodeGroupLabel = OPCODE_GROUPS[0].label;
 
 function renderOpcodePalette(){
   const slot = document.getElementById('opcodePaletteSlot');
   if(!slot) return;
-  slot.innerHTML = '<div class="opcode-palette">' + OPCODE_GROUPS.map(g => `
-    <div class="opcode-group">
-      <p class="opcode-group-label">${esc(g.label)}</p>
-      <div class="opcode-btns">${g.ops.map(op => `
+  const group = OPCODE_GROUPS.find(g => g.label === activeOpcodeGroupLabel) || OPCODE_GROUPS[0];
+  slot.innerHTML = `
+    <div class="opcode-palette">
+      <select class="opcode-group-select">${OPCODE_GROUPS.map(g => `
+        <option value="${esc(g.label)}"${g.label===group.label?' selected':''}>${esc(g.label)}</option>
+      `).join('')}</select>
+      <div class="opcode-btns">${group.ops.map(op => `
         <button type="button" class="opcode-btn" data-mnem="${op.mnem}" data-operand-kind="${op.operandKind||''}">${esc(op.label||op.mnem)}</button>
       `).join('')}</div>
     </div>
-  `).join('') + '</div>';
+  `;
+  slot.querySelector('.opcode-group-select').addEventListener('change', (e) => {
+    activeOpcodeGroupLabel = e.target.value;
+    const pickerSlot = document.getElementById('operandPickerSlot');
+    if(pickerSlot) pickerSlot.innerHTML = '';
+    renderOpcodePalette();
+  });
   slot.querySelectorAll('.opcode-btn').forEach(btn => btn.addEventListener('click', () => {
     onOpcodeButtonClick(btn.dataset.mnem, btn.dataset.operandKind || null);
   }));
