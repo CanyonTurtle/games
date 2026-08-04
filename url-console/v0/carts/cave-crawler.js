@@ -488,7 +488,7 @@ function buildRoguelikeCart(){
     cartType: 3, // advisory label only — see DESIGN.md §14
     // Terrain hue 35 (warm brown/tan — the earthy walls/floor/stairs
     // look the old hand-picked "dungeon" bank went for). Entity hue
-    // hints (not offsets — see AUTHORING.md's Palette section): ~182
+    // hints (not offsets — see ../.claude/skills/urlcade/references/cart-object.md's Palette section): ~182
     // (teal/cyan) for the player, ~282 (purple) for the monster —
     // different from the original blue player/red monster, but the
     // point of this cart was always "player and monster read as

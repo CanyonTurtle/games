@@ -3,7 +3,8 @@
 
    Builds every example cart this repo ships (one file per cart under
    carts/, each just a plain "author a JS object, describe its hooks as
-   assembly source" builder function — see AUTHORING.md) into a real,
+   assembly source" builder function — see the cart-authoring skill's
+   references/workflow.md) into a real,
    ready-to-play URL fragment via kernel.js's own compileCartSource() —
    the same compiler every Debug-tab author uses, not a second bespoke
    encode path. The menu (runtime.js's renderMenu) never sees the
@@ -39,9 +40,10 @@ async function registerCart(key, builder){
 
 // Externally-authored carts — already-compiled fragments this repo has no
 // source object for at all (built elsewhere, e.g. by another agent working
-// purely from AUTHORING.md against the live site, never touching this
-// codebase), registered directly rather than run through a local builder +
-// compileCartSource. Same {fragment, name, author} CARTS shape either way —
+// purely from the cart-authoring skill against the live site, never
+// touching this codebase), registered directly rather than run through a
+// local builder + compileCartSource. Same {fragment, name, author}
+// CARTS shape either way —
 // renderMenu() decodes every card from its fragment regardless of which
 // path produced it (see this file's own header, DESIGN.md §34). Empty for
 // now: the one cart that arrived this way (Breakout) got vendored as real

@@ -204,7 +204,8 @@ class World {
   // DRAW_LINE. Presentation-only, like ilerp: nothing stops a cart from
   // writing to globals/props from on_draw, but doing so makes the
   // simulation's determinism depend on the display's actual frame rate —
-  // AUTHORING.md flags this as a footgun, not something enforced here.
+  // spec/skill/references/hooks.md flags this as a footgun, not
+  // something enforced here.
   runDrawHook(entity){
     // Reset the count, not the array — drawLine (see ctxBase above) reuses
     // whatever pooled object already sits at each index, so truncating the

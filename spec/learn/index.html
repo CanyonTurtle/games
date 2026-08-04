@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Learn the Urlcade — how a cart works</title>
+<!--
+  A teaching site, separate from spec/index.html (which stays a bare
+  agent-oriented link list). Every demo on this page calls the *real*
+  kernel.js directly (loaded as a plain script, same as the player
+  runtime does) rather than re-implementing or narrating what it does —
+  "teach from the spec itself." No history here on purpose: what changed
+  and why lives in DESIGN.md, which this page never links to or draws
+  from. See CLAUDE.md for how to keep this in sync with kernel.js/
+  runtime.js.
+-->
+<style>
+  :root{
+    --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712;
+    --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025;
+    --accent:#e0a030; --focus:#e0c060; --bad:#ff6b5e; --good:#7dc46a;
+    --mono: ui-monospace, 'JetBrains Mono', 'SFMono-Regular', Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9; --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac; --accent:#a8571a; --focus:#8a4614; --bad:#b3261e; --good:#2f6f3e; }
+  }
+  :root[data-theme="dark"]{ --bg:#16130f; --bg-elevated:#1f1a13; --bg-card:#1c1712; --ink:#efe6d2; --ink-dim:#a89a82; --rule:#3a3025; --accent:#e0a030; --focus:#e0c060; --bad:#ff6b5e; --good:#7dc46a; }
+  :root[data-theme="light"]{ --bg:#ece2cd; --bg-elevated:#f6efdf; --bg-card:#faf5e9; --ink:#2a2318; --ink-dim:#6e6350; --rule:#d9cbac; --accent:#a8571a; --focus:#8a4614; --bad:#b3261e; --good:#2f6f3e; }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--mono);}
+  body{line-height:1.6;}
+  a{color:var(--accent);}
+  code{color:var(--accent);background:var(--bg-elevated);padding:1px 4px;border-radius:3px;font-size:.92em;}
+  pre{background:var(--bg-elevated);border:1px solid var(--rule);border-radius:6px;padding:12px 14px;overflow-x:auto;font-size:13px;line-height:1.5;}
+  pre code{background:none;padding:0;color:var(--ink);}
+  h2 code, h3 code{font-size:.85em;}
+
+  header.top{max-width:900px;margin:0 auto;padding:40px 20px 10px;}
+  .back{display:inline-block;margin-bottom:18px;color:var(--ink-dim);font-size:13px;text-decoration:none;}
+  .back:hover{color:var(--ink);}
+  h1{font-size:clamp(26px,5vw,34px);margin:0 0 8px;}
+  p.lede{color:var(--ink-dim);max-width:64ch;font-size:15px;}
+
+  nav.toc{max-width:900px;margin:18px auto 0;padding:0 20px;display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:0;background:var(--bg);padding-top:10px;padding-bottom:10px;z-index:5;border-bottom:1px solid var(--rule);}
+  nav.toc a{font-size:12.5px;text-decoration:none;color:var(--ink-dim);border:1px solid var(--rule);border-radius:20px;padding:5px 12px;background:var(--bg-card);}
+  nav.toc a:hover{color:var(--ink);border-color:var(--accent);}
+
+  main{max-width:900px;margin:0 auto;padding:10px 20px 80px;}
+  section{padding:44px 0;border-bottom:1px solid var(--rule);scroll-margin-top:56px;}
+  section:last-of-type{border-bottom:none;}
+  .kicker{font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 6px;}
+  h2{font-size:22px;margin:0 0 10px;}
+  h3{font-size:15px;margin:22px 0 8px;color:var(--ink);}
+  section > p{max-width:70ch;}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0;}
+  .card{background:var(--bg-card);border:1px solid var(--rule);border-radius:8px;padding:14px 16px;}
+  .card h4{margin:0 0 6px;font-size:13.5px;color:var(--accent);}
+  .card p{margin:0;font-size:12.8px;color:var(--ink-dim);line-height:1.55;}
+  .card ul{margin:8px 0 0;padding-left:16px;font-size:12.5px;color:var(--ink-dim);}
+  .card code{font-size:11.5px;}
+
+  .demo{background:var(--bg-card);border:1px solid var(--rule);border-radius:8px;padding:16px 18px;margin:16px 0;}
+  .demo-label{font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-dim);margin:0 0 12px;}
+  .row{display:flex;flex-wrap:wrap;gap:14px 22px;align-items:flex-end;}
+  .field{display:flex;flex-direction:column;gap:3px;min-width:120px;flex:1;}
+  .field label{font-size:11.5px;color:var(--ink-dim);display:flex;justify-content:space-between;}
+  .field output{color:var(--accent);}
+  input[type=range]{width:100%;accent-color:var(--accent);}
+  input[type=text], textarea{background:var(--bg-elevated);border:1px solid var(--rule);color:var(--ink);font-family:var(--mono);font-size:12.5px;border-radius:5px;padding:8px 10px;width:100%;}
+  textarea{resize:vertical;min-height:120px;}
+  button{background:var(--accent);color:var(--bg);border:none;border-radius:5px;padding:8px 16px;font-family:var(--mono);font-weight:700;font-size:12.5px;cursor:pointer;}
+  button:hover{filter:brightness(1.08);}
+  button.ghost{background:none;border:1px solid var(--rule);color:var(--ink);font-weight:400;}
+
+  .swatches{display:grid;grid-template-columns:repeat(8,1fr);gap:5px;margin-top:14px;max-width:420px;}
+  .swatches .sw{aspect-ratio:1;border-radius:4px;border:1px solid var(--rule);}
+  .swatch-groups{display:flex;gap:18px;margin-top:6px;font-size:11px;color:var(--ink-dim);}
+  .swatch-groups b{color:var(--ink);}
+
+  .result{margin-top:12px;font-size:12.5px;background:var(--bg-elevated);border-radius:5px;padding:10px 12px;border:1px solid var(--rule);white-space:pre-wrap;word-break:break-word;}
+  .result.err{color:var(--bad);}
+  .result.ok{color:var(--good);}
+
+  canvas.mapcanvas{image-rendering:pixelated;border:1px solid var(--rule);border-radius:4px;background:#000;display:block;margin-top:10px;}
+
+  svg.diagram{width:100%;height:auto;margin:14px 0;}
+  svg.diagram text{font-family:var(--mono);fill:var(--ink);}
+  svg.diagram .dim{fill:var(--ink-dim);}
+  svg.diagram .accent{fill:var(--accent);}
+  svg.diagram rect.box{fill:var(--bg-card);stroke:var(--rule);}
+  svg.diagram line.arrow, svg.diagram path.arrow{stroke:var(--ink-dim);stroke-width:1.4;fill:none;}
+  svg.diagram polygon.head{fill:var(--ink-dim);}
+
+  footer{max-width:900px;margin:0 auto;padding:20px 20px 60px;color:var(--ink-dim);font-size:12px;}
+  footer a{color:var(--ink-dim);}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <a class="back" href="../">&larr; the spec (raw docs)</a>
+  <h1>Learn the Urlcade</h1>
+  <p class="lede">How a cart actually works, taught with the real
+  engine — every demo below calls the same <code>kernel.js</code> the
+  live runtime plays every cart through, not a simplified stand-in.
+  Building a cart yourself? The
+  <a href="../skill/SKILL.md">agent skill</a> is the concise reference;
+  this page is the tour.</p>
+</header>
+
+<nav class="toc">
+  <a href="#anatomy">Anatomy of a cart</a>
+  <a href="#vm">The VM</a>
+  <a href="#hooks">Entities &amp; hooks</a>
+  <a href="#maps">Map generators</a>
+  <a href="#sharing">Sharing a cart</a>
+  <a href="#try">Try it</a>
+</nav>
+
+<main>
+
+<section id="hero">
+  <p class="kicker">What is a cart?</p>
+  <h2>A plain object, compiled to bytes, shipped as a URL</h2>
+  <p>A cart is a JS object — palette, entities, sprites, tiles, an
+  optional generated map, and up to six small bytecode programs called
+  <em>hooks</em>. <code>encodeCart()</code> turns it into a compact byte
+  array; that gets base64url-encoded (and usually deflate-compressed) into
+  a URL fragment. Paste that fragment into the runtime and it plays —
+  the fragment <em>is</em> the game, nothing is fetched from a server.</p>
+  <svg class="diagram" viewBox="0 0 860 120">
+    <g font-size="12">
+      <rect class="box" x="6" y="30" width="130" height="56" rx="6"/>
+      <text x="71" y="54" text-anchor="middle">cart object</text>
+      <text x="71" y="70" text-anchor="middle" class="dim" font-size="10">JS, in memory</text>
+
+      <path class="arrow" d="M136 58 H196"/><polygon class="head" points="196,58 186,53 186,63"/>
+      <text x="166" y="48" text-anchor="middle" class="dim" font-size="10">encodeCart</text>
+
+      <rect class="box" x="200" y="30" width="130" height="56" rx="6"/>
+      <text x="265" y="54" text-anchor="middle">bytes</text>
+      <text x="265" y="70" text-anchor="middle" class="dim" font-size="10">Uint8Array</text>
+
+      <path class="arrow" d="M330 58 H390"/><polygon class="head" points="390,58 380,53 380,63"/>
+      <text x="360" y="48" text-anchor="middle" class="dim" font-size="10">deflate + base64url</text>
+
+      <rect class="box" x="394" y="30" width="150" height="56" rx="6"/>
+      <text x="469" y="54" text-anchor="middle">URL fragment</text>
+      <text x="469" y="70" text-anchor="middle" class="dim" font-size="10">#name,author,z.&hellip;</text>
+
+      <path class="arrow" d="M544 58 H604"/><polygon class="head" points="604,58 594,53 594,63"/>
+      <text x="574" y="48" text-anchor="middle" class="dim" font-size="10">decodeCart</text>
+
+      <rect class="box" x="608" y="30" width="130" height="56" rx="6"/>
+      <text x="673" y="54" text-anchor="middle">cart object</text>
+      <text x="673" y="70" text-anchor="middle" class="dim" font-size="10">decoded, verified</text>
+
+      <path class="arrow" d="M738 58 H798"/><polygon class="head" points="798,58 788,53 788,63"/>
+      <text x="768" y="48" text-anchor="middle" class="dim" font-size="10">runtime</text>
+
+      <rect class="box accent-box" x="802" y="30" width="52" height="56" rx="6" style="stroke:var(--accent)"/>
+      <text x="828" y="58" text-anchor="middle" class="accent" font-size="18">&#9654;</text>
+    </g>
+  </svg>
+</section>
+
+<section id="anatomy">
+  <p class="kicker">Anatomy of a cart</p>
+  <h2>Palette, screen, entities, sprites &amp; tiles</h2>
+  <p>The header sets a fixed screen size and a palette of exactly 16
+  colors, generated — never hand-picked per color — from 8 bytes
+  (<code>paletteParams</code>). Everything else visual (entities' sprites,
+  the map's tiles) is built from indices into that same 16-color
+  palette. Full field-by-field reference:
+  <a href="../skill/references/cart-object.md">cart-object.md</a>.</p>
+
+  <h3>Live: the palette generator</h3>
+  <div class="demo">
+    <p class="demo-label">calls the real <code>generatePalette()</code></p>
+    <div class="row" id="pal-controls"></div>
+    <div class="swatches" id="pal-swatches"></div>
+    <div class="swatch-groups">
+      <span><b>0&ndash;7</b> terrain ramp</span>
+      <span><b>8&ndash;11</b> entity A ramp</span>
+      <span><b>12&ndash;15</b> entity B ramp</span>
+    </div>
+  </div>
+
+  <h3>Entity types</h3>
+  <p>Every entity has 8 base props plus however many extra
+  (<code>extFieldCount</code>) its type declares. The runtime owns four of
+  the eight: <code>[0]</code>/<code>[1]</code> are x/y,
+  <code>[4]</code> is its type id, <code>[7]</code> is its own entity id —
+  all auto-managed. <code>[2]</code>, <code>[3]</code>, <code>[5]</code>,
+  <code>[6]</code>, and anything from <code>[8]</code> up are free for the
+  cart to define.</p>
+  <svg class="diagram" viewBox="0 0 860 74">
+    <g font-size="11">
+      <text x="4" y="16" class="dim">props[</text>
+      <g id="prop-cells"></g>
+    </g>
+  </svg>
+</section>
+
+<section id="vm">
+  <p class="kicker">The VM</p>
+  <h2>A small stack machine, no subroutines</h2>
+  <p>Hook bytecode runs on a stack machine: push values, pop them into an
+  operation, push the result. <strong>There is no <code>CALL</code>/<code>RET</code></strong>
+  — only <code>JMP</code>/<code>JZ</code>/<code>JNZ</code> to fixed
+  labels. Every hook call is capped at 20,000 dispatched instructions
+  (<code>MAX_STEPS</code>); going over sets a cart fault and stops the
+  hook. Full table with exact stack order for every op:
+  <a href="../skill/references/opcodes.md">opcodes.md</a>.</p>
+
+  <div class="cards">
+    <div class="card"><h4>Stack &amp; arithmetic</h4><p><code>PUSHI</code> <code>PUSHC</code> <code>DUP</code> <code>POP</code> <code>SWAP</code> <code>ADD</code> <code>SUB</code> <code>MUL</code> <code>DIV</code> <code>MOD</code> <code>NEG</code></p></div>
+    <div class="card"><h4>Comparison &amp; logic</h4><p><code>CMPEQ</code> <code>CMPNE</code> <code>CMPLT</code> <code>CMPLE</code> <code>CMPGT</code> <code>CMPGE</code> <code>AND</code> <code>OR</code> <code>NOT</code></p></div>
+    <div class="card"><h4>Control flow</h4><p><code>JMP</code> <code>JZ</code> <code>JNZ</code> — labels only, no calls</p></div>
+    <div class="card"><h4>Entity state</h4><p><code>LOAD_SELF</code> <code>STORE_SELF</code> <code>LOAD_A</code> <code>LOAD_B</code> <code>STORE_A</code> <code>STORE_B</code> <code>LOADE</code> <code>STOREE</code></p></div>
+    <div class="card"><h4>Globals</h4><p><code>LOADG</code> <code>STOREG</code> — 24 persistent slots</p></div>
+    <div class="card"><h4>World queries</h4><p><code>RAND_RANGE</code> <code>SIN</code> <code>COS</code> <code>ATAN2</code> <code>DIST</code> <code>CLAMP_ABS</code> <code>LERP</code> <code>NORM_ANGLE</code> <code>GETTILE</code> <code>TILE_SURFACE</code> <code>GET_CHECKPOINT</code></p></div>
+    <div class="card"><h4>Entity lifecycle</h4><p><code>SPAWN</code> <code>KILL_SELF</code> <code>MOVE_SOLID</code> <code>SETTILE</code></p></div>
+    <div class="card"><h4>Input</h4><p><code>TESTBIT</code> <code>LOAD_INPUT</code> <code>LOAD_POINTER_X</code> <code>LOAD_POINTER_Y</code> <code>LOAD_POINTER_DOWN</code></p></div>
+    <div class="card"><h4>Drawing &amp; control</h4><p><code>DRAW_LINE</code> <code>PLAYSOUND</code> <code>HALT</code></p></div>
+  </div>
+
+  <h3>Live: run some bytecode</h3>
+  <div class="demo">
+    <p class="demo-label">calls the real <code>assemble()</code> + <code>runHook()</code></p>
+    <textarea id="vm-src" spellcheck="false">PUSHI 5
+STOREG 0
+PUSHI 3
+STOREG 1
+LOADG 0
+LOADG 1
+ADD
+STOREG 2
+HALT</textarea>
+    <div class="row" style="margin-top:10px;">
+      <button id="vm-run">Run</button>
+      <span style="font-size:12px;color:var(--ink-dim);align-self:center;">writes into globals[0..23] — try editing the source above</span>
+    </div>
+    <div class="result" id="vm-result"></div>
+  </div>
+</section>
+
+<section id="hooks">
+  <p class="kicker">Entities &amp; hooks</p>
+  <h2>Six hooks, three different dispatch models</h2>
+  <p>A cart's behavior lives in up to six bytecode blobs. They don't all
+  run the same way — some are global (once per tick), some run once per
+  entity, one runs once per colliding pair, and one runs at render time
+  instead of simulation time. Full dispatch details:
+  <a href="../skill/references/hooks.md">hooks.md</a>.</p>
+  <svg class="diagram" viewBox="0 0 860 150">
+    <g font-size="11">
+      <line x1="20" y1="30" x2="840" y2="30" class="arrow"/>
+      <polygon class="head" points="840,30 830,25 830,35"/>
+      <text x="840" y="20" text-anchor="end" class="dim" font-size="10">time &rarr;</text>
+
+      <circle cx="60" cy="30" r="5" fill="var(--accent)"/>
+      <text x="60" y="55" text-anchor="middle">on_init</text>
+      <text x="60" y="68" text-anchor="middle" class="dim" font-size="9">once, at load</text>
+
+      <g>
+        <circle cx="220" cy="30" r="4" fill="var(--ink-dim)"/>
+        <circle cx="300" cy="30" r="4" fill="var(--ink-dim)"/>
+        <circle cx="380" cy="30" r="4" fill="var(--ink-dim)"/>
+        <text x="300" y="55" text-anchor="middle">on_input &rarr; on_frame &rarr; on_tick</text>
+        <text x="300" y="68" text-anchor="middle" class="dim" font-size="9">every simulation tick (60/s) &mdash; on_tick runs once per active entity</text>
+      </g>
+
+      <circle cx="560" cy="30" r="4" fill="var(--ink-dim)"/>
+      <text x="560" y="55" text-anchor="middle">on_collide</text>
+      <text x="560" y="68" text-anchor="middle" class="dim" font-size="9">once per overlapping pair, per tick</text>
+
+      <circle cx="740" cy="30" r="4" fill="var(--accent)"/>
+      <text x="740" y="55" text-anchor="middle">on_draw</text>
+      <text x="740" y="68" text-anchor="middle" class="dim" font-size="9">once per renderKind:2 entity, per rendered frame</text>
+      <text x="740" y="90" text-anchor="middle" class="dim" font-size="9">(not on the tick clock)</text>
+    </g>
+  </svg>
+  <div class="cards">
+    <div class="card"><h4>self / a / b</h4><ul>
+      <li><code>on_init</code>, <code>on_input</code>, <code>on_frame</code>: none bound</li>
+      <li><code>on_tick</code>: <code>self</code> = that entity</li>
+      <li><code>on_collide</code>: <code>a</code>/<code>b</code> = the pair, order not guaranteed</li>
+      <li><code>on_draw</code>: <code>self</code> = the drawing entity</li>
+    </ul></div>
+    <div class="card"><h4>Budget</h4><p>Every single call above &mdash; each entity's own <code>on_tick</code>, each pair's <code>on_collide</code>, each frame's <code>on_draw</code> &mdash; gets its own fresh 20,000-instruction budget, not a shared one.</p></div>
+  </div>
+</section>
+
+<section id="maps">
+  <p class="kicker">Map generators</p>
+  <h2>Three generators, one shared contract</h2>
+  <p>A cart can ask for a generated tile grid instead of hand-placing a
+  backdrop: a turtle-graphics <strong>track</strong>, a cellular-automata
+  <strong>cave</strong>, or a token-stream <strong>platform</strong>
+  level. All three return the same shape &mdash; a grid of tile ids plus a
+  <code>checkpoints</code> list a hook can query with
+  <code>GET_CHECKPOINT</code>. Token vocabularies and config fields:
+  <a href="../skill/references/map-generators.md">map-generators.md</a>.</p>
+
+  <div class="demo">
+    <p class="demo-label">calls the real <code>buildTrack</code> / <code>buildCave</code> / <code>buildPlatformLevel</code></p>
+    <div class="row">
+      <button id="gen-track">Generate track</button>
+      <button id="gen-cave">Generate cave</button>
+      <button id="gen-platform">Generate platform</button>
+    </div>
+    <canvas class="mapcanvas" id="map-canvas" width="280" height="200"></canvas>
+    <div class="result" id="map-result"></div>
+  </div>
+</section>
+
+<section id="sharing">
+  <p class="kicker">Sharing a cart</p>
+  <h2>Bytes &rarr; base64url &rarr; a link</h2>
+  <p><code>encodeCart()</code> writes a tight byte layout (u8/u16/f32
+  fields in a fixed order, no padding) &mdash; see
+  <a href="../skill/references/binary-format.md">binary-format.md</a> for
+  the exact sequence. Those bytes are opportunistically deflate-compressed
+  (kept only if actually smaller), then base64url-encoded straight into
+  the URL fragment, tagged <code>z.</code> (compressed) or
+  <code>r.</code> (raw) so the runtime knows which to reverse. If the cart
+  has a name/author they ride in front as plain readable text:
+  <code>#name,author,z.&hellip;</code>.</p>
+
+  <div class="demo">
+    <p class="demo-label">calls the real <code>deflateRawCompress</code> + <code>b64urlEncode</code></p>
+    <input type="text" id="share-text" value="The quick brown fox jumps over the lazy dog, twelve times in a row: the quick brown fox jumps over the lazy dog." />
+    <div class="row" style="margin-top:10px;">
+      <button id="share-run">Encode</button>
+    </div>
+    <div class="result" id="share-result"></div>
+  </div>
+</section>
+
+<section id="try">
+  <p class="kicker">Try it</p>
+  <h2>Build one for real</h2>
+  <div class="cards">
+    <div class="card"><h4>Play &amp; Debug</h4><p>Open the <a href="../../">live runtime</a>, pick "+ New Cart" on the shelf &mdash; Debug's Source tab recompiles on every keystroke and shows a specific error or a Play link.</p></div>
+    <div class="card"><h4>Building with an agent</h4><p>Point it at the <a href="../skill/SKILL.md">SKILL.md</a> &mdash; a router into the same reference files linked throughout this page.</p></div>
+    <div class="card"><h4>Known-good examples</h4><p><a href="../fixtures.md">fixtures.md</a>: cart &rarr; exact bytes &rarr; exact fragment, to check an implementation against directly.</p></div>
+  </div>
+</section>
+
+</main>
+
+<footer>Part of <a href="../../">The Urlcade</a>. Raw docs: <a href="../">spec/</a>.</footer>
+
+<script src="../kernel.js"></script>
+<script>
+(function(){
+  "use strict";
+  var K = window.UrlcadeKernel;
+
+  /* ---------- palette demo ---------- */
+  (function(){
+    var fields = [
+      {key:0, label:'baseHue', min:0, max:255, val:200},
+      {key:2, label:'satMin', min:0, max:100, val:30},
+      {key:3, label:'satMax', min:0, max:100, val:65},
+      {key:4, label:'lightMin', min:0, max:100, val:18},
+      {key:5, label:'lightMax', min:0, max:100, val:68},
+      {key:6, label:'entityA hue hint', min:0, max:255, val:20},
+      {key:7, label:'entityB hue hint', min:0, max:255, val:170},
+    ];
+    var params = [200,0,30,65,18,68,20,170];
+    var controls = document.getElementById('pal-controls');
+    fields.forEach(function(f){
+      var wrap = document.createElement('div');
+      wrap.className = 'field';
+      wrap.innerHTML = '<label>' + f.label + ' <output>' + f.val + '</output></label>' +
+        '<input type="range" min="'+f.min+'" max="'+f.max+'" value="'+f.val+'">';
+      var input = wrap.querySelector('input');
+      var out = wrap.querySelector('output');
+      input.addEventListener('input', function(){
+        out.textContent = input.value;
+        params[f.key] = +input.value;
+        renderPalette();
+      });
+      controls.appendChild(wrap);
+    });
+    var swatches = document.getElementById('pal-swatches');
+    for(var i=0;i<16;i++){
+      var sw = document.createElement('div');
+      sw.className = 'sw';
+      swatches.appendChild(sw);
+    }
+    function renderPalette(){
+      var pal = K.generatePalette({paletteParams: params});
+      var nodes = swatches.children;
+      for(var i=0;i<16;i++) nodes[i].style.background = pal[i];
+    }
+    renderPalette();
+  })();
+
+  /* ---------- entity prop diagram ---------- */
+  (function(){
+    var g = document.getElementById('prop-cells');
+    var labels = ['x','y','free','free','type','free','free','id'];
+    var owned = [true,true,false,false,true,false,false,true];
+    var x = 60;
+    for(var i=0;i<8;i++){
+      var w = 74;
+      var rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      rect.setAttribute('x', x); rect.setAttribute('y', 4); rect.setAttribute('width', w-6); rect.setAttribute('height', 30);
+      rect.setAttribute('rx', 4);
+      rect.setAttribute('fill', owned[i] ? 'var(--accent)' : 'var(--bg-card)');
+      rect.setAttribute('fill-opacity', owned[i] ? '0.25' : '1');
+      rect.setAttribute('stroke', owned[i] ? 'var(--accent)' : 'var(--rule)');
+      g.appendChild(rect);
+      var t1 = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t1.setAttribute('x', x + (w-6)/2); t1.setAttribute('y', 16); t1.setAttribute('text-anchor','middle'); t1.setAttribute('font-size','9');
+      t1.setAttribute('class','dim');
+      t1.textContent = '['+i+']';
+      g.appendChild(t1);
+      var t2 = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t2.setAttribute('x', x + (w-6)/2); t2.setAttribute('y', 28); t2.setAttribute('text-anchor','middle'); t2.setAttribute('font-size','10');
+      t2.textContent = labels[i];
+      g.appendChild(t2);
+      x += w;
+    }
+    var t3 = document.createElementNS('http://www.w3.org/2000/svg','text');
+    t3.setAttribute('x', x+6); t3.setAttribute('y', 24); t3.setAttribute('font-size','11'); t3.setAttribute('class','dim');
+    t3.textContent = '.. ext fields (extFieldCount) ]';
+    g.appendChild(t3);
+    var legend = document.createElementNS('http://www.w3.org/2000/svg','text');
+    legend.setAttribute('x', 60); legend.setAttribute('y', 58); legend.setAttribute('font-size','10'); legend.setAttribute('class','dim');
+    legend.textContent = 'highlighted = runtime-owned, auto-set on spawn; plain = free for the cart to use';
+    g.appendChild(legend);
+  })();
+
+  /* ---------- VM demo ---------- */
+  (function(){
+    var btn = document.getElementById('vm-run');
+    var out = document.getElementById('vm-result');
+    btn.addEventListener('click', function(){
+      var lines = document.getElementById('vm-src').value.split('\n');
+      var bytecode;
+      try{
+        bytecode = K.assemble(lines, {constants:{}, globals:{}});
+      }catch(err){
+        out.className = 'result err';
+        out.textContent = 'assemble error: ' + err.message;
+        return;
+      }
+      var globals = new Array(24).fill(0);
+      var ctx = {
+        constants: [], globals: globals, world: {cartFault:false},
+        self: null, a: null, b: null, input: 0,
+        findEntity: function(){ return null; },
+        getTile: function(){ return -1; }, tileSurface: function(t){ return t; },
+        setTile: function(){}, spawn: function(){ return {id:1, props:[]}; },
+        rng: Math.random, playSound: function(){}, getCheckpoint: function(){ return {x:0,y:0}; },
+        drawLine: function(){},
+      };
+      var ok;
+      try{
+        ok = K.runHook(bytecode, ctx);
+      }catch(err){
+        out.className = 'result err';
+        out.textContent = 'runtime error: ' + err.message;
+        return;
+      }
+      out.className = 'result ' + (ctx.world.cartFault ? 'err' : 'ok');
+      var shown = globals.slice(0,8);
+      out.textContent = (ctx.world.cartFault ? 'cart fault (over 20,000 steps)\n' : (ok ? 'halted cleanly\n' : 'ran off the end of bytecode\n')) +
+        'globals[0..7] = [' + shown.join(', ') + ']';
+    });
+  })();
+
+  /* ---------- map generator demos ---------- */
+  (function(){
+    var canvas = document.getElementById('map-canvas');
+    var ctx2d = canvas.getContext('2d');
+    var resultEl = document.getElementById('map-result');
+    var CELL = 10;
+
+    var TRACK_COLORS = {1:'#000', 2:'#8a8a8a', 3:'#c9433f', 4:'#e0e0e0', 5:'#e0a030'};
+    var CAVE_COLORS = {1:'#3a3025', 2:'#c9b892', 3:'#e0a030', 4:'#f0d020'};
+    var PLATFORM_COLORS = {1:'#000', 2:'#7dc46a', 3:'#8a5a2a', 4:'#c9433f'};
+
+    function drawGrid(grid, colors, label, extra){
+      var h = grid.length, w = grid[0].length;
+      canvas.width = w * CELL; canvas.height = h * CELL;
+      for(var y=0;y<h;y++) for(var x=0;x<w;x++){
+        ctx2d.fillStyle = colors[grid[y][x]] || '#f0f';
+        ctx2d.fillRect(x*CELL, y*CELL, CELL, CELL);
+      }
+      resultEl.className = 'result ok';
+      resultEl.textContent = label + (extra ? '  ' + extra : '');
+    }
+
+    document.getElementById('gen-track').addEventListener('click', function(){
+      var T = K.TRACK_TOKENS;
+      var track = K.buildTrack({
+        tokens: [T.START_FINISH, T.STRAIGHT, T.STRAIGHT, T.STRAIGHT, T.CURVE_R90,
+                 T.CHECKPOINT, T.STRAIGHT, T.STRAIGHT, T.CURVE_R90,
+                 T.STRAIGHT, T.STRAIGHT, T.STRAIGHT, T.CURVE_R90,
+                 T.CHECKPOINT, T.STRAIGHT, T.STRAIGHT, T.CURVE_R90],
+        trackWidth: 5, segLen: 4, startGX: 6, startGY: 6, startDir: 0, gridW: 28, gridH: 20,
+      });
+      drawGrid(track.grid, TRACK_COLORS, 'track', track.checkpoints.length + ' checkpoints');
+    });
+
+    document.getElementById('gen-cave').addEventListener('click', function(){
+      var cave = K.buildCave({gridW:28, gridH:20, fillProb:120, iterations:4, wallThreshold:5, goldCount:5}, Math.random);
+      drawGrid(cave.grid, CAVE_COLORS, 'cave', 'start ' + JSON.stringify(cave.checkpoints[0]) + ', stairs ' + JSON.stringify(cave.checkpoints[1]));
+    });
+
+    document.getElementById('gen-platform').addEventListener('click', function(){
+      var P = K.PLATFORM_TOKENS;
+      var plat = K.buildPlatformLevel({
+        gridH: 16, startGroundY: 10, minGroundY: 4, maxGroundY: 14,
+        tokens: [P.FLAT,6, P.STEP_UP,1, P.COIN, P.GAP,3, P.FLAT,3, P.BLOCK,3, P.FLAT,4, P.ENEMY],
+      });
+      drawGrid(plat.grid, PLATFORM_COLORS, 'platform', plat.numCoins + ' coin(s), ' + plat.numEnemies + ' enemy spawn(s)');
+    });
+
+    document.getElementById('gen-cave').click();
+  })();
+
+  /* ---------- sharing demo ---------- */
+  (function(){
+    var btn = document.getElementById('share-run');
+    var out = document.getElementById('share-result');
+    btn.addEventListener('click', function(){
+      var text = document.getElementById('share-text').value;
+      var bytes = new TextEncoder().encode(text);
+      var raw = K.b64urlEncode(bytes);
+      if(!K.HAS_COMPRESSION){
+        out.className = 'result ok';
+        out.textContent = bytes.length + ' bytes -> "r." + ' + raw.length + ' base64url chars (this browser has no CompressionStream, so only the raw path is shown)';
+        return;
+      }
+      K.deflateRawCompress(bytes).then(function(compressed){
+        var z = K.b64urlEncode(compressed);
+        var picked = z.length < raw.length ? 'z. (compressed)' : 'r. (raw)';
+        out.className = 'result ok';
+        out.textContent = bytes.length + ' bytes\n' +
+          'raw:        r.' + raw.length + ' chars\n' +
+          'compressed: z.' + z.length + ' chars\n' +
+          'runtime picks whichever is shorter -> ' + picked;
+      });
+    });
+    btn.click();
+  })();
+})();
+</script>
+</body>
+</html>

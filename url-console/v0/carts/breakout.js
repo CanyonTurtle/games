@@ -2,18 +2,20 @@
    The Urlcade — example cart: Breakout
 
    Not authored in this repo — vendored from a fragment built entirely
-   by an external agent working purely against AUTHORING.md and the
-   live site, with no access to this codebase at all (DESIGN.md §35).
+   by an external agent working purely against the cart-authoring skill
+   and the live site, with no access to this codebase at all (DESIGN.md
+   §35).
    It shipped on the shelf as a bare externally-registered fragment
    first; when the cart binary format broke (formatVersion 2, DESIGN.md
    §36 — a new hook, a new header field), that fragment stopped
    decoding under the new kernel. Rather than lose it, this file is its
    disassembly (kernel.js's formatDisassembly(), run against the
    original formatVersion:1 bytes before the format changed), captured
-   as real, re-assemblable source and recompiled fresh — the same
-   decompile-then-recompile round-trip AUTHORING.md documents as always
-   valid, just used here to carry a cart across a breaking format
-   change instead of to inspect one. No named constants/globals — a
+   as real, re-assemblable source and recompiled fresh — a
+   decompile-then-recompile round trip is always valid (bytecode back to
+   mnemonics back to identical bytecode), used here to carry a cart
+   across a breaking format change instead of to inspect one. No named
+   constants/globals — a
    decompile never has them (assemble()'s constants/globals maps only
    exist in hand-authored source, never in the binary itself); every
    operand below is just the numeric index formatDisassembly resolved it to.

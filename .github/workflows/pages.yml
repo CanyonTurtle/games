@@ -3,13 +3,15 @@ name: Deploy Pages
 # Publishes the player runtime (kernel.js + color-utils.js + runtime.js +
 # inspector.js + main.js + carts/*.js + index.html — a module split, no
 # bundler, no build step: just <script src>/<script type=module> tags) as
-# the site root, and a game-authoring API reference under /spec/ (agent-
-# fetchable as-is, no rendering required) plus a spec/index.html for human
-# browsing. Deliberately does NOT publish DESIGN.md, v0/README.md, or the
-# early worked examples — those are project history, kept in the repo for
-# maintainers but not part of the public authoring-facing site. See
-# spec/index.html's own comment for why raw .md is the primary format for
-# what does get published.
+# the site root, plus a game-authoring API reference under /spec/: the
+# agent-facing skill (spec/skill/ — raw .md, fetchable with no rendering
+# step, mirrors .claude/skills/urlcade/ in this repo), the human-facing
+# learn site (spec/learn/ — visuals and small live demos), fixtures.md,
+# and spec/index.html itself, a bare link list into all of it. See
+# CLAUDE.md for how these surfaces relate to each other and to DESIGN.md.
+# Deliberately does NOT publish DESIGN.md, v0/README.md, or the early
+# worked examples — those are project history, kept in the repo for
+# maintainers but not part of the public authoring-facing site.
 #
 # Play, Debug (the Cart Inspector, plus Source/Compile tabs for editing
 # and recompiling a cart live), and "+ New Cart" all live on this one
@@ -27,8 +29,8 @@ on:
     branches: [main]
     paths:
       - 'url-console/**'
-      - 'spec/index.html'
-      - 'llms.txt'
+      - 'spec/**'
+      - '.claude/skills/urlcade/**'
       - '.github/workflows/pages.yml'
   workflow_dispatch: {}
 
