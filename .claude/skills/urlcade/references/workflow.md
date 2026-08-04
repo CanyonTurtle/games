@@ -10,9 +10,12 @@
    This is the fast loop; a browser is for final visual confirmation, not
    for catching logic bugs.
 4. Play it at `<site>/#<fragment>`, or paste the fragment (or raw source)
-   into the live site's Debug → Source tab, which recompiles on every
-   keystroke and shows a specific, line-numbered error or a "Play this
-   version" link.
+   into the live site's Debug view — header fields on the Source tab,
+   each hook on its own textarea on the Logic tab (with an opcode
+   palette next to it that inserts a correctly-formed line, picking
+   real entity/tile/global operands where relevant instead of guessing
+   a number) — recompiles on every keystroke and shows a specific,
+   line-numbered error or a "Play this version" link.
 
 ## Minimal worked example
 

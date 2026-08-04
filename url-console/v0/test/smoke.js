@@ -341,28 +341,42 @@ async function main(){
   await page.click('.inspect-tab[data-tab="Source"]');
   await page.waitForTimeout(100);
   const sourceText1 = await page.inputValue('#debugSourceInput');
-  check('Source tab is pre-filled with decompiled source', /formatVersion/.test(sourceText1) && /hooks/.test(sourceText1), sourceText1.slice(0, 60));
+  check('Source tab is pre-filled with decompiled header, hooks split out', /formatVersion/.test(sourceText1) && !/"hooks"/.test(sourceText1), sourceText1.slice(0, 60));
   const compileFieldText = await page.textContent('.inspect-body');
   check('Source tab shows compile status (fragment/size) above the textarea', /Compile status/.test(compileFieldText) && /Play this version/.test(compileFieldText), compileFieldText.slice(0, 80));
 
-  // 3. Editing Source recompiles automatically (debounced) and updates the
-  // Source tab's own compile-status block — bad opcode surfaces a
-  // specific, hook+line-named error without navigating anywhere.
-  const broken = sourceText1.replace(/HALT/, 'BOGUS');
-  await page.fill('#debugSourceInput', broken);
+  // 3. Hooks are edited on the Logic tab, one textarea per hook (not in
+  // the Source blob) — pre-filled with the same disassembly text the old
+  // read-only view used to show.
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(100);
+  const hookText1 = await page.inputValue('#hookSourceInput');
+  check('Logic tab\'s active hook is pre-filled with decompiled bytecode source', /\S/.test(hookText1), hookText1.slice(0, 60));
+
+  // Editing a hook validates fast (un-debounced, that hook only) *and*
+  // triggers the same debounced full-cart recompile the header always
+  // has — bad opcode surfaces a specific, line-named error right under
+  // the hook textarea almost immediately, and the Source tab's own badge
+  // eventually goes red too (both signals present, neither breaks the
+  // other).
+  const brokenHook = hookText1.replace(/HALT/, 'BOGUS');
+  await page.fill('#hookSourceInput', brokenHook);
+  await page.waitForTimeout(80);
+  const hookErrText = await page.textContent('#hookErrorSlot .compile-error');
+  check('bad opcode in a hook surfaces a specific, line-named error near-instantly (well under the 400ms debounce)', /line \d+/.test(hookErrText) && /BOGUS/.test(hookErrText), hookErrText);
+  const taStillFocused = await page.evaluate(() => document.activeElement && document.activeElement.id === 'hookSourceInput');
+  check('editing a hook does not steal focus from its textarea', taStillFocused);
   await page.waitForTimeout(600);
   const sourceTabClass = await page.evaluate(() => document.querySelector('.inspect-tab[data-tab="Source"]').className);
-  check('bad opcode marks the Source tab as errored', /tab-err/.test(sourceTabClass), sourceTabClass);
-  const errText = await page.textContent('.compile-error');
-  check('bad opcode surfaces a specific, hook+line-named error, still on Source (no extra click)', /line \d+/.test(errText) && /hook/.test(errText), errText);
-  const taStillFocused = await page.evaluate(() => document.activeElement && document.activeElement.id === 'debugSourceInput');
-  check('recompiling on edit does not steal focus from the textarea', taStillFocused);
+  check('a broken hook also eventually marks the Source tab as errored (debounced full recompile)', /tab-err/.test(sourceTabClass), sourceTabClass);
 
-  // Fix it back and confirm Play-this-version actually starts the (now
-  // slightly different, still valid) cart — exercises the same "any valid
-  // fragment plays directly" path a completely external cart would use.
-  await page.fill('#debugSourceInput', sourceText1);
+  // Fix it back and confirm Play-this-version actually starts the cart —
+  // exercises the same "any valid fragment plays directly" path a
+  // completely external cart would use.
+  await page.fill('#hookSourceInput', hookText1);
   await page.waitForTimeout(600);
+  await page.click('.inspect-tab[data-tab="Source"]');
+  await page.waitForTimeout(100);
   await page.click('#playCompiledBtn');
   await page.waitForTimeout(300);
   const replayedState = await page.evaluate(() => {
@@ -370,6 +384,93 @@ async function main(){
     return w ? {ok: true, fault: w.cartFault, gameViewActive: document.getElementById('gameWrap').classList.contains('active')} : {ok: false};
   });
   check('"Play this version" starts the recompiled cart', replayedState.ok && !replayedState.fault && replayedState.gameViewActive, JSON.stringify(replayedState));
+
+  // 3b. Opcode palette: clicking a no-operand button inserts a bare line;
+  // SPAWN opens a picker with one real sprite-thumbnail canvas per entity
+  // type; TESTBIT opens the fixed 5-item bit list — all via "+ New Cart"'s
+  // one-entity-type, zero-tile starter cart (also exercises the tile
+  // picker's empty-list message, since that cart has no tiles).
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.click('#newCartBtn');
+  await page.waitForTimeout(500);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(100);
+  const hookTextBefore = await page.inputValue('#hookSourceInput');
+  const haltCountBefore = (hookTextBefore.match(/^HALT$/gm) || []).length;
+  await page.click('.opcode-btn[data-mnem="HALT"]');
+  await page.waitForTimeout(100);
+  const hookTextAfterHalt = await page.inputValue('#hookSourceInput');
+  const haltCountAfter = (hookTextAfterHalt.match(/^HALT$/gm) || []).length;
+  check('clicking a no-operand opcode button inserts a bare line', haltCountAfter === haltCountBefore + 1, hookTextAfterHalt.slice(-40));
+  const errAfterHalt = (await page.textContent('#hookErrorSlot')).trim();
+  check('the newly inserted line still validates (no error)', errAfterHalt === '', errAfterHalt);
+
+  await page.click('.opcode-btn[data-mnem="SPAWN"]');
+  await page.waitForTimeout(100);
+  const spawnPicker = await page.evaluate(() => ({
+    items: document.querySelectorAll('.operand-picker-item').length,
+    canvases: document.querySelectorAll('.operand-picker-item canvas').length,
+  }));
+  check('SPAWN opens a picker with one item (with a real sprite canvas) per entity type', spawnPicker.items === 1 && spawnPicker.canvases === 1, JSON.stringify(spawnPicker));
+  await page.click('.operand-picker-item[data-value="0"]');
+  await page.waitForTimeout(100);
+  const hookTextAfterSpawn = await page.inputValue('#hookSourceInput');
+  check('clicking an entity-type picker item inserts SPAWN with that type\'s index', /^SPAWN 0$/m.test(hookTextAfterSpawn), hookTextAfterSpawn.slice(-40));
+
+  await page.click('.opcode-btn[data-mnem="TESTBIT"]');
+  await page.waitForTimeout(100);
+  const testbitRows = await page.$$eval('.operand-picker-row', els => els.map(e => e.textContent.trim()));
+  check('TESTBIT opens the fixed 5-item left/right/up/down/action list', testbitRows.length === 5 && /action/.test(testbitRows[4]), JSON.stringify(testbitRows));
+  await page.click('.operand-picker-row[data-value="4"]');
+  await page.waitForTimeout(100);
+  const hookTextAfterTestbit = await page.inputValue('#hookSourceInput');
+  check('clicking "action" inserts TESTBIT 4 (bit index, not bit value)', /^TESTBIT 4$/m.test(hookTextAfterTestbit), hookTextAfterTestbit.slice(-40));
+
+  await page.click('.opcode-btn[data-mnem="PUSHI"][data-operand-kind="tileId"]');
+  await page.waitForTimeout(100);
+  const tilePickerEmptyText = await page.textContent('.operand-picker');
+  check('the tile-id picker shows an empty-state message on a cart with no tiles, instead of an empty grid', /No tiles/.test(tilePickerEmptyText), tilePickerEmptyText);
+
+  // 3c. Global/constant pickers: named rows (from the header's own
+  // constNames/globalNames — hand-declared here, since a decoded fragment
+  // never carries them, only ever a fresh authoring source does) show the
+  // name and insert it as the operand token; unnamed rows always fall
+  // back to a valid bare numeric slot, which is what every decompiled
+  // cart's picker looks like since it can never have name tables.
+  await page.click('.inspect-tab[data-tab="Source"]');
+  await page.waitForTimeout(100);
+  const headerText1 = await page.inputValue('#debugSourceInput');
+  const headerWithNames = headerText1.replace('{', '{\n  "globalNames": {"g_smoke_test": 5},');
+  await page.fill('#debugSourceInput', headerWithNames);
+  await page.waitForTimeout(600);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(100);
+  await page.click('.opcode-btn[data-mnem="STOREG"]');
+  await page.waitForTimeout(100);
+  const namedRows = await page.$$eval('.operand-picker-row', els => els.map(e => e.textContent.trim()));
+  check('the globalSlot picker shows the header\'s declared name for its slot', namedRows.length === 24 && namedRows.some(t => /g_smoke_test/.test(t) && /slot 5/.test(t)), JSON.stringify(namedRows.slice(0,3)));
+  await page.click('.operand-picker-row[data-value="g_smoke_test"]');
+  await page.waitForTimeout(100);
+  const hookTextNamed = await page.inputValue('#hookSourceInput');
+  check('clicking a named row inserts the name as the operand token', /STOREG g_smoke_test$/m.test(hookTextNamed), hookTextNamed.slice(-40));
+  const errAfterNamed = (await page.textContent('#hookErrorSlot')).trim();
+  check('the name-token line resolves via assemble()\'s own symbol table and validates', errAfterNamed === '', errAfterNamed);
+
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.breakout.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(100);
+  await page.click('.opcode-btn[data-mnem="STOREG"]');
+  await page.waitForTimeout(100);
+  const unnamedRows = await page.$$eval('.operand-picker-row', els => els.map(e => e.textContent.trim()));
+  check('a decompiled cart (no name tables at all) shows every globalSlot row as unnamed', unnamedRows.length === 24 && unnamedRows.every(t => /unnamed/.test(t)), JSON.stringify(unnamedRows.slice(0,3)));
+  await page.click('.operand-picker-row[data-value="3"]');
+  await page.waitForTimeout(100);
+  const hookTextNumeric = await page.inputValue('#hookSourceInput');
+  check('clicking an unnamed row inserts the bare numeric slot, still a valid operand', /STOREG 3$/m.test(hookTextNumeric), hookTextNumeric.slice(-40));
+  const errAfterNumeric = (await page.textContent('#hookErrorSlot')).trim();
+  check('the numeric-fallback line validates too', errAfterNumeric === '', errAfterNumeric);
 
   // 4. Back-from-Debug resumes the *same* paused game (not a fresh decode
   // of it) instead of dropping to the shelf, when Debug was opened on the
