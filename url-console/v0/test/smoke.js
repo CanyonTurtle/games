@@ -510,14 +510,28 @@ async function main(){
   const swatchAfter = await page.evaluate(() => document.querySelector('#paletteLivePreviewSlot .pal-swatch').style.background);
   check('dragging the base-hue palette slider updates the live preview near-instantly', swatchAfter !== swatchBefore, `${swatchBefore} -> ${swatchAfter}`);
 
-  // Backdrop swatch picker.
+  // Backdrop color picker: collapsed to a swatch + dropper trigger, opens
+  // the full palette as a popover on click instead of always showing it.
+  const popoverHiddenBefore = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .color-picker-popover').hidden);
+  await page.click('#backdropFillPickerSlot .color-picker-trigger');
+  await page.waitForTimeout(50);
+  const popoverHiddenAfter = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .color-picker-popover').hidden);
+  check('clicking the color-picker trigger opens the palette popover', popoverHiddenBefore && !popoverHiddenAfter, `${popoverHiddenBefore} -> ${popoverHiddenAfter}`);
   await page.click('#backdropFillPickerSlot .pal-swatch[data-index="5"]');
   await page.waitForTimeout(100);
-  const pickerSelected = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .pal-swatch.selected')?.dataset.index);
-  check('clicking a backdrop swatch marks it selected', pickerSelected === '5', pickerSelected);
+  const popoverClosedAfterPick = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .color-picker-popover').hidden);
+  check('picking a color closes the popover again', popoverClosedAfterPick);
   await page.waitForTimeout(600);
   const backdropState = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.backdropFillIndex);
   check('the picked backdrop swatch index reaches the recompiled cart', backdropState === 5, backdropState);
+
+  // Clicking outside an open popover closes it too.
+  await page.click('#backdropFillPickerSlot .color-picker-trigger');
+  await page.waitForTimeout(50);
+  await page.click('.inspect-section-title');
+  await page.waitForTimeout(50);
+  const popoverClosedOnOutsideClick = await page.evaluate(() => document.querySelector('#backdropFillPickerSlot .color-picker-popover').hidden);
+  check('clicking outside the popover closes it', popoverClosedOnOutsideClick);
 
   // Input checkboxes: checking a bit reveals its label input; unchecking
   // hides it and drops the stale label key rather than leaving it behind.

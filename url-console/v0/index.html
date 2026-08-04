@@ -144,11 +144,16 @@
      are the same physical size as the 8-wide terrain strip's, not
      stretched to fill the same container width — three ramps of
      different lengths should still read as one consistent grid. */
-  .pal-strip{display:grid;grid-template-columns:repeat(8,40px);gap:4px;}
-  .pal-swatch{position:relative;aspect-ratio:1;border-radius:3px;border:1px solid var(--rule);}
+  /* flex-wrap, not a fixed-column grid — a 16-wide strip (the full
+     palette) at a fixed 40px/swatch grid forced the page wider than a
+     mobile viewport; wrapping onto a second row instead keeps every
+     swatch the same physical size on any screen. */
+  .pal-strip{display:flex;flex-wrap:wrap;gap:4px;}
+  .pal-swatch{width:40px;position:relative;aspect-ratio:1;border-radius:3px;border:1px solid var(--rule);}
   .pal-swatch span{position:absolute;left:3px;bottom:2px;font-size:9px;line-height:1;
     font-family:var(--mono);color:#fff;text-shadow:0 0 3px #000,0 0 3px #000,0 0 1px #000;}
-  table.inspect-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:18px;}
+  .table-scroll{overflow-x:auto;margin-bottom:18px;}
+  table.inspect-table{border-collapse:collapse;width:100%;font-size:12.5px;margin-bottom:0;}
   table.inspect-table th, table.inspect-table td{text-align:left;padding:6px 10px;
     border-bottom:1px solid var(--rule);}
   table.inspect-table th{color:var(--ink-dim);text-transform:uppercase;font-size:10.5px;
@@ -217,6 +222,19 @@
   .pal-swatch.pickable{cursor:pointer;}
   .pal-swatch.pickable:hover{outline:1px solid var(--accent);}
   .pal-swatch.selected{border-color:var(--accent);border-width:2px;}
+  /* Color picker — a single current-color swatch + dropper icon, not the
+     whole palette rendered open by default (that was the "color palette"
+     wide enough to overflow a mobile viewport on its own). The popover
+     carries its own overflow-x:auto as a second line of defense even
+     though .pal-strip now wraps instead of overflowing. */
+  .color-picker{position:relative;display:inline-block;}
+  .color-picker-trigger{width:34px;height:34px;border-radius:4px;border:1px solid var(--rule);
+    cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;}
+  .color-picker-trigger:hover, .color-picker-trigger:focus-visible{outline:1px solid var(--accent);}
+  .color-picker-dropper{font-size:13px;filter:drop-shadow(0 0 2px #000) drop-shadow(0 0 2px #000);}
+  .color-picker-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:5;
+    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:4px;padding:8px;
+    width:min(228px,80vw);max-width:80vw;overflow-x:auto;box-shadow:0 4px 14px rgba(0,0,0,.35);}
   .pal-slider-rows{margin-bottom:10px;}
   .pal-slider-row{display:flex;align-items:center;gap:8px;margin-bottom:5px;font-size:11.5px;}
   .pal-slider-row label{color:var(--ink-dim);min-width:150px;flex-shrink:0;}
