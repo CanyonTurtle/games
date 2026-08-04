@@ -115,6 +115,13 @@ document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDe
 document.getElementById('debugBtn').addEventListener('click', () => {
   location.hash = 'debug:' + Runtime.getCurrentFragment();
 });
+// Same fragment-swap behavior "Play this version" always had — plays the
+// currently-compiled edit, does not persist it anywhere. Disabled (see
+// inspector.js's renderInspectTabs) whenever the live edit doesn't compile.
+document.getElementById('inspectTryBtn').addEventListener('click', () => {
+  const state = Inspector.getCompileState();
+  if(state && state.ok) location.hash = state.fragment;
+});
 // Inspector.startNewCart() catches its own errors (see its source) and
 // never rejects — awaited here anyway, and not left as a bare unawaited
 // call, so a future regression there fails loudly during development

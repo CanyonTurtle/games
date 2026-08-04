@@ -368,7 +368,9 @@ async function main(){
   const sourceText1 = await page.inputValue('#debugSourceInput');
   check('Source tab is pre-filled with decompiled header, hooks split out', /formatVersion/.test(sourceText1) && !/"hooks"/.test(sourceText1), sourceText1.slice(0, 60));
   const compileFieldText = await page.textContent('.inspect-body');
-  check('Source tab shows compile status (fragment/size) above the textarea', /Compile status/.test(compileFieldText) && /Play this version/.test(compileFieldText), compileFieldText.slice(0, 80));
+  check('Source tab shows compile status (fragment/size) above the textarea', /Compile status/.test(compileFieldText), compileFieldText.slice(0, 80));
+  const tryBtnEnabled1 = await page.evaluate(() => !document.getElementById('inspectTryBtn').disabled);
+  check('the top-right "Try" button is enabled once the cart compiles cleanly', tryBtnEnabled1);
 
   // 3. Hooks are edited on the Logic tab, one textarea per hook (not in
   // the Source blob) — pre-filled with the same disassembly text the old
@@ -394,21 +396,23 @@ async function main(){
   await page.waitForTimeout(600);
   const sourceTabClass = await page.evaluate(() => document.querySelector('.inspect-tab[data-tab="Source"]').className);
   check('a broken hook also eventually marks the Source tab as errored (debounced full recompile)', /tab-err/.test(sourceTabClass), sourceTabClass);
+  const tryBtnDisabled = await page.evaluate(() => document.getElementById('inspectTryBtn').disabled);
+  check('the top-right "Try" button disables itself while the live edit does not compile', tryBtnDisabled);
 
-  // Fix it back and confirm Play-this-version actually starts the cart —
+  // Fix it back and confirm the "Try" button actually starts the cart —
   // exercises the same "any valid fragment plays directly" path a
   // completely external cart would use.
   await page.fill('#hookSourceInput', hookText1);
   await page.waitForTimeout(600);
-  await page.click('.inspect-tab[data-tab="Source"]');
-  await page.waitForTimeout(100);
-  await page.click('#playCompiledBtn');
+  const tryBtnReenabled = await page.evaluate(() => !document.getElementById('inspectTryBtn').disabled);
+  check('the top-right "Try" button re-enables once the hook is fixed', tryBtnReenabled);
+  await page.click('#inspectTryBtn');
   await page.waitForTimeout(300);
   const replayedState = await page.evaluate(() => {
     const w = window.__urlcadeDebug.getWorld();
     return w ? {ok: true, fault: w.cartFault, gameViewActive: document.getElementById('gameWrap').classList.contains('active')} : {ok: false};
   });
-  check('"Play this version" starts the recompiled cart', replayedState.ok && !replayedState.fault && replayedState.gameViewActive, JSON.stringify(replayedState));
+  check('the "Try" button starts the recompiled cart', replayedState.ok && !replayedState.fault && replayedState.gameViewActive, JSON.stringify(replayedState));
 
   // 3b. Opcode palette: clicking a no-operand button inserts a bare line;
   // SPAWN opens a picker with one real sprite-thumbnail canvas per entity

@@ -2770,7 +2770,21 @@ Third visual-editor phase, matching the original ask word for word: "picking pre
 
 Verified via `test/smoke.js`: select-by-click, move-drag (`cx` changes), corner-handle resize (`rx`/`ry` change), "+ Rect" (array grows, correct `type`), reorder (array order flips), recolor via the popover, delete (array shrinks) — all against the "+ New Cart" starter template's one real shape, plus a separate check that a genuinely raw-pixel sprite (Corridor's) shows the future-phase message instead of a broken editor. Two new encoder-guard checks (`paletteParams`-style and the new shape-coordinate one) confirm both `u8` call sites now throw instead of wrapping. Screenshot-verified in both themes plus the 375px mobile viewport from §61, confirming no overflow regression.
 
-## 63. Open questions
+## 63. "Debug" becomes "Tinker" (with a hammer), and "Play this version" moves to a persistent top-right "Try"
+
+Two CTA tweaks, no behavior change to either underlying action — both about naming and placement, called out by the user directly after the sprite-editor round shipped.
+
+**"Debug" → "Tinker" + a hammer icon (`#debugBtn`).** "Debug" implies something is broken; this button opens a live editor for art, logic, and source on a cart that's working fine — the wrong verb for what it actually does. Renamed to "🔨 Tinker" (game-view topbar and the shelf's help copy); the element id, the `debug:` URL-hash prefix `main.js` still routes on, and every other internal reference stay untouched — this is a label change, not a route change.
+
+**"Play this version" moves out of the Source tab, into `.inspect-topbar`, relabeled "▶ Try."** It used to live inside `compileStatusHtml()` — visible only when Source was the active tab, and only after scrolling past the compile-status table. Functionally it was already the most useful button in the whole Debug view (the one way to actually *run* whatever you'd just edited), buried in the one place that made it hardest to find. Moved to a new `#inspectTryBtn` in the topbar, next to `#inspectTitle`, right-aligned via `margin-left:auto` (the existing 2-item topbar flex row already composed correctly with a 3rd item — no new layout plumbing needed, confirmed at the 375px mobile viewport too, 0px overflow). Same underlying behavior as before — `location.hash = compileState.fragment`, i.e. play the live-edited fragment exactly like any external cart link, no autosave or persistence implied.
+
+Because it's no longer scoped to one tab's render cycle, it needed its own enabled/disabled sync — wired into `renderInspectTabs()`, the one function that already runs after every `compileState` change (decode, compile success, compile failure) and every tab switch, rather than hunting down each of those call sites individually. `#inspectTryBtn.disabled = !(compileState && compileState.ok)`: greyed out and inert while the live edit doesn't compile, live and accent-colored the instant it does — the button's own state now doubles as an at-a-glance "is this playable right now" indicator, visible regardless of which tab you're looking at.
+
+Asked in the same message: whether to additionally `history.pushState` a new browser-history entry on every edit, turning the back/forward stack into free autosave/version-history. Answered as a recommendation, not built — no code changes came out of that question this round.
+
+Verified via `test/smoke.js`: the Try button starts enabled once the starter template compiles, disables itself the instant a broken-hook edit lands (debounced recompile), re-enables once fixed, and clicking it actually starts the recompiled cart — same assertions the old `#playCompiledBtn` test made, just against the new element and without needing to be on the Source tab first. Screenshot-verified in both themes plus the 375px mobile viewport.
+
+## 64. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

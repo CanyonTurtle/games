@@ -105,12 +105,20 @@
     flex-direction:column;}
   #inspectWrap.active{display:flex;}
   .inspect-topbar{flex:0 0 auto;display:flex;align-items:center;gap:12px;
-    padding:calc(12px + var(--safe-t)) 16px 12px calc(16px + var(--safe-l));
+    padding:calc(12px + var(--safe-t)) calc(16px + var(--safe-r)) 12px calc(16px + var(--safe-l));
     border-bottom:1px solid var(--rule);}
   .inspect-topbar button{background:var(--bg-card);color:var(--ink);border:1px solid var(--rule);
     padding:7px 12px;border-radius:3px;cursor:pointer;font-family:var(--mono);font-size:12px;}
   .inspect-topbar button:hover{border-color:var(--accent);color:var(--accent);}
   #inspectTitle{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  /* Pinned to the far right via margin-left:auto — the primary CTA of
+     the whole Debug view, always reachable regardless of which tab is
+     open, not buried inside the Source tab's compile-status block. */
+  #inspectTryBtn{flex:0 0 auto;margin-left:auto;background:var(--accent);color:#141110;
+    border-color:var(--accent);font-weight:700;}
+  #inspectTryBtn:hover{filter:brightness(1.08);}
+  #inspectTryBtn:disabled{background:var(--bg-card);color:var(--ink-dim);border-color:var(--rule);
+    cursor:not-allowed;filter:none;}
   .inspect-tabs{flex:0 0 auto;display:flex;overflow-x:auto;gap:2px;padding:0 12px;
     border-bottom:1px solid var(--rule);-webkit-overflow-scrolling:touch;}
   .inspect-tab{flex:0 0 auto;background:none;border:none;border-bottom:2px solid transparent;
@@ -272,7 +280,6 @@
   .debug-textarea:focus-visible{outline:2px solid var(--focus);}
   .compile-error{color:var(--bad);font-size:12.5px;white-space:pre-wrap;font-weight:600;
     background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;padding:10px;}
-  .debug-actions{margin:14px 0;}
   .fragment-code{display:block;background:var(--bg-card);border:1px solid var(--rule);
     border-radius:3px;padding:10px;color:var(--accent);word-break:break-all;font-size:11px;
     line-height:1.5;max-height:8em;overflow-y:auto;}
@@ -365,7 +372,7 @@
   <div id="cartList"></div>
   <div class="inspect-loader">
     <p class="lede-small">Got a link to one of these games? Paste it below to play it.
-    Once it's running, hit <b>Debug</b> to look under the hood — its art,
+    Once it's running, hit <b>Tinker</b> to look under the hood — its art,
     its logic, and its source, editable live.</p>
     <form id="inspectForm">
       <input id="inspectInput" type="text" placeholder="Paste a game link…" autocomplete="off" spellcheck="false" />
@@ -384,7 +391,7 @@
       <button id="restartBtn" title="Restart this game">&#8635; restart</button>
     </div>
     <div id="hud"></div>
-    <button id="debugBtn">Debug</button>
+    <button id="debugBtn">&#128296; Tinker</button>
   </div>
   <div class="canvas-area"><canvas id="screen"></canvas></div>
   <div class="controls" id="controlsText"></div>
@@ -396,6 +403,7 @@
   <div class="inspect-topbar">
     <button id="inspectBackBtn">&larr; back</button>
     <div id="inspectTitle"></div>
+    <button id="inspectTryBtn" title="Play the current live-edited version — opens it like any other cart, does not save">&#9654; Try</button>
   </div>
   <div class="inspect-tabs" id="inspectTabs"></div>
   <div class="inspect-body" id="inspectBody"></div>

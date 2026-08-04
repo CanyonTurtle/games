@@ -190,6 +190,11 @@ function renderInspectTabs(){
     renderInspectTabs();
     renderInspectBody();
   }));
+  // Fires on every compileState change (decode, compile success/failure)
+  // and every tab switch, same as the tab strip above — the one place
+  // that needs to know "is the live-edited fragment currently playable."
+  const tryBtn = document.getElementById('inspectTryBtn');
+  if(tryBtn) tryBtn.disabled = !(compileState && compileState.ok);
 }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
@@ -1310,9 +1315,6 @@ function compileStatusHtml(){
       ['fragment', fragment.length + ' chars (' + (payload.startsWith('z.') ? 'compressed' : 'uncompressed') + ')'],
       ['size class', sizeClassLabel(fragment.length)],
     ])}
-    <div class="debug-actions">
-      <button type="button" id="playCompiledBtn" class="playbtn">&#9654; Play this version</button>
-    </div>
     <div class="inspect-section-title">Fragment</div>
     <code class="fragment-code">${esc(fragment)}</code>
   `;
@@ -1326,8 +1328,6 @@ function renderCompileStatusSlot(){
   const slot = document.getElementById('compileStatusSlot');
   if(!slot) return;
   slot.innerHTML = compileStatusHtml();
-  const playBtn = document.getElementById('playCompiledBtn');
-  if(playBtn) playBtn.addEventListener('click', () => { location.hash = compileState.fragment; });
 }
 
 function renderInspectSourceTab(body){
