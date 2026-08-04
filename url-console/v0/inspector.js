@@ -180,9 +180,14 @@ function renderInspectTabs(){
 }
 
 function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
+// Wrapped in a scroll container, not left to whatever width its own
+// content wants — a wide table (many columns, or long cell text) forced
+// the whole Debug view wider than the viewport on mobile before this;
+// now it scrolls internally instead, same idea as .cfg-scroll/pre.disasm
+// already use for the CFG diagram and disassembly listing.
 function table(rows){
-  return '<table class="inspect-table">' + rows.map(r => '<tr>' + r.map((c,i) =>
-    `<${i===0?'th':'td'}>${c}</${i===0?'th':'td'}>`).join('') + '</tr>').join('') + '</table>';
+  return '<div class="table-scroll"><table class="inspect-table">' + rows.map(r => '<tr>' + r.map((c,i) =>
+    `<${i===0?'th':'td'}>${c}</${i===0?'th':'td'}>`).join('') + '</tr>').join('') + '</table></div>';
 }
 
 // Editable header/camera/input/backdrop/palette fields — everything else
@@ -254,33 +259,65 @@ function wireButtonCheckbox(checkboxEl, bit){
   });
 }
 
-// A picker variant of renderPaletteStrip (~line 236) — clickable swatches
-// with a selected-index highlight, for fields that are literally a
-// palette index (backdropFillIndex/backdropGroundIndex) rather than a
-// number an author would rather type.
-function renderIndexPicker(colors, selectedIndex, fieldName){
-  return '<div class="pal-strip" style="grid-template-columns:repeat(' + colors.length + ',40px)">' + colors.map((c,i) => `
-    <div class="pal-swatch pickable${i===selectedIndex?' selected':''}" style="background:${c}"
-      title="${i}: ${esc(c)}" data-index="${i}" data-field="${fieldName}" tabindex="0" role="button"><span>${i}</span></div>
-  `).join('') + '</div>';
+// A compact picker for fields that are literally a palette index
+// (backdropFillIndex/backdropGroundIndex) — a single swatch showing the
+// current color plus a dropper icon, not all 16 swatches rendered inline
+// (the full grid used to render open by default here, which is exactly
+// the "color palette" that was wide enough to overflow a mobile
+// viewport). Clicking the trigger opens the full palette as a popover to
+// pick from; picking a color or clicking outside closes it again.
+function renderColorPicker(colors, selectedIndex, fieldName){
+  const color = colors[selectedIndex] || '#000';
+  return `
+    <div class="color-picker" data-field="${fieldName}">
+      <button type="button" class="color-picker-trigger" style="background:${color}" title="${selectedIndex}: ${esc(color)}" aria-label="Pick a color">
+        <span class="color-picker-dropper" aria-hidden="true">&#127912;</span>
+      </button>
+      <div class="color-picker-popover" hidden>
+        <div class="pal-strip">${colors.map((c,i) => `
+          <div class="pal-swatch pickable${i===selectedIndex?' selected':''}" style="background:${c}"
+            title="${i}: ${esc(c)}" data-index="${i}" tabindex="0" role="button"><span>${i}</span></div>
+        `).join('')}</div>
+      </div>
+    </div>
+  `;
 }
-function wireIndexPickerSlot(slotId){
+function wireColorPickerSlot(slotId){
   const slot = document.getElementById(slotId);
   if(!slot) return;
-  slot.querySelectorAll('.pal-swatch.pickable').forEach(sw => sw.addEventListener('click', () => {
-    lastParsedHeader[sw.dataset.field] = +sw.dataset.index;
+  const picker = slot.querySelector('.color-picker');
+  if(!picker) return;
+  const trigger = picker.querySelector('.color-picker-trigger');
+  const popover = picker.querySelector('.color-picker-popover');
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = !popover.hidden;
+    closeAllColorPickerPopovers();
+    popover.hidden = wasOpen;
+  });
+  popover.querySelectorAll('.pal-swatch.pickable').forEach(sw => sw.addEventListener('click', () => {
+    lastParsedHeader[picker.dataset.field] = +sw.dataset.index;
+    popover.hidden = true;
     refreshBackdropPickers();
     scheduleHeaderRecompile();
   }));
 }
+function closeAllColorPickerPopovers(){
+  document.querySelectorAll('.color-picker-popover').forEach(p => { p.hidden = true; });
+}
+// One listener for the module's whole lifetime (not re-added per render)
+// — any click outside an open popover closes it, the standard pattern
+// for a dropdown-style control.
+document.addEventListener('click', closeAllColorPickerPopovers);
+
 function refreshBackdropPickers(){
   const pal = generatePalette(lastParsedHeader);
   const fillSlot = document.getElementById('backdropFillPickerSlot');
   const groundSlot = document.getElementById('backdropGroundPickerSlot');
-  if(fillSlot) fillSlot.innerHTML = renderIndexPicker(pal, lastParsedHeader.backdropFillIndex, 'backdropFillIndex');
-  if(groundSlot) groundSlot.innerHTML = renderIndexPicker(pal, lastParsedHeader.backdropGroundIndex, 'backdropGroundIndex');
-  wireIndexPickerSlot('backdropFillPickerSlot');
-  wireIndexPickerSlot('backdropGroundPickerSlot');
+  if(fillSlot) fillSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropFillIndex, 'backdropFillIndex');
+  if(groundSlot) groundSlot.innerHTML = renderColorPicker(pal, lastParsedHeader.backdropGroundIndex, 'backdropGroundIndex');
+  wireColorPickerSlot('backdropFillPickerSlot');
+  wireColorPickerSlot('backdropGroundPickerSlot');
 }
 
 // paletteParams[1] is a real byte slot (the array must stay 8 long) but
@@ -306,12 +343,10 @@ function renderPaletteEditorSlot(){
     <div id="paletteLivePreviewSlot">${renderPaletteStrip(pal, 0)}</div>
     <div class="inspect-section-title">Backdrop</div>
     <p class="inspect-help">Only used when map generator is 0 — a generated map draws instead and these are ignored.</p>
-    <div class="header-field-row"><label>Fill color</label></div>
-    <div id="backdropFillPickerSlot">${renderIndexPicker(pal, h.backdropFillIndex, 'backdropFillIndex')}</div>
+    <div class="header-field-row"><label>Fill color</label><div id="backdropFillPickerSlot">${renderColorPicker(pal, h.backdropFillIndex, 'backdropFillIndex')}</div></div>
     <div class="header-field-row"><label>Ground height</label>
       <input type="number" id="field-backdropGroundHeight" min="0" max="255" value="${h.backdropGroundHeight}"></div>
-    <div class="header-field-row"><label>Ground color</label></div>
-    <div id="backdropGroundPickerSlot">${renderIndexPicker(pal, h.backdropGroundIndex, 'backdropGroundIndex')}</div>
+    <div class="header-field-row"><label>Ground color</label><div id="backdropGroundPickerSlot">${renderColorPicker(pal, h.backdropGroundIndex, 'backdropGroundIndex')}</div></div>
   `;
   slot.querySelectorAll('input[type=range][data-pp-index]').forEach(rng => rng.addEventListener('input', () => {
     const idx = +rng.dataset.ppIndex;
@@ -322,8 +357,8 @@ function renderPaletteEditorSlot(){
     refreshBackdropPickers();
     scheduleHeaderRecompile();
   }));
-  wireIndexPickerSlot('backdropFillPickerSlot');
-  wireIndexPickerSlot('backdropGroundPickerSlot');
+  wireColorPickerSlot('backdropFillPickerSlot');
+  wireColorPickerSlot('backdropGroundPickerSlot');
   bindHeaderField(document.getElementById('field-backdropGroundHeight'), ['backdropGroundHeight']);
 }
 
@@ -410,7 +445,7 @@ function wireInspectOverview(){
 // others don't (DESIGN.md §43; there's no longer a curated-bank mode
 // whose own index usage might disagree with the labels).
 function renderPaletteStrip(colors, startIndex){
-  return '<div class="pal-strip" style="grid-template-columns:repeat(' + colors.length + ',40px)">' + colors.map((c,i) => `
+  return '<div class="pal-strip">' + colors.map((c,i) => `
     <div class="pal-swatch" style="background:${c}" title="${startIndex+i}: ${esc(c)}"><span>${startIndex+i}</span></div>
   `).join('') + '</div>';
 }
