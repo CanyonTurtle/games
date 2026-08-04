@@ -40,6 +40,8 @@
   .back:hover{color:var(--ink);}
   h1{font-size:clamp(26px,5vw,34px);margin:0 0 8px;}
   p.lede{color:var(--ink-dim);max-width:64ch;font-size:15px;}
+  p.agent-callout{display:inline-block;margin:14px 0 0;font-size:12.5px;color:var(--ink-dim);border:1px solid var(--rule);border-radius:6px;padding:8px 14px;background:var(--bg-card);}
+  p.agent-callout a{font-weight:700;}
 
   nav.toc{max-width:900px;margin:18px auto 0;padding:0 20px;display:flex;flex-wrap:wrap;gap:8px;position:sticky;top:0;background:var(--bg);padding-top:10px;padding-bottom:10px;z-index:5;border-bottom:1px solid var(--rule);}
   nav.toc a{font-size:12.5px;text-decoration:none;color:var(--ink-dim);border:1px solid var(--rule);border-radius:20px;padding:5px 12px;background:var(--bg-card);}
@@ -103,10 +105,9 @@
   <h1>Learn the Urlcade</h1>
   <p class="lede">How a cart actually works, taught with the real
   engine — every demo below calls the same <code>kernel.js</code> the
-  live runtime plays every cart through, not a simplified stand-in.
-  Building a cart yourself? The
-  <a href="../skill/SKILL.md">agent skill</a> is the concise reference;
-  this page is the tour.</p>
+  live runtime plays every cart through, not a simplified stand-in.</p>
+  <p class="agent-callout">Building a cart with an agent? Skip this page — read
+  <a href="../skill/SKILL.md">SKILL.md</a> instead.</p>
 </header>
 
 <nav class="toc">
@@ -172,8 +173,7 @@
   colors, generated — never hand-picked per color — from 8 bytes
   (<code>paletteParams</code>). Everything else visual (entities' sprites,
   the map's tiles) is built from indices into that same 16-color
-  palette. Full field-by-field reference:
-  <a href="../skill/references/cart-object.md">cart-object.md</a>.</p>
+  palette.</p>
 
   <h3>Live: the palette generator</h3>
   <div class="demo">
@@ -211,8 +211,7 @@
   — only <code>JMP</code>/<code>JZ</code>/<code>JNZ</code> to fixed
   labels. Every hook call is capped at 20,000 dispatched instructions
   (<code>MAX_STEPS</code>); going over sets a cart fault and stops the
-  hook. Full table with exact stack order for every op:
-  <a href="../skill/references/opcodes.md">opcodes.md</a>.</p>
+  hook.</p>
 
   <div class="cards">
     <div class="card"><h4>Stack &amp; arithmetic</h4><p><code>PUSHI</code> <code>PUSHC</code> <code>DUP</code> <code>POP</code> <code>SWAP</code> <code>ADD</code> <code>SUB</code> <code>MUL</code> <code>DIV</code> <code>MOD</code> <code>NEG</code></p></div>
@@ -252,8 +251,7 @@ HALT</textarea>
   <p>A cart's behavior lives in up to six bytecode blobs. They don't all
   run the same way — some are global (once per tick), some run once per
   entity, one runs once per colliding pair, and one runs at render time
-  instead of simulation time. Full dispatch details:
-  <a href="../skill/references/hooks.md">hooks.md</a>.</p>
+  instead of simulation time.</p>
   <svg class="diagram" viewBox="0 0 860 150">
     <g font-size="11">
       <line x1="20" y1="30" x2="840" y2="30" class="arrow"/>
@@ -301,8 +299,7 @@ HALT</textarea>
   <strong>cave</strong>, or a token-stream <strong>platform</strong>
   level. All three return the same shape &mdash; a grid of tile ids plus a
   <code>checkpoints</code> list a hook can query with
-  <code>GET_CHECKPOINT</code>. Token vocabularies and config fields:
-  <a href="../skill/references/map-generators.md">map-generators.md</a>.</p>
+  <code>GET_CHECKPOINT</code>.</p>
 
   <div class="demo">
     <p class="demo-label">calls the real <code>buildTrack</code> / <code>buildCave</code> / <code>buildPlatformLevel</code></p>
@@ -320,10 +317,8 @@ HALT</textarea>
   <p class="kicker">Sharing a cart</p>
   <h2>Bytes &rarr; base64url &rarr; a link</h2>
   <p><code>encodeCart()</code> writes a tight byte layout (u8/u16/f32
-  fields in a fixed order, no padding) &mdash; see
-  <a href="../skill/references/binary-format.md">binary-format.md</a> for
-  the exact sequence. Those bytes are opportunistically deflate-compressed
-  (kept only if actually smaller), then base64url-encoded straight into
+  fields in a fixed order, no padding). Those bytes are opportunistically
+  deflate-compressed (kept only if actually smaller), then base64url-encoded straight into
   the URL fragment, tagged <code>z.</code> (compressed) or
   <code>r.</code> (raw) so the runtime knows which to reverse. If the cart
   has a name/author they ride in front as plain readable text:
@@ -344,7 +339,6 @@ HALT</textarea>
   <h2>Build one for real</h2>
   <div class="cards">
     <div class="card"><h4>Play &amp; Debug</h4><p>Open the <a href="../../">live runtime</a>, pick "+ New Cart" on the shelf &mdash; Debug's Source tab recompiles on every keystroke and shows a specific error or a Play link.</p></div>
-    <div class="card"><h4>Building with an agent</h4><p>Point it at the <a href="../skill/SKILL.md">SKILL.md</a> &mdash; a router into the same reference files linked throughout this page.</p></div>
     <div class="card"><h4>Known-good examples</h4><p><a href="../fixtures.md">fixtures.md</a>: cart &rarr; exact bytes &rarr; exact fragment, to check an implementation against directly.</p></div>
   </div>
 </section>
