@@ -12,17 +12,16 @@ no build step, no account. `kernel.js` and `url-console/v0/runtime.js`
 **are the spec** — every doc surface below is a teaching layer on top of
 them, never the other way around.
 
-## The four doc surfaces, and what each is for
+## The three doc surfaces, and what each is for
 
 | Surface | Audience | Purpose |
 |---|---|---|
 | `.claude/skills/urlcade/SKILL.md` + `references/*.md` | Agents | Concise, progressive-disclosure reference for building/debugging a cart. `SKILL.md` is a router only — it names each reference file and when to load it, nothing more. |
 | `spec/learn/index.html` | Humans | A taught tour with visuals and small live demos, each calling the real `kernel.js` functions directly (never a re-implementation, never narration of what the code does — run it and show the result). |
-| `spec/index.html` | Either | A bare link list into the raw doc files, for a browser or an agent fetching by URL with no rendering step. |
 | `DESIGN.md` | Maintainers | An append-only historical dev log — every round of work, the bug found, the fix, the reasoning. Separate on purpose. |
 
 **`DESIGN.md` is never linked from, and never a source for, the other
-three.** The skill and the learn site teach *what the system is and how
+two.** The skill and the learn site teach *what the system is and how
 to use it right now*; `DESIGN.md` records *how it got that way*. Mixing
 the two makes the teaching surfaces bloat with irrelevant history and
 makes `DESIGN.md` stop being a trustworthy chronological record. Keep
