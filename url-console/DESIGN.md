@@ -2691,7 +2691,19 @@ Couldn't reproduce a literal 1-second stall directly — a Playwright harness re
 
 Verified with `test/smoke.js` (unmodified — Corridor's own gameplay check, and Water the Plant/Mini Golf's `on_draw`-dependent checks, all still pass) and a fresh screenshot confirming the rendered output is pixel-identical to before. Whether this was *the* cause of the reported stall or one contributing factor among several a real device surfaces and this environment can't fully reproduce remains genuinely open — flagged below.
 
-## 56. Open questions
+## 56. The actual smoking gun: ~27,800 throwaway `<canvas>` elements a second
+
+§55's `drawCmds` pooling shipped honestly flagged as unconfirmed — a real inefficiency, fixed regardless, but not proven to be *the* cause. Asked directly what work only happens on turning/moving/shooting specifically (as opposed to sitting idle), tracing both the cart's own bytecode and `World.step()` turned up nothing: `MOVE_SOLID` runs unconditionally every tick regardless of input, the prev-props interpolation snapshot and the O(n²) collision sweep run unconditionally every tick, and the raycaster's `on_draw` runs unconditionally every *frame* — the only input-gated code in the entire cart is a handful of cheap arithmetic opcodes (turning: one `SUB`/`ADD`; moving: a `SIN`/`COS`/`MUL`). None of that could plausibly cost a second on any hardware. Which meant the right question wasn't "what's different when you press a key" — it was "what's already constantly expensive that §55 didn't touch."
+
+Found it in `color-utils.js`'s `cssColorToRGB`: for any `hsl(...)` string (which is *every* palette entry — `generatePalette` never emits hex, see `hsl()` in kernel.js) it resolves the color by creating a brand-new `<canvas>` element (300x150px, the HTML default, since nothing sets its size), fetching a 2D context, setting `fillStyle`, and reading the browser-normalized value back out. That's a real, uncached DOM element allocation, and it was being paid **on every single `DRAW_LINE` draw call, every frame** — `glDrawLine` (the WebGL renderer's line-drawing path) called it fresh each time instead of resolving colors once. Every other cart's `on_draw` usage (Water the Plant's stem, Mini Golf's flag) draws a handful of lines a frame, so this was invisible; Corridor's raycaster draws ~480-490.
+
+Measured directly, before touching any code: a Playwright page with `document.createElement` monkey-patched to count `'canvas'` calls, sampled over 2 full seconds of steady-state Corridor gameplay (rebuilt from the exact commit `drawCmds` pooling landed on) — **55,660 canvas elements created in 2 seconds, ~27,830/sec, continuously, whether or not any button was ever touched.** That number alone is enough to explain real jank on any hardware, mobile especially; whether it's specifically *why* the stall reads as "starts exactly when you press a button" rather than "constant" is still a question about human perception under load, not one this fix needs to answer to be worth shipping.
+
+**Fixed by precomputing once per `World`, not resolving per draw call.** `World` now builds `this.paletteRGB` (16 `[r,g,b]` triples, one `cssColorToRGB` call each — 16 canvases total, at load, not 27,830/sec forever) right after `generatePalette()` runs. Every per-frame consumer that used to call `cssColorToRGB` fresh — `glDrawLine`, the WebGL backdrop fill/ground-strip colors, the aim-line color (mini-golf's swing indicator) — now indexes `paletteRGB` directly. `buildBitmap` (sprite/tile pixel-art baking, previously also calling `cssColorToRGB` per pixel at load time) does the same, trimming cart-load time too, not just steady-state play. Re-measured with the identical instrumented harness after the fix: **0 canvas creations across the same 2-second steady-state window.**
+
+Verified with `test/smoke.js` (unmodified, all checks pass) and a fresh screenshot — pixel-identical to before, confirming the cached RGB values match what the throwaway-canvas resolution used to produce. The canvas-creation counting harness itself (an `addInitScript` patching `Document.prototype.createElement`) is a technique worth keeping in mind for the next "is this actually expensive" question — cheaper and more direct than guessing from a CPU throttling knob that can't emulate GC or DOM-allocation behavior at all.
+
+## 57. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
@@ -2756,15 +2768,20 @@ Verified with `test/smoke.js` (unmodified — Corridor's own gameplay check, and
 - What does "cart fault" (step-budget exceeded, stack overflow) look
   like to a player — a glitch-aesthetic in-universe event, or an
   out-of-universe error screen?
-- §55's `drawCmds` pooling fixed a real, measurable source of per-frame
-  GC pressure unique to `on_draw`-heavy carts, but the specific ~1s
-  touch-input stall it was fixed *in response to* was never actually
-  reproduced in this environment (not headless, not under 6x CPU
-  throttling). Is there a real mobile device this can be re-tested
-  against directly, and if the stall persists after §55, what's the
-  next thing to profile — style recalc from the `.touch-btn.active`
-  class toggle, WebGL driver overhead specific to that device, or
-  something in the touch-event pipeline itself?
+- §55/§56 fixed two real, measured sources of severe per-frame
+  allocation in Corridor (`drawCmds` object churn, then ~27,830/sec
+  throwaway `<canvas>` elements from uncached `hsl()`-to-RGB
+  resolution) — the second one in particular is large enough to
+  explain real jank on its own. Neither was pinned down as *the* exact
+  cause of the originally-reported ~1s touch-input stall, since that
+  stall was never reproduced directly in this environment (not
+  headless, not under 6x CPU throttling — a limitation of the
+  reproduction environment, not evidence the fixes are unrelated). Is
+  there a real mobile device this can be re-tested against directly
+  now, and if the stall persists, what's next to profile — style
+  recalc from the `.touch-btn.active` class toggle, WebGL driver
+  overhead specific to that device, or something in the touch-event
+  pipeline itself?
 
 **Palette & art**
 - Does procedural-harmony-only risk every cart "feeling generated" the
