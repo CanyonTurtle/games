@@ -66,8 +66,18 @@ class World {
     this.cartFault = false;
     this.cameraX = 0; this.cameraY = 0; // recomputed every render() via updateCamera()
     this.palette = generatePalette(cart);
-    this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, this.palette, true));
-    this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, this.palette, false));
+    // cssColorToRGB resolves an hsl(...) string to [r,g,b] by creating a
+    // throwaway <canvas> (a real DOM element, ~300x150px by default) and
+    // reading its 2d context's resolved fillStyle back — fine to pay once
+    // per palette entry (16, here), ruinous to pay per draw call. Found
+    // while chasing a reported input-lag stutter in Corridor: its
+    // raycaster's on_draw emits ~480-490 DRAW_LINE calls a frame, and
+    // every one of them used to call cssColorToRGB fresh (via glDrawLine,
+    // below) — on the order of 29,000 canvas creations a second, just to
+    // re-derive the same 16 colors over and over. See DESIGN.md §57.
+    this.paletteRGB = this.palette.map(c => cssColorToRGB(c));
+    this.spriteCanvases = cart.sprites.map(s => this.buildBitmap(s, true));
+    this.tileCanvases = cart.tiles.map(t => this.buildBitmap(t, false));
     // Same source canvases feed either renderer: Canvas2D blits them
     // directly, WebGL uploads them as textures once here. No duplicated
     // pixel-building logic between the two backends.
@@ -140,7 +150,7 @@ class World {
     this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, input:0, pointerX:0, pointerY:0, pointerDown:0});
     this.runGlobalHook('on_init');
   }
-  buildBitmap(asset, palette, transparent){
+  buildBitmap(asset, transparent){
     const off = document.createElement('canvas');
     off.width = asset.w; off.height = asset.h;
     const c = off.getContext('2d');
@@ -152,8 +162,7 @@ class World {
     for(let i=0;i<asset.w*asset.h;i++){
       const idx = pixels[i];
       if(transparent && idx===0){ img.data[i*4+3]=0; continue; }
-      const col = palette[idx] || '#ff00ff';
-      const [r,g,b] = cssColorToRGB(col);
+      const [r,g,b] = this.paletteRGB[idx] || [255,0,255];
       img.data[i*4]=r; img.data[i*4+1]=g; img.data[i*4+2]=b; img.data[i*4+3]=255;
     }
     c.putImageData(img,0,0);
@@ -932,7 +941,15 @@ function computeAimLine(){
   const maxPower = world.cart.constants[al.maxPowerConstIdx] || 1;
   const length = Math.max(4, (power/maxPower) * al.maxLengthPx);
   const rot = -angleDeg * Math.PI/180;
-  return {anchorX, anchorY, length, rot, color: world.palette[al.colorIdx] || '#fff'};
+  // Both forms precomputed here (not derived from each other per-frame):
+  // Canvas2D wants the CSS string for fillStyle, WebGL wants [r,g,b] — see
+  // the paletteRGB comment in the World constructor for why this avoids
+  // cssColorToRGB's throwaway-canvas cost.
+  return {
+    anchorX, anchorY, length, rot,
+    color: world.palette[al.colorIdx] || '#fff',
+    colorRGB: world.paletteRGB[al.colorIdx] || [255,255,255],
+  };
 }
 function renderSceneCanvas(alpha){
   const cart = world.cart;
@@ -975,18 +992,18 @@ function renderSceneGL(alpha){
     // anything outside the viewport automatically, same as Canvas2D.
     glDrawTexturedQuad(world.glMapTexture, -world.cameraX, -world.cameraY, world.mapCanvas.width, world.mapCanvas.height, 0);
   } else {
-    const [br,bg,bb] = cssColorToRGB(world.palette[cart.backdropFillIndex] || '#222');
+    const [br,bg,bb] = world.paletteRGB[cart.backdropFillIndex] || [34,34,34];
     gl.clearColor(br/255, bg/255, bb/255, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
     if(cart.backdropGroundHeight > 0){
-      const [gr,gg,gb] = cssColorToRGB(world.palette[cart.backdropGroundIndex] || '#222');
+      const [gr,gg,gb] = world.paletteRGB[cart.backdropGroundIndex] || [34,34,34];
       glDrawColorQuad(0, canvas.height - cart.backdropGroundHeight, canvas.width, cart.backdropGroundHeight, gr/255, gg/255, gb/255, 1);
     }
   }
   for(const e of world.entities) drawEntityGL(e, alpha);
   const aim = computeAimLine();
   if(aim){
-    const [ar,ag,ab] = cssColorToRGB(aim.color);
+    const [ar,ag,ab] = aim.colorRGB;
     const cx = aim.anchorX + Math.cos(aim.rot)*(aim.length/2);
     const cy = aim.anchorY + Math.sin(aim.rot)*(aim.length/2);
     glDrawColorQuad(cx - aim.length/2, cy - 1, aim.length, 2, ar/255, ag/255, ab/255, 1, aim.rot);
@@ -1001,12 +1018,12 @@ function renderSceneGL(alpha){
 // regardless (see initGL()'s vertex shader), top-left = center - (w,h)/2
 // is all that's needed to land the quad centered on the line's midpoint.
 const DRAW_LINE_THICKNESS_PX = 1.4;
-function glDrawLine(x, y, palette, cmd){
+function glDrawLine(x, y, paletteRGB, cmd){
   const dx = cmd.x2 - cmd.x1, dy = cmd.y2 - cmd.y1;
   const length = Math.max(0.75, Math.hypot(dx, dy)); // floor avoids a degenerate zero-length quad for a dot-like "line"
   const rot = Math.atan2(dy, dx);
   const mx = x + (cmd.x1 + cmd.x2) / 2, my = y + (cmd.y1 + cmd.y2) / 2;
-  const [r,g,b] = cssColorToRGB(palette[cmd.color] || '#fff');
+  const [r,g,b] = paletteRGB[cmd.color] || [255,255,255];
   glDrawColorQuad(mx - length/2, my - DRAW_LINE_THICKNESS_PX/2, length, DRAW_LINE_THICKNESS_PX, r/255, g/255, b/255, 1, rot);
 }
 
@@ -1023,7 +1040,7 @@ function drawEntityGL(e, alpha){
       glDrawTexturedQuad(isCapRow?capTex:bodyTex, x, y+row*8, 8, 8, 0);
     }
   } else if(type.renderKind === 2){ // custom draw — runs on_draw, then paints whatever it emitted
-    for(const cmd of world.runDrawHook(e)) glDrawLine(x, y, world.palette, cmd);
+    for(const cmd of world.runDrawHook(e)) glDrawLine(x, y, world.paletteRGB, cmd);
   } else {
     const tex = world.glSpriteTextures[type.assetIndex];
     const src = world.spriteCanvases[type.assetIndex]; // dimensions only — same source as Canvas2D
