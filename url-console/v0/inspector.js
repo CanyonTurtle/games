@@ -1021,11 +1021,165 @@ function renderInspectMap(cart){
   return html;
 }
 
-function renderInspectEntities(cart){
-  return table([
-    ['#','renderKind','assetIndex','rotate','collisionW','collisionH','extFields'],
-    ...cart.entityTypes.map((t,i) => [i, t.renderKind, t.assetIndex, t.rotateFlag, t.collisionW, t.collisionH, t.extFieldCount]),
-  ]);
+/* ============================================================
+   Entity-type editor (Logic tab) — add/remove entity types, edit
+   renderKind/rotate/collision/extFieldCount, and reassign which sprite
+   or tile column a type draws as. Each card edits lastParsedHeader
+   directly and debounce-recompiles, same convention as every other
+   header-form field (bindHeaderField) — only renderKind changes and the
+   asset-picker need custom wiring, since those change *which options are
+   valid* rather than just writing a scalar.
+   ============================================================ */
+
+// typeId is a plain array index into entityTypes — nothing rewrites a
+// hook's `SPAWN <n>` operand when a type earlier in the array is deleted,
+// so every later type's index (and any hook that hardcodes it) shifts.
+// Said once here, not re-litigated per card.
+const ENTITY_INDEX_WARNING = 'Entity types are numbered by array position — deleting one shifts every later index. Any hook\'s SPAWN referencing a shifted type needs updating by hand.';
+
+function entityAssetThumbHtml(entityIndex){
+  return `<canvas id="entityAssetThumb${entityIndex}" width="1" height="1"></canvas>`;
+}
+// Draws whatever the type's renderKind/assetIndex currently point at —
+// sourced from inspectWorld (the last successfully compiled cart), same
+// as every other thumbnail in this view. Guarded against an out-of-range
+// assetIndex (a renderKind just switched, or a recompile hasn't landed
+// yet) rather than throwing on a missing source.
+function renderEntityAssetThumb(entityIndex){
+  const t = lastParsedHeader.entityTypes[entityIndex];
+  const c = document.getElementById('entityAssetThumb'+entityIndex);
+  if(!c) return;
+  const src = t.renderKind === 1 ? (inspectWorld.tileCanvases||[])[t.assetIndex] : (inspectWorld.spriteCanvases||[])[t.assetIndex];
+  if(!src){ c.width = 1; c.height = 1; return; }
+  c.width = src.width; c.height = src.height;
+  c.getContext('2d').drawImage(src, 0, 0);
+}
+function entityAssetPopoverGridHtml(renderKind){
+  if(renderKind === 2) return '<p class="inspect-empty">Not used for custom draw (on_draw paints it directly).</p>';
+  const cart = inspectCartInfo.cart;
+  const items = renderKind === 1 ? cart.tiles : cart.sprites;
+  const label = renderKind === 1 ? 'tile' : 'sprite';
+  if(!items.length) return `<p class="inspect-empty">No ${label}s in this cart yet.</p>`;
+  // Distinct class names from the opcode palette's own .operand-picker-*
+  // (CSS rules still shared, see index.html) — both this popover and the
+  // SPAWN operand picker can be present in the DOM at once on the Logic
+  // tab, and a page-global selector like '.operand-picker-item[data-value="0"]'
+  // would otherwise match one of each.
+  return `<div class="entity-asset-grid">${items.map((it,i) => `
+    <div class="entity-asset-item" data-value="${i}" tabindex="0"><canvas id="entityAssetPick${renderKind}_${i}" width="1" height="1"></canvas><div>${label} ${i}</div></div>
+  `).join('')}</div>`;
+}
+function entityAssetPickerHtml(entityIndex, t){
+  return `
+    <div class="entity-asset-picker" id="entityAssetPicker${entityIndex}">
+      <button type="button" class="entity-asset-trigger" title="Change sprite/tile">${entityAssetThumbHtml(entityIndex)}</button>
+      <div class="entity-asset-popover" id="entityAssetPopover${entityIndex}" hidden>${entityAssetPopoverGridHtml(t.renderKind)}</div>
+    </div>
+  `;
+}
+function closeAllEntityAssetPopovers(){
+  document.querySelectorAll('.entity-asset-popover').forEach(p => { p.hidden = true; });
+}
+document.addEventListener('click', closeAllEntityAssetPopovers);
+function wireEntityAssetPicker(entityIndex){
+  const picker = document.getElementById('entityAssetPicker'+entityIndex);
+  if(!picker) return;
+  const trigger = picker.querySelector('.entity-asset-trigger');
+  const popover = document.getElementById('entityAssetPopover'+entityIndex);
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = !popover.hidden;
+    closeAllEntityAssetPopovers();
+    popover.hidden = wasOpen;
+  });
+  const t = lastParsedHeader.entityTypes[entityIndex];
+  if(t.renderKind !== 2){
+    const src = t.renderKind === 1 ? inspectWorld.tileCanvases : inspectWorld.spriteCanvases;
+    (src||[]).forEach((s,i) => {
+      const c = document.getElementById(`entityAssetPick${t.renderKind}_${i}`);
+      if(!c || !s) return;
+      c.width = s.width; c.height = s.height;
+      c.getContext('2d').drawImage(s, 0, 0);
+    });
+  }
+  popover.querySelectorAll('.entity-asset-item').forEach(el => el.addEventListener('click', () => {
+    setHeaderPath(['entityTypes', entityIndex, 'assetIndex'], +el.dataset.value);
+    popover.hidden = true;
+    renderEntityAssetThumb(entityIndex);
+    scheduleHeaderRecompile();
+  }));
+}
+
+function entityTypeCardHtml(entityIndex, t){
+  return `
+    <div class="entity-card" id="entityCard${entityIndex}">
+      <div class="entity-card-header">
+        <span class="entity-card-label">Entity ${entityIndex}</span>
+        <button type="button" class="entity-delete-btn" data-entity-index="${entityIndex}" title="Delete">&#10005;</button>
+      </div>
+      <div class="entity-card-row">
+        <label>Render
+          <select id="entityRenderKind${entityIndex}">
+            <option value="0"${t.renderKind===0?' selected':''}>Sprite</option>
+            <option value="1"${t.renderKind===1?' selected':''}>Tile column</option>
+            <option value="2"${t.renderKind===2?' selected':''}>Custom draw (on_draw)</option>
+          </select>
+        </label>
+        ${entityAssetPickerHtml(entityIndex, t)}
+        <label><input type="checkbox" id="entityRotate${entityIndex}"${t.rotateFlag?' checked':''}/> Rotate</label>
+      </div>
+      <div class="entity-card-row">
+        <label>Collision W <input type="number" id="entityCollW${entityIndex}" value="${t.collisionW}" min="0" max="255"/></label>
+        <label>H <input type="number" id="entityCollH${entityIndex}" value="${t.collisionH}" min="0" max="255"/></label>
+        <label>Ext fields <input type="number" id="entityExtFields${entityIndex}" value="${t.extFieldCount}" min="0" max="255"/></label>
+      </div>
+    </div>
+  `;
+}
+function entityTypesPanelHtml(){
+  const types = lastParsedHeader.entityTypes;
+  let html = `<p class="inspect-help">${ENTITY_INDEX_WARNING}</p>`;
+  if(!types.length) html += '<p class="inspect-empty">No entity types yet — add one below.</p>';
+  else html += types.map((t,i) => entityTypeCardHtml(i,t)).join('');
+  html += '<div class="opcode-btns" style="margin-top:6px;"><button type="button" class="opcode-btn" id="addEntityTypeBtn">+ Entity Type</button></div>';
+  return html;
+}
+function renderEntityTypesPanel(){
+  const slot = document.getElementById('entityTypesSlot');
+  if(!slot) return;
+  slot.innerHTML = entityTypesPanelHtml();
+  wireEntityTypesPanel();
+}
+function wireEntityTypesPanel(){
+  const types = lastParsedHeader.entityTypes;
+  types.forEach((t,i) => {
+    // renderKind change swaps which asset domain (sprites vs tiles vs
+    // neither) assetIndex points into — resets it to 0 rather than
+    // leaving it referencing a value that may not even exist in the new
+    // domain, and re-renders the whole panel since the picker's own
+    // available options changed, not just a scalar.
+    bindHeaderField(document.getElementById('entityRenderKind'+i), ['entityTypes', i, 'renderKind'], {onAfter: () => {
+      setHeaderPath(['entityTypes', i, 'assetIndex'], 0);
+      renderEntityTypesPanel();
+    }});
+    bindHeaderField(document.getElementById('entityRotate'+i), ['entityTypes', i, 'rotateFlag'], {parse: v => v ? 1 : 0});
+    bindHeaderField(document.getElementById('entityCollW'+i), ['entityTypes', i, 'collisionW']);
+    bindHeaderField(document.getElementById('entityCollH'+i), ['entityTypes', i, 'collisionH']);
+    bindHeaderField(document.getElementById('entityExtFields'+i), ['entityTypes', i, 'extFieldCount']);
+    wireEntityAssetPicker(i);
+    renderEntityAssetThumb(i);
+  });
+  document.querySelectorAll('.entity-delete-btn').forEach(btn => btn.addEventListener('click', () => {
+    lastParsedHeader.entityTypes.splice(+btn.dataset.entityIndex, 1);
+    renderEntityTypesPanel();
+    scheduleHeaderRecompile();
+  }));
+  const addBtn = document.getElementById('addEntityTypeBtn');
+  if(addBtn) addBtn.addEventListener('click', () => {
+    lastParsedHeader.entityTypes.push({renderKind: 0, assetIndex: 0, rotateFlag: 0, collisionW: 8, collisionH: 8, extFieldCount: 0});
+    renderEntityTypesPanel();
+    scheduleHeaderRecompile();
+  });
 }
 
 /* ============================================================
@@ -1385,11 +1539,11 @@ function renderInspectLogic(body, cart){
   let html = renderInspectOverview(cart);
   html += '<div class="inspect-section-title">Map</div>';
   html += renderInspectMap(cart);
-  html += '<div class="inspect-section-title">Entities</div>';
-  html += renderInspectEntities(cart);
+  html += '<div class="inspect-section-title">Entities</div><div id="entityTypesSlot"></div>';
   html += '<div class="inspect-section-title">Hooks</div><div id="hooksSlot"></div>';
   body.innerHTML = html;
   wireInspectOverview();
+  renderEntityTypesPanel();
   renderInspectHooks(document.getElementById('hooksSlot'), cart);
 }
 

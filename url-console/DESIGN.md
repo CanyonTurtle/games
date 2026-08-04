@@ -2796,7 +2796,24 @@ Fourth visual-editor phase, and the simpler of the two items left on the origina
 
 Verified via `test/smoke.js`: Corridor's wall tile (`tiles[0]`) starts as a real 8×8 raw-pixel texture; picking a palette color and dragging across the top row asserts the recompiled cart's `pixels` array actually changed to the picked color. (One test-authoring bug worth a note for future rounds using this same pattern: the first version of this check computed the canvas's `boundingBox()` *before* clicking the palette-strip swatch — but that swatch click auto-scrolls its target into view, and the palette strip sits below the canvas in this layout, so the scroll invalidated the already-captured coordinates and the drag silently painted the *next* tile's canvas instead. Fixed by picking the color first, then reading `boundingBox()` immediately before the mouse actions — capture layout-dependent coordinates only right before you use them, never before a step that can still scroll the page.) Screenshot-verified in both themes plus the 375px mobile viewport, confirming no overflow with the palette strip's own flex-wrap.
 
-## 65. Open questions
+## 65. Entity-type CRUD — add/remove entity types, reassign which sprite or tile a type draws as
+
+Fifth and last visual-editor phase of this series, closing out the original wishlist (opcode palette, header/camera/input/backdrop/palette fields, sprite shape editor, tile pixel editor, and now this). The Logic tab's entity-type table — `[#, renderKind, assetIndex, rotate, collisionW, collisionH, extFields]`, read-only since the very first Debug view — becomes one editable card per entity type: a render-kind select, a sprite/tile thumbnail picker, and plain fields for rotate/collision/ext-field-count, plus add/delete.
+
+**Almost every field is a direct `bindHeaderField` reuse, not new plumbing.** Rotate (checkbox), collisionW/H, and extFieldCount are exactly the same "read the control, `setHeaderPath`, debounce-recompile" shape every Overview field already used — no bespoke wiring needed. Only two things needed custom handling, because they change *what the other controls even mean* rather than writing a scalar:
+
+1. **renderKind** — switching between Sprite (0), Tile column (1), and Custom draw (2) changes which array `assetIndex` even points into (`entityTypes[i].assetIndex` means "index into `cart.sprites`" for kind 0, "index into `cart.tiles`" for kind 1, and is unused entirely for kind 2 — confirmed straight from `doom-like.js`'s own `// assetIndex unused for renderKind:2` comment, not guessed). Changing it resets `assetIndex` to 0 and re-renders the whole card, rather than leaving a stale index that might not even exist in the new domain.
+2. **The asset picker** — a thumbnail-trigger + popover-grid picker, structurally identical to the color-picker popover (trigger button, absolute-positioned popover, a global click-outside-closes listener) but showing sprite/tile thumbnails instead of palette swatches. Picking one writes `assetIndex` directly.
+
+**A real bug caught by screenshot verification, not by the smoke suite.** The first version never actually painted the trigger's own thumbnail on initial render — `renderEntityAssetThumb()` existed and worked, but was only ever called from inside the picker's own "you just picked a new asset" handler, never during the card's first render. Every trigger button showed a blank canvas until you reassigned it once. The smoke suite's DOM/data assertions all still passed (nothing checks pixel content), so this only surfaced once the dark/light-theme screenshots were actually looked at — a concrete instance of this project's own standing rule that a reference/feature that reads correctly but wasn't checked against the real thing is worse than not having checked at all. Fixed by calling `renderEntityAssetThumb(i)` for every card during `wireEntityTypesPanel()`, alongside the wiring it already did.
+
+**A second bug, this time caught by the smoke suite itself: a class-name collision between two unrelated pickers.** The asset-picker popover's grid first reused the opcode palette's own `.operand-picker-grid`/`.operand-picker-item` classes outright — same visual language, seemed like reuse. But both the SPAWN operand picker (Hooks section) and an entity card's asset popover (Entities section, just above it) live on the same Logic tab at the same time, so a page-global selector like `.operand-picker-item[data-value="0"]` — exactly what the existing SPAWN-picker smoke test used — matched one element from each, and Playwright silently picked whichever came first in DOM order. The existing "SPAWN opens a picker with one item per entity type" check started reporting 2 items instead of 1, and a later click hung for 30 seconds against a match that turned out to be the wrong (hidden) element. Fixed by giving the entity picker its own `.entity-asset-grid`/`.entity-asset-item` classes, with the CSS rules shared via a comma-joined selector (`.operand-picker-item, .entity-asset-item{...}`) rather than duplicated — same visual result, no shared class name for a page-global selector to accidentally match twice.
+
+**Index-shift hazard, documented rather than solved.** `entityTypes` is a plain array; `SPAWN <n>` in hook bytecode hardcodes `n` as a typeId. Deleting entity type 1 out of 3 silently renumbers what was type 2 down to type 1 — any hook's `SPAWN 2` now spawns the wrong thing, and nothing in this editor (or the compiler) can detect that, since a numeric SPAWN operand is indistinguishable from an intentional one. Solving this for real would mean either named entity-type references (a bigger format change) or rewriting hook bytecode operands on every delete (fragile, hooks are hand-editable text). Neither is in scope here — a plain warning line above the entity list says so once, matching this project's standing preference for hand-typed-assembly-owns-its-own-correctness over trying to paper over a sharp edge with automation that can't fully close it.
+
+Verified via `test/smoke.js` against Race Car (3 renderKind:0 entity types, 3 real sprites — a genuine domain to reassign within, not a 1-item no-op): card count, a plain field edit (collisionW) and a checkbox (rotate) round-tripping through the recompiled cart, the asset picker's popover showing the right thumbnail count and reassigning `assetIndex` on pick, a renderKind change resetting `assetIndex` and recompiling cleanly, and add/delete both reflected in the recompiled cart. Screenshot-verified in both themes plus the 375px mobile viewport (0px overflow, the card rows wrap correctly).
+
+## 66. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
@@ -2921,10 +2938,12 @@ Verified via `test/smoke.js`: Corridor's wall tile (`tiles[0]`) starts as a real
   ground: still hand-typed assembly (kept text, kept diffable), but an
   opcode palette that picks operands from the cart's own real data
   instead of the author guessing a number. A fully visual/block editor
-  for hooks themselves is still open — but §62 gives the *asset* side a
-  genuinely fully-visual editor (drag shapes with the cursor, no text
-  involved at all) for shape-list sprites; raw-pixel sprites and tiles
-  are the same idea's next, still-open extension.
+  for hooks themselves is still open — but the asset/entity side is now
+  genuinely fully-visual end to end: §62 for shape-list sprites (drag
+  shapes with the cursor), §64 for raw-pixel sprites and tiles (paint
+  palette indices directly), and §65 for entity types themselves
+  (add/remove, reassign which sprite or tile a type draws as) — no text
+  editing required for art or entity wiring, only for hook logic.
 - How important is a "cart inspector" / decompiler for trust — should
   the runtime refuse to run a cart without first showing the player
   (or the developer) a human-readable disassembly?

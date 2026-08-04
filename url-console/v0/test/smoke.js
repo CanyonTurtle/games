@@ -737,6 +737,58 @@ async function main(){
     tileAfter[0] === paintColor && tileAfter[1] === paintColor && tileAfter[2] === paintColor,
     JSON.stringify({before: tileBefore.slice(0,3), after: tileAfter.slice(0,3), paintColor}));
 
+  // 5a3. Entity-type editor (Logic tab) — add/remove entity types, edit
+  // per-type fields, and reassign which sprite/tile a type draws as. Race
+  // Car ships 3 renderKind:0 entity types and 3 kind:1 sprites, a real
+  // domain to reassign within (not just index 0 -> index 0).
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.racer.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(200);
+  const entityCardCount = await page.evaluate(() => document.querySelectorAll('.entity-card').length);
+  check('the entity-type editor renders one card per entity type', entityCardCount === 3, entityCardCount);
+
+  // Plain fields (collisionW, rotate) go through bindHeaderField, same as
+  // every other header form control — no bespoke wiring to prove out.
+  await page.fill('#entityCollW0', '20');
+  await page.waitForTimeout(600);
+  const collWAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[0].collisionW);
+  check('editing an entity type\'s collisionW round-trips into the recompiled cart', collWAfter === 20, collWAfter);
+
+  const rotateBefore = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[1].rotateFlag);
+  await page.click('#entityRotate1');
+  await page.waitForTimeout(600);
+  const rotateAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[1].rotateFlag);
+  check('toggling an entity type\'s rotate checkbox round-trips into the recompiled cart', rotateAfter !== rotateBefore, JSON.stringify({rotateBefore, rotateAfter}));
+
+  // Reassign entity type 0's sprite via the asset picker popover.
+  await page.click('#entityAssetPicker0 .entity-asset-trigger');
+  await page.waitForTimeout(100);
+  const pickerItemCount = await page.evaluate(() => document.querySelectorAll('#entityAssetPopover0 .entity-asset-item').length);
+  check('the asset picker popover shows one thumbnail per sprite in the sprite domain', pickerItemCount === 3, pickerItemCount);
+  await page.click('#entityAssetPopover0 .entity-asset-item[data-value="1"]');
+  await page.waitForTimeout(600);
+  const assetIndexAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[0].assetIndex);
+  check('picking a thumbnail in the asset picker reassigns the entity type\'s assetIndex', assetIndexAfter === 1, assetIndexAfter);
+
+  // Changing renderKind resets assetIndex (the old index may not even
+  // exist in the new domain) and re-renders the row's picker against the
+  // new domain (tiles, here, since Race Car has 5).
+  await page.selectOption('#entityRenderKind0', '1');
+  await page.waitForTimeout(600);
+  const afterKindChange = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[0]);
+  check('changing renderKind resets assetIndex to 0 and recompiles cleanly', afterKindChange.renderKind === 1 && afterKindChange.assetIndex === 0, JSON.stringify(afterKindChange));
+
+  await page.click('#addEntityTypeBtn');
+  await page.waitForTimeout(600);
+  const entityTypesAfterAdd = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes);
+  check('"+ Entity Type" appends a new type with sane defaults', entityTypesAfterAdd.length === 4 && entityTypesAfterAdd[3].renderKind === 0 && entityTypesAfterAdd[3].assetIndex === 0, JSON.stringify(entityTypesAfterAdd[3]));
+
+  await page.click('.entity-delete-btn[data-entity-index="3"]');
+  await page.waitForTimeout(600);
+  const entityTypeCountAfterDelete = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes.length);
+  check('deleting an entity type removes it and the recompiled cart reflects it', entityTypeCountAfterDelete === 3, entityTypeCountAfterDelete);
+
   // 5b. Pointer input + on_draw immediate-mode drawing (DESIGN.md §36):
   // dragging across the canvas on the "Water the Plant" cart spawns real
   // water-drop entities via LOAD_POINTER_X/DOWN in on_input, which then
