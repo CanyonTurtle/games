@@ -25,7 +25,6 @@ cp "$ROOT/v0/inspector.js" "$DEST/inspector.js"
 cp "$ROOT/v0/main.js" "$DEST/main.js"
 cp -r "$ROOT/v0/carts" "$DEST/carts"
 
-cp "$ROOT/../spec/index.html" "$DEST/spec/index.html"
 cp "$ROOT/v0/kernel.js" "$DEST/spec/kernel.js"
 cp "$ROOT/v0/fixtures.md" "$DEST/spec/fixtures.md"
 cp "$ROOT/v0/fixtures.md" "$DEST/fixtures.md" # also at the root — the Debug view's Source tab links here without /spec/
