@@ -9,7 +9,8 @@
    - Logic: header/camera/input overview, map, entity types, and every
      hook's bytecode decompiled to a labeled listing and a flowchart.
    - Source: the cart as an editable plain-JS-object literal (hooks as
-     assembly-source line arrays, plus name/author — see AUTHORING.md).
+     assembly-source line arrays, plus name/author — see
+     spec/skill/references/cart-object.md).
      Compile status/fragment/errors sit at the top of this tab, the
      textarea right below, so editing and its feedback are never more
      than a scroll apart. Recompiles automatically as you type, and a
@@ -422,7 +423,7 @@ function renderInspectSourceTab(body){
     <div class="inspect-section-title">Source</div>
     <p class="inspect-help">Plain JS object — header fields as values, plus <code>name</code>/
     <code>author</code> (unencoded text in the URL fragment itself — see
-    <a href="AUTHORING.md">AUTHORING.md</a> — never part of the binary cart), each hook as an
+    <a href="spec/skill/references/binary-format.md">binary-format.md</a> — never part of the binary cart), each hook as an
     array of assembly-source lines. Recompiles automatically as you edit; status above updates live.</p>
     <textarea id="debugSourceInput" class="debug-textarea" spellcheck="false"
       autocapitalize="off" autocomplete="off">${esc(sourceText)}</textarea>
@@ -491,7 +492,8 @@ const STARTER_TEMPLATE = {
   // A modest terrain hue plus generatePalette()'s own guaranteed-vivid
   // entity floors (DESIGN.md §41/§43) is enough to make a first cart
   // look intentional without the author having to think about palettes
-  // at all yet — see the Palette section of AUTHORING.md.
+  // at all yet — see the Palette section of
+  // spec/skill/references/cart-object.md.
   paletteParams: [200, 0, 15, 40, 15, 60, 128, 128],
   rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,

@@ -9,7 +9,7 @@ set -euo pipefail
 DEST="${1:?usage: build-site.sh <dest-dir>}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-mkdir -p "$DEST/spec"
+mkdir -p "$DEST/spec/skill/references" "$DEST/spec/learn"
 
 # v0/*'s runtime files, flat at the site root — not under /v0/ — so
 # every fragment link ever shared against this site (`#z.<payload>` at
@@ -25,15 +25,21 @@ cp "$ROOT/v0/inspector.js" "$DEST/inspector.js"
 cp "$ROOT/v0/main.js" "$DEST/main.js"
 cp -r "$ROOT/v0/carts" "$DEST/carts"
 
-cp "$ROOT/../llms.txt" "$DEST/llms.txt"
 cp "$ROOT/../spec/index.html" "$DEST/spec/index.html"
 cp "$ROOT/v0/kernel.js" "$DEST/spec/kernel.js"
 cp "$ROOT/v0/fixtures.md" "$DEST/spec/fixtures.md"
-cp "$ROOT/v0/AUTHORING.md" "$DEST/spec/AUTHORING.md"
-# Also at the root — llms.txt, AUTHORING.md, and the Debug view's Source
-# tab all link to these without /spec/.
-cp "$ROOT/v0/AUTHORING.md" "$DEST/AUTHORING.md"
-cp "$ROOT/v0/fixtures.md" "$DEST/fixtures.md"
+cp "$ROOT/v0/fixtures.md" "$DEST/fixtures.md" # also at the root — the Debug view's Source tab links here without /spec/
+
+# The agent-facing skill (CLAUDE.md explains the doc architecture) —
+# published raw so any agent fetching by URL gets the same file Claude
+# Code reads locally from .claude/skills/urlcade/, not a second copy
+# that can drift.
+cp "$ROOT/../.claude/skills/urlcade/SKILL.md" "$DEST/spec/skill/SKILL.md"
+cp "$ROOT/../.claude/skills/urlcade/references/"*.md "$DEST/spec/skill/references/"
+
+# The human-facing learn site — self-contained, loads spec/kernel.js
+# (copied above) directly for its live demos.
+cp "$ROOT/../spec/learn/index.html" "$DEST/spec/learn/index.html"
 
 # Cache-busting: append ?v=<version> to every local <script src>/import
 # reference, so a browser (or a CDN in front of a custom domain) holding
@@ -50,6 +56,7 @@ VERSION="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%s)"
 CACHEBUST_FILES=(
   "$DEST/index.html" "$DEST/main.js" "$DEST/runtime.js" "$DEST/inspector.js"
   "$DEST/carts/index.js" "$DEST/carts"/*.js
+  "$DEST/spec/learn/index.html"
 )
 for f in "${CACHEBUST_FILES[@]}"; do
   sed -E -i \

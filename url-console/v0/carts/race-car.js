@@ -516,7 +516,7 @@ function buildRacerCart(){
     // instead of working with it (DESIGN.md §41). Cars use entity B
     // rather than A only because entity A's own hint here (~250, unused
     // by any sprite) happens to keep it out of yellow's way — see
-    // AUTHORING.md's Palette section for how these hints work.
+    // ../.claude/skills/urlcade/references/cart-object.md's Palette section for how these hints work.
     paletteParams: [220, 0, 8, 20, 12, 65, 178, 36],
     rngSeed: 17,
     modeFlags: 0,

@@ -297,7 +297,7 @@ function buildPlantCart(){
     cartType: 6, // advisory label only — see DESIGN.md §14
     // Terrain hue 25 (warm brown) for sky/soil (DESIGN.md §41/§44 — one
     // hue family, same constraint as every other procedural cart). Entity
-    // hue hints (not offsets — see AUTHORING.md's Palette section):
+    // hue hints (not offsets — see ../.claude/skills/urlcade/references/cart-object.md's Palette section):
     // ~147 (green) for the plant, ~267 (blue) for the water drop — both
     // exactly what a plant and the water that grows it should look like.
     paletteParams: [25, 0, 15, 50, 20, 85, 105, 190],

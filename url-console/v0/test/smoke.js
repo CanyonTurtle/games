@@ -106,9 +106,10 @@ async function main(){
 
   // 1b. Palette contrast (DESIGN.md §41/§44): every shelf cart's two
   // generated entity ramps (8-11, 12-15 — the ramps entity sprites draw
-  // from, see AUTHORING.md's Palette section) must land far enough in
-  // hue from the terrain ramp (0-7) *and* from each other, and saturated/
-  // lit enough to read as foreground, regardless of how muted a cart
+  // from, see spec/skill/references/cart-object.md's Palette section)
+  // must land far enough in hue from the terrain ramp (0-7) *and* from
+  // each other, and saturated/lit enough to read as foreground,
+  // regardless of how muted a cart
   // author chose the terrain ramp to be. A real behavioral check on
   // generatePalette()'s own output, not just "the cart loads" — this is
   // exactly the class of bug (blue car, ~15% saturated, on a ~15%
@@ -682,6 +683,50 @@ async function main(){
 
     await subBrowser.close();
     subServer.close();
+  }
+
+  // 9. The learn site (spec/learn/index.html) — loads clean under the
+  // real built-site relative paths, and its live demos (each calling the
+  // real kernel.js, not a re-implementation — see CLAUDE.md) actually
+  // produce output, not just "the page rendered."
+  {
+    const learnBrowser = await chromium.launch();
+    const learnServer = await serve(siteDir);
+    const learnPort = learnServer.address().port;
+    const learnPage = await learnBrowser.newPage();
+    const learnErrors = [];
+    learnPage.on('pageerror', e => learnErrors.push(e.message));
+    learnPage.on('console', m => { if(m.type() === 'error') learnErrors.push(m.text()); });
+    await learnPage.goto(`http://localhost:${learnPort}/spec/learn/index.html`);
+    await learnPage.waitForFunction(() => !!window.UrlcadeKernel, {timeout: 8000});
+
+    const paletteState = await learnPage.evaluate(() => {
+      const swatches = Array.from(document.querySelectorAll('#pal-swatches .sw'));
+      return {count: swatches.length, colored: swatches.every(s => !!s.style.background)};
+    });
+    check('learn site: palette demo renders 16 live swatches', paletteState.count === 16 && paletteState.colored, JSON.stringify(paletteState));
+
+    await learnPage.click('#vm-run');
+    const vmResult = await learnPage.evaluate(() => document.getElementById('vm-result').textContent);
+    check('learn site: VM demo runs the default bytecode and shows 5+3=8 in globals', /globals\[0\.\.7\] = \[5, 3, 8/.test(vmResult), vmResult);
+
+    await learnPage.click('#gen-track');
+    const trackResult = await learnPage.evaluate(() => document.getElementById('map-result').textContent);
+    check('learn site: track generator demo produces output', /track/.test(trackResult) && /checkpoints/.test(trackResult), trackResult);
+
+    await learnPage.click('#gen-platform');
+    const platResult = await learnPage.evaluate(() => document.getElementById('map-result').textContent);
+    check('learn site: platform generator demo produces output', /platform/.test(platResult), platResult);
+
+    await learnPage.click('#share-run');
+    await learnPage.waitForTimeout(150);
+    const shareResult = await learnPage.evaluate(() => document.getElementById('share-result').textContent);
+    check('learn site: sharing demo encodes and reports byte/char counts', /bytes/.test(shareResult) && /chars/.test(shareResult), shareResult);
+
+    check('learn site: no console/page errors', learnErrors.length === 0, JSON.stringify(learnErrors));
+
+    await learnBrowser.close();
+    learnServer.close();
   }
 
   fs.rmSync(siteDir, {recursive: true, force: true});
