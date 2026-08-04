@@ -78,6 +78,13 @@ let spriteDragState = null;
 // does the actual on-screen magnification (same pattern as every other
 // canvas in this view), this just keeps overlay lines/handles crisp.
 const SPRITE_EDITOR_ZOOM = 8;
+// Tile pixel editor state — the palette index a paint stroke currently
+// writes, keyed by tile index. {tileIndex: colorIndex}.
+let selectedTileColor = {};
+// In-progress paint-drag for the tile editor's canvas — {tileIndex,
+// lastX, lastY} (last-painted pixel, so a slow drag doesn't re-write the
+// same pixel every pointermove) or null when nothing is being dragged.
+let tileDragState = null;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
 // takes whatever comes after the last '#' if there is one, else the
@@ -826,53 +833,164 @@ function attachSpriteEditors(cart){
     if(addRectBtn) addRectBtn.addEventListener('click', () => addShape(i, SHAPE_RECT));
   });
 }
-function attachTileCanvases(cart){
-  const grid = document.getElementById('tileGrid');
-  if(!grid) return;
-  grid.innerHTML = ''; // safe to call twice — see attachSpriteCanvases' own comment
+// Tile pixel editor — every tile is raw pixels only (no shape-list
+// option the way sprites have), so "editing" here just means painting
+// palette indices directly, no shape math needed at all. Mirrors the
+// sprite editor's redraw/pointer-handler shape closely (buildBitmap for
+// the real render, re-fetch lastParsedHeader fresh every event) since
+// it's the same "zoomed-in editable canvas" idea underneath.
+function tileEditorHtml(tileIndex){
+  return `
+    <div class="tile-editor" id="tileEditor${tileIndex}">
+      <div class="tile-editor-canvas-wrap"><canvas id="tileEditorCanvas${tileIndex}"></canvas></div>
+      <div id="tilePaletteSlot${tileIndex}"></div>
+    </div>
+  `;
+}
+function tilesListHtml(cart){
+  let html = '';
   cart.tiles.forEach((t,i) => {
-    const tile = document.createElement('div');
-    tile.className = 'inspect-tile';
-    const c = inspectWorld.tileCanvases[i];
-    c.style.width = '100%'; c.style.imageRendering = 'pixelated';
-    tile.appendChild(c);
-    const p = document.createElement('p');
-    p.textContent = `tile ${i} — ${t.w}×${t.h}`;
-    tile.appendChild(p);
-    grid.appendChild(tile);
+    html += `<div class="inspect-section-title">Tile ${i} — ${t.w}×${t.h}</div>`;
+    html += tileEditorHtml(i);
+  });
+  return html;
+}
+// Draws the tile's current pixels (via inspectWorld.buildBitmap — same
+// real rasterizer the runtime uses, not a reimplementation) scaled up,
+// plus a faint per-cell grid — a true bitmap editor benefits from visible
+// cell boundaries the vector shape editor never needed.
+function redrawTileEditor(tileIndex){
+  const canvas = document.getElementById('tileEditorCanvas'+tileIndex);
+  if(!canvas) return;
+  const tile = lastParsedHeader.tiles[tileIndex];
+  const w = tile.w, h = tile.h;
+  canvas.width = w * SPRITE_EDITOR_ZOOM;
+  canvas.height = h * SPRITE_EDITOR_ZOOM;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  const bitmap = inspectWorld.buildBitmap({w, h, pixels: tile.pixels}, false);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = 'rgba(128,128,128,.35)'; ctx.lineWidth = 1;
+  for(let x=1;x<w;x++){
+    ctx.beginPath(); ctx.moveTo(x*SPRITE_EDITOR_ZOOM+0.5, 0); ctx.lineTo(x*SPRITE_EDITOR_ZOOM+0.5, canvas.height); ctx.stroke();
+  }
+  for(let y=1;y<h;y++){
+    ctx.beginPath(); ctx.moveTo(0, y*SPRITE_EDITOR_ZOOM+0.5); ctx.lineTo(canvas.width, y*SPRITE_EDITOR_ZOOM+0.5); ctx.stroke();
+  }
+}
+// Always-visible strip (not a popover — a paint tool needs its current
+// color reselectable at any time, unlike a single-field color picker), so
+// it gets its own small renderer rather than reusing renderColorPicker.
+function renderTilePaletteSlot(tileIndex){
+  const slot = document.getElementById('tilePaletteSlot'+tileIndex);
+  if(!slot) return;
+  const pal = generatePalette(lastParsedHeader);
+  if(selectedTileColor[tileIndex] === undefined) selectedTileColor[tileIndex] = 1;
+  const sel = selectedTileColor[tileIndex];
+  slot.innerHTML = `<div class="pal-strip">${pal.map((c,i) => `
+    <div class="pal-swatch pickable${i===sel?' selected':''}" style="background:${c}"
+      title="${i}: ${esc(c)}" data-index="${i}" tabindex="0" role="button"><span>${i}</span></div>
+  `).join('')}</div>`;
+  slot.querySelectorAll('.pal-swatch.pickable').forEach(sw => sw.addEventListener('click', () => {
+    selectedTileColor[tileIndex] = +sw.dataset.index;
+    renderTilePaletteSlot(tileIndex);
+  }));
+}
+// No letterboxing (same reasoning as spriteEditorPointerCoords) — floored
+// and clamped to the tile's own bounds since a drag can carry the pointer
+// past the canvas edge while still captured.
+function tileEditorPointerCoords(canvas, tile, e){
+  const rect = canvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX - rect.left) * tile.w / rect.width);
+  const y = Math.floor((e.clientY - rect.top) * tile.h / rect.height);
+  return {x: Math.max(0, Math.min(tile.w-1, x)), y: Math.max(0, Math.min(tile.h-1, y))};
+}
+// Re-fetches lastParsedHeader.tiles[tileIndex] fresh on every call rather
+// than a reference captured at pointerdown — same staleness hazard the
+// sprite editor's drag handlers already guard against (lastParsedHeader is
+// wholesale-replaced by every successful recompile). Returns whether the
+// pixel actually changed, so callers can skip a redraw/recompile on a
+// same-color repaint.
+function paintTilePixel(tileIndex, x, y){
+  const tile = lastParsedHeader.tiles[tileIndex];
+  const idx = y*tile.w + x;
+  const color = selectedTileColor[tileIndex] === undefined ? 1 : selectedTileColor[tileIndex];
+  if(tile.pixels[idx] === color) return false;
+  tile.pixels[idx] = color;
+  return true;
+}
+function tileEditorPointerDown(tileIndex, canvas, e){
+  canvas.setPointerCapture(e.pointerId);
+  const tile = lastParsedHeader.tiles[tileIndex];
+  const p = tileEditorPointerCoords(canvas, tile, e);
+  tileDragState = {tileIndex, lastX: -1, lastY: -1};
+  if(paintTilePixel(tileIndex, p.x, p.y)){
+    tileDragState.lastX = p.x; tileDragState.lastY = p.y;
+    redrawTileEditor(tileIndex);
+    scheduleHeaderRecompile();
+  }
+}
+function tileEditorPointerMove(tileIndex, canvas, e){
+  if(!tileDragState || tileDragState.tileIndex !== tileIndex) return;
+  const tile = lastParsedHeader.tiles[tileIndex];
+  const p = tileEditorPointerCoords(canvas, tile, e);
+  if(p.x === tileDragState.lastX && p.y === tileDragState.lastY) return;
+  if(paintTilePixel(tileIndex, p.x, p.y)){
+    tileDragState.lastX = p.x; tileDragState.lastY = p.y;
+    redrawTileEditor(tileIndex);
+    scheduleHeaderRecompile();
+  }
+}
+function tileEditorPointerUp(tileIndex){
+  if(tileDragState && tileDragState.tileIndex === tileIndex) tileDragState = null;
+}
+function attachTileEditors(cart){
+  cart.tiles.forEach((t,i) => {
+    redrawTileEditor(i);
+    renderTilePaletteSlot(i);
+    const canvas = document.getElementById('tileEditorCanvas'+i);
+    if(!canvas) return;
+    canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); tileEditorPointerDown(i, canvas, e); }, {passive:false});
+    canvas.addEventListener('pointermove', (e) => tileEditorPointerMove(i, canvas, e));
+    canvas.addEventListener('pointerup', () => tileEditorPointerUp(i));
+    canvas.addEventListener('pointercancel', () => tileEditorPointerUp(i));
   });
 }
-// The sprite shape editor is the first Assets-tab control that can
+// The sprite shape editor was the first Assets-tab control that could
 // trigger a recompile while Assets stays the visible tab (every other
-// editable field lives on Logic/Source, tabs Assets isn't shown
-// alongside) — and every recompile swaps inspectWorld = new World(cart)
-// (see compileSourceText), orphaning the *other* kind:0 sprite/tile
-// canvases already appended into the page from the previous inspectWorld.
-// Called from compileSourceText's success branch; a no-op unless Assets
-// is the tab actually on screen right now. The kind:1 editor canvas
-// itself never goes stale this way — it draws fresh from
-// lastParsedHeader on every interaction already, never from
-// inspectWorld.spriteCanvases.
+// editable field lived on Logic/Source, tabs Assets isn't shown
+// alongside) — the tile editor and the Assets tab's own palette slider
+// now share that property. Every recompile swaps inspectWorld = new
+// World(cart) (see compileSourceText), which orphans the *other* kind:0
+// sprite thumbnails already appended into the page from the previous
+// inspectWorld, and — since redraw for both editor canvases resolves
+// colors through that same inspectWorld — leaves any already-open kind:1
+// sprite or tile editor showing stale colors after a palette edit until
+// something else forces a redraw. Called from compileSourceText's
+// success branch; a no-op unless Assets is the tab actually on screen.
 function refreshAssetCanvasesIfVisible(){
   if(inspectTab !== 'Assets' || !inspectCartInfo) return;
   attachSpriteCanvases(inspectCartInfo.cart);
-  attachTileCanvases(inspectCartInfo.cart);
+  lastParsedHeader.sprites.forEach((s,i) => { if(s.kind === 1) redrawSpriteEditor(i); });
+  lastParsedHeader.tiles.forEach((t,i) => redrawTileEditor(i));
 }
 // Assets tab: palette + sprites + tiles, in sequence — everything that's
 // just pixels, nothing that's behavior. Built as one body.innerHTML pass
-// (not three separate ones) so the sprite/tile canvases' slot divs exist
-// before attachSpriteCanvases/attachTileCanvases go looking for them.
+// (not three separate ones) so the sprite/tile editors' slot divs exist
+// before attachSpriteCanvases/attachSpriteEditors/attachTileEditors go
+// looking for them.
 function renderInspectAssets(body, cart){
   let html = '<div class="inspect-section-title">Palette</div>';
   html += renderInspectPalette(cart);
   html += '<div class="inspect-section-title">Sprites</div>';
   html += spritesListHtml(cart);
   html += '<div class="inspect-section-title">Tiles</div>';
-  html += '<div class="inspect-grid" id="tileGrid"></div>';
+  html += tilesListHtml(cart);
   body.innerHTML = html;
   attachSpriteCanvases(cart);
   attachSpriteEditors(cart);
-  attachTileCanvases(cart);
+  attachTileEditors(cart);
 }
 
 function renderInspectMap(cart){

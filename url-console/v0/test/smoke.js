@@ -710,6 +710,33 @@ async function main(){
   const rawPixelMsg = await page.evaluate(() => document.getElementById('spriteSlot0')?.nextElementSibling?.textContent);
   check('a raw-pixel sprite shows a future-phase message instead of a broken editor', /Raw-pixel editing is a future phase/.test(rawPixelMsg || ''), rawPixelMsg);
 
+  // 5a2. Tile pixel editor (Assets tab, all tiles are raw pixels — no
+  // shape-list option the way sprites have). Still on doom's Assets tab;
+  // its tile 0 (wallPixels) is a real 8x8 tile. Pick a paint color from
+  // the always-visible palette strip, then drag a stroke across the top
+  // row to prove drag-to-paint (not just a single click).
+  const tileBefore = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.tiles[0].pixels.slice());
+  const paintColor = tileBefore[0] === 3 ? 5 : 3; // whichever doesn't collide with the existing pixel
+  // Pick the paint color *before* reading the canvas's boundingBox — a
+  // page.click() auto-scrolls its target into view, and the palette strip
+  // sits below the canvas in this tile's layout, so clicking it after
+  // capturing tBox would silently invalidate those coordinates (the next
+  // tile's canvas can scroll up to occupy the old viewport position).
+  await page.click(`#tilePaletteSlot0 .pal-swatch[data-index="${paintColor}"]`);
+  await page.locator('#tileEditorCanvas0').scrollIntoViewIfNeeded();
+  const tBox = await page.locator('#tileEditorCanvas0').boundingBox();
+  const tCellW = tBox.width / 8, tCellH = tBox.height / 8;
+  await page.mouse.move(tBox.x + tCellW*0.5, tBox.y + tCellH*0.5);
+  await page.mouse.down();
+  await page.mouse.move(tBox.x + tCellW*1.5, tBox.y + tCellH*0.5, {steps: 3});
+  await page.mouse.move(tBox.x + tCellW*2.5, tBox.y + tCellH*0.5, {steps: 3});
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const tileAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.tiles[0].pixels);
+  check('dragging across the tile canvas paints the selected color into the recompiled cart\'s pixels',
+    tileAfter[0] === paintColor && tileAfter[1] === paintColor && tileAfter[2] === paintColor,
+    JSON.stringify({before: tileBefore.slice(0,3), after: tileAfter.slice(0,3), paintColor}));
+
   // 5b. Pointer input + on_draw immediate-mode drawing (DESIGN.md §36):
   // dragging across the canvas on the "Water the Plant" cart spawns real
   // water-drop entities via LOAD_POINTER_X/DOWN in on_input, which then
