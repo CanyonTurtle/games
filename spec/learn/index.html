@@ -216,8 +216,16 @@
     <div class="card"><h4>Stack &amp; arithmetic</h4><p><code>PUSHI</code> <code>PUSHC</code> <code>DUP</code> <code>POP</code> <code>SWAP</code> <code>ADD</code> <code>SUB</code> <code>MUL</code> <code>DIV</code> <code>MOD</code> <code>NEG</code></p></div>
     <div class="card"><h4>Comparison &amp; logic</h4><p><code>CMPEQ</code> <code>CMPNE</code> <code>CMPLT</code> <code>CMPLE</code> <code>CMPGT</code> <code>CMPGE</code> <code>AND</code> <code>OR</code> <code>NOT</code></p></div>
     <div class="card"><h4>Control flow</h4><p><code>JMP</code> <code>JZ</code> <code>JNZ</code> — labels only, no calls</p></div>
-    <div class="card"><h4>Entity state</h4><p><code>LOAD_SELF</code> <code>STORE_SELF</code> <code>LOAD_A</code> <code>LOAD_B</code> <code>STORE_A</code> <code>STORE_B</code> <code>LOADE</code> <code>STOREE</code></p></div>
-    <div class="card"><h4>Globals</h4><p><code>LOADG</code> <code>STOREG</code> — 24 persistent slots</p></div>
+    <div class="card"><h4>Entity state</h4><p><code>LOAD_SELF</code>/<code>STORE_SELF</code> read/write one of the
+    running entity's own numeric props. <code>LOAD_A</code>/<code>LOAD_B</code>/<code>STORE_A</code>/<code>STORE_B</code>
+    do the same for the two entities in a collision &mdash; they only mean anything inside <code>on_collide</code>,
+    reading as <code>0</code> everywhere else. To touch a <em>third</em> entity that's neither self nor a collision
+    partner (say, a boss another entity spawned), <code>LOADE</code>/<code>STOREE</code> take a global slot
+    holding that entity's id and reach its props by that handle.</p></div>
+    <div class="card"><h4>Globals</h4><p><code>LOADG idx</code>/<code>STOREG idx</code> read/write one of 24 numeric
+    slots (<code>World.globals</code>) that persist across every tick and every hook call for the whole run &mdash;
+    the only state a cart has outside individual entities' own props. Carts typically keep a name&rarr;index map
+    in their own source (e.g. <code>g_score = 0</code>) since the binary format only stores the slot number.</p></div>
     <div class="card"><h4>World queries</h4><p><code>RAND_RANGE</code> <code>SIN</code> <code>COS</code> <code>ATAN2</code> <code>DIST</code> <code>CLAMP_ABS</code> <code>LERP</code> <code>NORM_ANGLE</code> <code>GETTILE</code> <code>TILE_SURFACE</code> <code>GET_CHECKPOINT</code></p></div>
     <div class="card"><h4>Entity lifecycle</h4><p><code>SPAWN</code> <code>KILL_SELF</code> <code>MOVE_SOLID</code> <code>SETTILE</code></p></div>
     <div class="card"><h4>Input</h4><p><code>TESTBIT</code> <code>LOAD_INPUT</code> <code>LOAD_POINTER_X</code> <code>LOAD_POINTER_Y</code> <code>LOAD_POINTER_DOWN</code></p></div>
