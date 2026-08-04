@@ -131,11 +131,6 @@
   .inspect-tab.tab-err.active{border-bottom-color:var(--bad);}
   .inspect-body{flex:1;overflow-y:auto;padding:18px 16px calc(40px + var(--safe-b));}
   .inspect-empty{color:var(--ink-dim);font-size:13px;}
-  .inspect-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:14px;}
-  .inspect-tile{text-align:center;}
-  .inspect-tile canvas{image-rendering:pixelated;border:1px solid var(--rule);
-    background:var(--bg-card);width:100%;height:auto;}
-  .inspect-tile p{margin:6px 0 0;font-size:11px;color:var(--ink-dim);}
   /* Compact palette grid (DESIGN.md §42) — a dense 8-wide swatch strip,
      not the sprite/tile-style card list (name never fit that role: a
      swatch's whole content is one flat color, a full card's worth of
@@ -269,6 +264,17 @@
     border-radius:2px;font-size:11px;padding:3px 7px;cursor:pointer;}
   .shape-btn:hover:not(:disabled){color:var(--accent);border-color:var(--accent);}
   .shape-btn:disabled{opacity:.3;cursor:default;}
+
+  /* Tile pixel editor — a paint-with-the-cursor canvas plus a palette
+     strip to pick the current color, for each raw-pixel tile on the
+     Assets tab. Same wrap sizing/touch handling as the sprite editor's
+     own canvas, since it's the same "zoomed-in pixel-art surface"
+     idea. */
+  .tile-editor{margin-bottom:14px;}
+  .tile-editor-canvas-wrap{max-width:min(320px,100%);margin-bottom:8px;}
+  .tile-editor-canvas-wrap canvas{width:100%;height:auto;display:block;
+    image-rendering:pixelated;border:1px solid var(--rule);background:var(--bg-card);
+    touch-action:none;cursor:crosshair;}
 
   /* Source/Compile tabs — the former standalone /compile page, folded in
      as two more tabs of the same Debug view everything else lives in. */
