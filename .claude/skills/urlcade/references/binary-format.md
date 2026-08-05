@@ -13,7 +13,7 @@ on encode — a real V0 scope cut, not a bug to work around).
 
 Exactly this sequence, nothing implicit:
 
-1. `formatVersion` (u8, must be `3`), `cartType` (u8), `rngSeed` (u8),
+1. `formatVersion` (u8, must be `4`), `cartType` (u8), `rngSeed` (u8),
    `modeFlags` (u8)
 2. `screenW`, `screenH` (u16 each)
 3. `paletteParams` — exactly 8 raw bytes (padded with `0` if given fewer)
@@ -32,7 +32,8 @@ Exactly this sequence, nothing implicit:
 10. `sprites` — u8 count, then per sprite: a u8 kind flag (`1` if
     shape-list, else `0`), `w`, `h` (u8 each); if shape-list: u8 shape
     count then per shape `type` (u8) + 4 geometry bytes (each
-    `round(value*8) & 0xFF` — 1/8px fixed point) + `color` (u8); if raw:
+    `round(value*8)` — 1/8px fixed point, `u8()` itself throws rather
+    than wrapping if that exceeds 255/31.875px) + `color` (u8); if raw:
     `w*h` raw pixel bytes
 11. `tiles` — u8 count, then per tile: `w`, `h` (u8 each), `w*h` raw
     pixel bytes
@@ -40,11 +41,18 @@ Exactly this sequence, nothing implicit:
     `map-generators.md` for the field list per generator; each field
     writes as u8 except track's `tokens`/platform's `tokens` (u8 count +
     raw bytes)
-13. `camera` — `followGlobal` (u8), `clampMinX/Y`, `clampMaxX/Y` (u16 each)
-14. `aimLine` — u8 flag (`1` present / `0` absent), then if present:
+13. `mapShapes` — u8 count, then **if and only if** `mapGenerator === 0`
+    **and** that count is nonzero: `blankMap`'s `width, height,
+    fillTileId` (u8 each) — read this way round (count first) on purpose,
+    since `blankMap`'s own presence depends on the count, which a decoder
+    has no other way to know ahead of it. Then per shape (regardless of
+    `mapGenerator`): `tileX0, tileY0, tileX1, tileY1, tileId` (u8 each) —
+    see `map-generators.md`'s "Tilemap authoring" section.
+14. `camera` — `followGlobal` (u8), `clampMinX/Y`, `clampMaxX/Y` (u16 each)
+15. `aimLine` — u8 flag (`1` present / `0` absent), then if present:
     `anchorXGlobal, anchorYGlobal, angleGlobal, powerGlobal,
     maxPowerConstIdx, activeGlobal, colorIdx, maxLengthPx` (u8 each)
-15. `hooks` — for each of the 6 names in
+16. `hooks` — for each of the 6 names in
     `['on_init','on_frame','on_tick','on_input','on_collide','on_draw']`,
     in that fixed order: u16 byte length, then that many raw bytecode
     bytes (`0` length for an omitted hook)

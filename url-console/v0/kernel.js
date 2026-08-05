@@ -574,6 +574,26 @@ function encodeCart(cart){
     w.bytesRaw(p.tokens);
   }
 
+  // Tilemap authoring — shape layers (DESIGN.md §74). The shape count is
+  // written before blankMap on purpose: blankMap's own presence depends
+  // on whether there's anything to stamp into it, which the decoder
+  // can't know until it has read this count — writing blankMap first
+  // would leave decodeCart with no way to tell whether those bytes are
+  // even there. mapGenerator 1/2/3 never write blankMap at all (they
+  // already have a grid from their own generator); mapGenerator 0 with
+  // an empty mapShapes stays exactly what it's always been (this one
+  // count byte is the only cost), matching kernel.js's own
+  // buildBlankMap/applyMapShapes doc comment above.
+  const mapShapes = cart.mapShapes || [];
+  w.u8(mapShapes.length);
+  if(cart.mapGenerator === 0 && mapShapes.length){
+    const bm = cart.blankMap;
+    w.u8(bm.width); w.u8(bm.height); w.u8(bm.fillTileId);
+  }
+  for(const sh of mapShapes){
+    w.u8(sh.tileX0); w.u8(sh.tileY0); w.u8(sh.tileX1); w.u8(sh.tileY1); w.u8(sh.tileId);
+  }
+
   const cam = cart.camera || {followGlobal:255, clampMinX:0, clampMinY:0, clampMaxX:0, clampMaxY:0};
   w.u8(cam.followGlobal);
   w.u16(cam.clampMinX); w.u16(cam.clampMinY);
@@ -598,13 +618,15 @@ function encodeCart(cart){
   return w.toUint8Array();
 }
 
-// Bumped from 2 to 3 for the palette-mode collapse (DESIGN.md §43):
-// paletteMode's one header byte is gone (generatePalette no longer
-// branches on anything — every cart is procedural now, see below), one
-// byte shorter than formatVersion 2. Same no-compatibility-branch policy
-// as the 1->2 bump: this project is still pre-v1, and any cart worth
-// keeping can be decompiled under the old kernel and recompiled fresh.
-const SUPPORTED_FORMAT_VERSIONS = [3];
+// Bumped from 3 to 4 for tilemap authoring's mapShapes[]/blankMap fields
+// (DESIGN.md §74) — new required bytes in the middle of the format (the
+// mapShapes count, read unconditionally right after the mapGenerator
+// block), not appendable without a version bump the way a genuinely
+// optional trailing field could be. Same no-compatibility-branch policy
+// every prior bump has used: this project is still pre-v1, and any cart
+// worth keeping can be decompiled under the old kernel and recompiled
+// fresh.
+const SUPPORTED_FORMAT_VERSIONS = [4];
 function decodeCart(bytes){
   const r = new ByteReader(bytes);
   const cart = {};
@@ -702,6 +724,18 @@ function decodeCart(bytes){
     const tokenCount = r.u8();
     const tokens = Array.from(r.bytesN(tokenCount));
     cart.platform = {gridH, startGroundY, minGroundY, maxGroundY, tokens};
+  }
+
+  const mapShapeCount = r.u8();
+  cart.blankMap = null;
+  if(cart.mapGenerator === 0 && mapShapeCount){
+    cart.blankMap = {width: r.u8(), height: r.u8(), fillTileId: r.u8()};
+  }
+  cart.mapShapes = [];
+  for(let i=0;i<mapShapeCount;i++){
+    cart.mapShapes.push({
+      tileX0: r.u8(), tileY0: r.u8(), tileX1: r.u8(), tileY1: r.u8(), tileId: r.u8(),
+    });
   }
 
   cart.camera = {
@@ -1114,6 +1148,46 @@ function buildPlatformLevel(level){
   };
 }
 
+// Tilemap authoring — shape layers (DESIGN.md §74). Not a fourth
+// mutually-exclusive generator alongside track/cave/platform: `mapShapes`
+// is an orthogonal post-processing pass that composites on top of
+// whichever base is in play, including none (`mapGenerator:0`).
+//
+// `buildBlankMap(blankMap)` gives `mapGenerator:0` an explicit grid to
+// stamp into — the same {grid, checkpoints} shape every real generator
+// returns above, just a flat fill instead of an algorithm, and an empty
+// checkpoints array (nothing here to derive one from; a shapes-only cart
+// that needs its own logical positions declares them as ordinary
+// constants instead).
+function buildBlankMap(blankMap){
+  const grid = [];
+  for(let y=0;y<blankMap.height;y++) grid.push(new Array(blankMap.width).fill(blankMap.fillTileId));
+  return {grid, checkpoints: []};
+}
+// `applyMapShapes(grid, mapShapes)` stamps each shape's declared tile id
+// over the cells it covers, in array order — later shapes win on
+// overlap, the exact same z-order-collapses-down semantics
+// `renderShapeList` already uses for sprites, reused as-is rather than
+// inventing separate overlap rules. Coordinates are tile-grid cells, not
+// pixels (`tileX0,tileY0` inclusive, `tileX1,tileY1` exclusive — a plain
+// half-open range, simpler than a sprite shape's pixel/sub-pixel math
+// since a rect stamped onto a grid has no anti-aliasing or boundary
+// ambiguity to resolve). Out-of-range cells are silently clipped to the
+// grid, the same forgiving posture `SETTILE` already has at runtime.
+// Mutates `grid` in place — called once, at load time, over a generator's
+// (or `buildBlankMap`'s) freshly-built grid, well before anything renders
+// it or a hook can observe it.
+function applyMapShapes(grid, mapShapes){
+  const gh = grid.length, gw = gh ? grid[0].length : 0;
+  for(const sh of mapShapes){
+    const x0 = Math.max(0, Math.min(sh.tileX0, sh.tileX1));
+    const x1 = Math.min(gw, Math.max(sh.tileX0, sh.tileX1));
+    const y0 = Math.max(0, Math.min(sh.tileY0, sh.tileY1));
+    const y1 = Math.min(gh, Math.max(sh.tileY0, sh.tileY1));
+    for(let y=y0;y<y1;y++) for(let x=x0;x<x1;x++) grid[y][x] = sh.tileId;
+  }
+}
+
 /* ============================================================
    8. Sprite shape lists — DESIGN.md §17 (sprites as generated art, not
    raw pixel dumps or hand-written draw code). A sprite is either raw
@@ -1410,6 +1484,7 @@ return {
   CAVE_WALL, CAVE_FLOOR, CAVE_STAIRS, CAVE_GOLD, buildCave,
   PLATFORM_TOKENS, PLATFORM_WIDTH_TOKENS, PLATFORM_OPERAND_TOKENS,
   PLATFORM_AIR, PLATFORM_GROUND, PLATFORM_DIRT, PLATFORM_BRICK, buildPlatformLevel,
+  buildBlankMap, applyMapShapes,
   renderShapeList,
   disassembleHook, buildCFG, formatDisassembly, renderCFGSvg, EDGE_COLOR,
   describeControls, defaultCartFields, compileCartSource,

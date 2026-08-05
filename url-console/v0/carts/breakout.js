@@ -24,7 +24,7 @@
 
 function buildBreakoutCart(){
   const cart = {
-    formatVersion: 3,
+    formatVersion: 4,
     name: "Breakout", author: "Claude", // vendored, not authored here — see header comment
     cartType: 1,
     // Terrain hue 220 (dark blue background/bricks). Entity hue hint ~32

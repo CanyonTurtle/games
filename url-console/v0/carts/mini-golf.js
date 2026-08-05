@@ -26,7 +26,7 @@
 const K = window.UrlcadeKernel;
 const {
   assemble, HOOK_NAMES, TOUCH_TEMPLATE_STEER_ACTION, SHAPE_ELLIPSE, SHAPE_RECT,
-  TRACK_TOKENS,
+  TRACK_TOKENS, buildTrack,
 } = K;
 import { hexRowsToPixels } from './shared-sprites.js';
 
@@ -63,44 +63,14 @@ const GOLF_HOOKS_SRC = {
     GET_CHECKPOINT
     STOREG g_hole_y
     STOREG g_hole_x
-    ; buildTrack's own CHECKPOINT stamp (kernel.js) always marks a full
-    ; trackWidth-wide line, edge to edge across the fairway — the same
-    ; "gate," not "single point," convention every other checkpoint/tee
-    ; marker on this generator uses. For an actual hole that reads wrong
-    ; twice over: it looks like landing anywhere across the whole width
-    ; (including right at the rumble edge) sinks the putt, when only the
-    ; exact centerline tile (g_hole_x/g_hole_y, already the line's own
-    ; center) really does. Reverts the other 4 tiles in that line back to
-    ; plain fairway, by hand, at the 4 offsets either side of center —
-    ; this course's fixed dogleg geometry (hand-verified against
-    ; buildTrack(), like the rest of its layout) reaches the hole heading
-    ; +y, so the stamped line runs horizontally (x varies, y fixed) —
-    ; leaving one real hole, at the fairway's actual centerline, not its
-    ; edge.
-    LOADG g_hole_x
-    PUSHI 16
-    SUB
-    LOADG g_hole_y
-    PUSHI 2
-    SETTILE
-    LOADG g_hole_x
-    PUSHI 8
-    SUB
-    LOADG g_hole_y
-    PUSHI 2
-    SETTILE
-    LOADG g_hole_x
-    PUSHI 8
-    ADD
-    LOADG g_hole_y
-    PUSHI 2
-    SETTILE
-    LOADG g_hole_x
-    PUSHI 16
-    ADD
-    LOADG g_hole_y
-    PUSHI 2
-    SETTILE
+    ; The checkpoint-gate-vs-single-hole fixup (buildTrack's CHECKPOINT
+    ; stamp always marks a full trackWidth-wide line, wrong for an actual
+    ; hole) used to be 4 hand-written SETTILE calls right here. It's now
+    ; declared statically as this cart's own mapShapes (see the cart
+    ; object below) — a load-time compositing pass, not a runtime fixup,
+    ; since the hole's tile position is fully determined by buildTrack()
+    ; and this course's fixed geometry, computable once at cart-build
+    ; time rather than recomputed by a hook on every single play.
     SPAWN 1
     STOREG g_scratch
     LOADG g_hole_x
@@ -450,9 +420,37 @@ function buildMiniGolfCart(){
   const tokens = [T.START_FINISH, ...S(3), T.CURVE_R90, ...S(2), T.CHECKPOINT];
   const gridW = 40, gridH = 30, startGX = 4, startGY = 14, startDir = 0;
   const screenW = 160, screenH = 160;
+  const track = {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH};
+
+  // Tilemap authoring — shape layers (DESIGN.md §74). buildTrack() is a
+  // pure function of `track` above (no RNG, unlike the cave generator),
+  // so calling it once here at cart-build time gives the exact same hole
+  // position the runtime will compute later, with no need to hand-derive
+  // or hand-verify it separately — the same discipline as everywhere
+  // else in this file that validates geometry "against buildTrack()
+  // directly" rather than by inspection. checkpoints[1] is the hole (see
+  // on_init's own comment on checkpoint indices).
+  const {x: holePx, y: holePy} = buildTrack(track).checkpoints[1];
+  const holeGX = Math.floor(holePx / 8), holeGY = Math.floor(holePy / 8);
+  // buildTrack's own CHECKPOINT stamp always marks a full trackWidth-wide
+  // line, edge to edge across the fairway — the same "gate," not
+  // "single point," convention every other checkpoint/tee marker on this
+  // generator uses. For an actual hole that reads wrong twice over: it
+  // looks like landing anywhere across the whole width (including right
+  // at the rumble edge) sinks the putt, when only the exact centerline
+  // tile really does. Two shapes, later wins on overlap: revert the
+  // whole trackWidth-wide line to fairway (id 2), then restamp just the
+  // centerline tile back to the hole graphic (id 5, TILE_CHECKPOINT) —
+  // leaving one real hole, at the fairway's actual centerline, not its
+  // edge. This course's fixed dogleg geometry reaches the hole heading
+  // +y, so the gate runs horizontally (x varies, y fixed).
+  const mapShapes = [
+    {tileX0: holeGX - Math.floor(trackWidth/2), tileY0: holeGY, tileX1: holeGX + Math.floor(trackWidth/2) + 1, tileY1: holeGY + 1, tileId: 2},
+    {tileX0: holeGX, tileY0: holeGY, tileX1: holeGX + 1, tileY1: holeGY + 1, tileId: 5},
+  ];
 
   const cart = {
-    formatVersion: 3,
+    formatVersion: 4,
     name: 'Mini Golf', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14 (same "racer/golf" family label the actual racer uses)
     // Terrain hue 100 (green fairway). Entity hue hint ~357 (red) for
@@ -517,7 +515,8 @@ function buildMiniGolfCart(){
       {w:8, h:8, pixels:holePixels},
     ],
     mapGenerator: 1,
-    track: {tokens, trackWidth, segLen, startGX, startGY, startDir, gridW, gridH},
+    track,
+    mapShapes,
     camera: {
       followGlobal: GOLF_GLOBAL_NAMES.g_ball,
       clampMinX: 0, clampMinY: 0,

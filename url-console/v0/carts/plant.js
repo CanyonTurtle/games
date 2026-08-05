@@ -292,7 +292,7 @@ function buildPlantCart(){
     {type:SHAPE_ELLIPSE, cx:3, cy:4, rx:2.5, ry:3.5, color:13},
   ];
   const cart = {
-    formatVersion: 3,
+    formatVersion: 4,
     name: 'Water the Plant', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 6, // advisory label only — see DESIGN.md §14
     // Terrain hue 25 (warm brown) for sky/soil (DESIGN.md §41/§44 — one

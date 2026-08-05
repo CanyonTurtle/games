@@ -199,6 +199,18 @@ viewport). `1`/`2`/`3` select `track`/`cave`/`platform` respectively — see
 `map-generators.md` for each config block's exact shape and token
 vocabulary.
 
+## `mapShapes` (optional, default `[]`) and `blankMap`
+
+`mapShapes` composites a declared tile id over the map's grid at load
+time, on top of whatever `mapGenerator` already produced (or, with
+`mapGenerator: 0`, on top of `blankMap`'s flat fill) — see
+`map-generators.md`'s own "Tilemap authoring" section for the full
+shape, semantics, and a worked example (`carts/mini-golf.js`'s hole
+fixup). Absent or empty costs nothing and changes nothing; every cart
+that predates this field behaves identically. `blankMap` (`{ width,
+height, fillTileId }`) is only meaningful, and only needs declaring,
+when `mapGenerator` is `0` **and** `mapShapes` is non-empty.
+
 ## `camera`
 
 `{ followGlobal, clampMinX, clampMinY, clampMaxX, clampMaxY }`.
