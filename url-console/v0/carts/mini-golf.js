@@ -125,7 +125,7 @@ const GOLF_HOOKS_SRC = {
     CMPEQ
     JZ chk_charging
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chk_right_aim
     LOADG g_angle
@@ -133,7 +133,7 @@ const GOLF_HOOKS_SRC = {
     ADD
     STOREG g_angle
     chk_right_aim:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ chk_swing_press
     LOADG g_angle
@@ -141,7 +141,7 @@ const GOLF_HOOKS_SRC = {
     SUB
     STOREG g_angle
     chk_swing_press:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ store_prev
     LOADG g_prev_input
@@ -187,7 +187,7 @@ const GOLF_HOOKS_SRC = {
     STOREG g_power_dir
 
     chk_swing_release:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ store_prev
     LOADG g_prev_input
@@ -214,7 +214,7 @@ const GOLF_HOOKS_SRC = {
     STOREG g_strokes
 
     store_prev:
-    LOAD_INPUT
+    LOAD_INPUT 0
     STOREG g_prev_input
     HALT
   `,

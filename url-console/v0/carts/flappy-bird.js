@@ -50,7 +50,7 @@ const FLAPPY_HOOKS_SRC = {
   on_input: `
     LOADG g_dead
     JNZ done
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 4
     JZ done
     PUSHC FLAP_IMPULSE

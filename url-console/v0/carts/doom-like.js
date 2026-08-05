@@ -466,7 +466,7 @@ const DOOM_HOOKS_SRC = {
     STOREG g_contact_cd
     cd_done:
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chk_right
     LOAD_SELF ${ANGLEPROP}
@@ -474,7 +474,7 @@ const DOOM_HOOKS_SRC = {
     SUB
     STORE_SELF ${ANGLEPROP}
     chk_right:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ chk_fwd
     LOAD_SELF ${ANGLEPROP}
@@ -487,7 +487,7 @@ const DOOM_HOOKS_SRC = {
     STORE_SELF 2
     PUSHI 0
     STORE_SELF 3
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ chk_back
     LOAD_SELF ${ANGLEPROP}
@@ -502,7 +502,7 @@ const DOOM_HOOKS_SRC = {
     STORE_SELF 3
     JMP move_input_done
     chk_back:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 3
     JZ move_input_done
     LOAD_SELF ${ANGLEPROP}
@@ -530,7 +530,7 @@ const DOOM_HOOKS_SRC = {
     STOREG g_won
     no_win:
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 4
     STOREG g_s0
     LOADG g_s0

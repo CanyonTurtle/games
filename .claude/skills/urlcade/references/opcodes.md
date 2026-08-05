@@ -204,14 +204,31 @@ must never be the only place a cart reads shared RNG.
 
 ## Input
 
-- `TESTBIT bitIndex` (u8 operand — a bit **index** 0-4, not the bit
+- `TESTBIT bitIndex` (u8 operand — a bit **index** 0-4 for the declared
+  buttons, plus 5 for the reserved pointer-held bit below; not the bit
   *value*: index 0 = value 1/left, 1 = 2/right, 2 = 4/up, 3 = 8/down,
-  4 = 16/action) — pops a bitmask, pushes `(mask >> bitIndex) & 1`.
-- `LOAD_INPUT` — pushes the current frame's raw button bitmask (no pop).
-  Combine with `TESTBIT`, or test/mask it directly.
+  4 = 16/action, 5 = 32/pointer-held) — pops a bitmask, pushes
+  `(mask >> bitIndex) & 1`.
+- `LOAD_INPUT slot` (u8 operand, 0-3) — pushes that player slot's current
+  frame bitmask (no pop). Slot 0 is the local player; slots 1-3 are 0
+  until filled by a remote peer. Combine with `TESTBIT`, or test/mask it
+  directly. Bit index 5 (value 32) of a slot's mask is reserved for that
+  player's pointer-held state — folded in here rather than as a separate
+  per-player opcode, since it's conceptually just another button. That
+  bit is deliberately outside the declared-button bits (0-4): those are
+  which buttons a cart *authors and labels* via `inputActiveButtons`, an
+  unrelated concept from "is this player's pointer currently held,"
+  which is always-on infrastructure whenever `inputWantsPointer` is set.
 - `LOAD_POINTER_X` / `LOAD_POINTER_Y` / `LOAD_POINTER_DOWN` — push the
-  pointer's current cart-space x/y or held state; always `0` unless the
-  cart set `inputWantsPointer`.
+  local pointer's current cart-space x/y or held state; always `0` unless
+  the cart set `inputWantsPointer`. Single-player/local-only — unaffected
+  by the multi-player opcodes above and below.
+- `LOAD_POINTER_P slot axis` (two u8 operands: player slot 0-3, then
+  axis 0=x/1=y) — the per-player counterpart to `LOAD_POINTER_X`/`Y`,
+  mirroring the handle-plus-field shape `LOADE` uses for cross-entity
+  prop reads. Always `0` for a slot with no pointer data yet (same
+  fallback as `LOAD_POINTER_X`/`Y`). No per-player "down" variant — see
+  bit 5 of `LOAD_INPUT` above.
 
 ## Drawing
 
