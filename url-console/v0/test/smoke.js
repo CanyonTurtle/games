@@ -1631,6 +1631,139 @@ async function main(){
     inputFallbackResult.ok && inputFallbackResult.globals[0] === 0 && inputFallbackResult.globals[1] === 0,
     JSON.stringify(inputFallbackResult));
 
+  // 5h. Rollback snapshot/restore machinery (DESIGN.md §78) — real-World
+  // tests against Flappy Bird's own flap mechanic (props[3] is its
+  // y-velocity, set directly from FLAP_IMPULSE on a flap tick — see the
+  // cart's on_input hook), driven entirely through direct w.step() calls
+  // rather than real-time frames, the same "call the runtime method the
+  // opcode itself routes through" approach the memory-cap tests above use.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(200);
+  const rollbackResult = await page.evaluate(() => {
+    // pauseGame() stops the real-time rAF loop from also calling
+    // world.step() in the background — this test needs full control
+    // over exactly how many ticks have run, which a live game loop
+    // racing against this synchronous evaluate() call would otherwise
+    // race against (the page had already been running for ~200ms by
+    // this point, so w.tick is not 0 here — every check below is
+    // relative to tickAtStart, not an assumed absolute tick number).
+    window.__urlcadeDebug.pauseGame();
+    const w = window.__urlcadeDebug.getWorld();
+    // Warm up past ROLLBACK_WINDOW (8) ticks unconditionally, so the ring
+    // is already saturated (and every earlier, ambient-loop-driven tick
+    // already evicted) before the real measurement below starts —
+    // decouples this test from exactly how many ticks the page's rAF
+    // loop happened to run before pauseGame() took effect.
+    w.inputs[0] = 0;
+    for(let i=0;i<10;i++) w.step();
+    const tickAtStart = w.tick;
+    w.globals[1] = 0; // g_dead — clean slate
+    w.inputs[0] = 0;
+    for(let i=0;i<3;i++) w.step(); // 3 ticks, no flap
+    const tickAfter3 = w.tick;
+    const ringLenAfter3 = w.rollbackRing.length;
+    const ringHasTick3 = !!w.rollbackRing.find(e => e.tick === tickAtStart + 3);
+
+    // Snapshot/restore round-trip, including a check that the snapshot
+    // itself is a deep copy — mutating live state twice in a row and
+    // restoring from the *same* original snapshot both times must land
+    // on the same value both times, not drift with each mutation.
+    const snap = w.snapshotState();
+    const bird = () => w.entities.find(e => e.typeId === 0);
+    const yBefore = bird().props[1];
+    const globalsBefore = w.globals.slice();
+    bird().props[1] = 9999;
+    w.globals[5] = 9999;
+    w.restoreState(snap);
+    const yAfterFirstRestore = bird().props[1];
+    const globalsAfterRestore = w.globals.slice();
+    bird().props[1] = -5555;
+    w.restoreState(snap);
+    const yAfterSecondRestore = bird().props[1];
+
+    // Determinism: from the same restored point, run the same two-tick
+    // input sequence twice (restoring between runs), and confirm the
+    // resulting props/globals/rngState are byte-identical both times —
+    // covers both the ordinary step() path and the restructured RNG
+    // (mulberry32Next) actually resuming from the right state.
+    const inputSeq = [0, 16]; // tick+1: no flap, tick+2: flap
+    function runTwoTicks(){
+      for(const mask of inputSeq){ w.inputs[0] = mask; w.step(); }
+      const b = bird();
+      return { y: b.props[1], vy: b.props[3], tick: w.tick, globals: w.globals.slice(), rngState: w.rngState };
+    }
+    const runA = runTwoTicks();
+    w.restoreState(snap);
+    const runB = runTwoTicks();
+
+    // Resimulation actually changes the outcome: from the same restored
+    // point, run the same two ticks again (so there's a "current" tick
+    // to resimulate up to), then resimulateFrom() the *first* of those
+    // two ticks with flap pressed instead of the no-flap it actually got.
+    // Checked via the bird's *position* (props[1]), not its velocity
+    // (props[3]) — a flap tick's on_input unconditionally overwrites vy
+    // to FLAP_IMPULSE+GRAVITY regardless of what vy was a moment before,
+    // so both scenarios end this second (still-flapping) tick with
+    // identical velocity no matter what the corrected first tick did.
+    // Position is the prop that actually integrates history: the first
+    // tick's different vy changes how far y moved *during* that tick,
+    // which the second tick's y update then carries forward — so a
+    // changed first tick shows up in the final y even though the final
+    // vy converges back to the same value either way.
+    w.restoreState(snap);
+    for(const mask of inputSeq){ w.inputs[0] = mask; w.step(); }
+    const preResimTick = w.tick;
+    const resimTargetTick = preResimTick - 1;
+    const resimResult = w.resimulateFrom(resimTargetTick, t => t === resimTargetTick ? [16,0,0,0] : [inputSeq[1],0,0,0]);
+    const tickAfterResim = w.tick;
+    const afterResimY = bird().props[1];
+
+    // Window exceeded: run well past ROLLBACK_WINDOW (8) more ticks, then
+    // try to resimulate a tick long since evicted from the ring — must
+    // fail cleanly (not throw, not silently do nothing) rather than
+    // attempt a bogus local recovery.
+    for(let i=0;i<20;i++){ w.inputs[0]=0; w.step(); }
+    const exceededResult = w.resimulateFrom(tickAtStart + 1, () => [0,0,0,0]);
+
+    return {
+      tickAtStart, ticksAdvanced: tickAfter3 - tickAtStart, ringLenAfter3, ringHasTick3,
+      yBefore, yAfterFirstRestore, yAfterSecondRestore,
+      globalsRoundTrip: JSON.stringify(globalsBefore) === JSON.stringify(globalsAfterRestore),
+      runA, runB, deterministic: JSON.stringify(runA) === JSON.stringify(runB),
+      resimOk: resimResult.ok, resimTicks: resimResult.resimulatedTicks,
+      tickAfterResim, tickMatchesPreResim: tickAfterResim === preResimTick,
+      afterResimY,
+      exceededOk: exceededResult.ok,
+      fault: w.cartFault,
+    };
+  });
+  check('the rollback ring records one entry per tick, up to the 8-tick window', rollbackResult.ticksAdvanced === 3 && rollbackResult.ringLenAfter3 === 8 && rollbackResult.ringHasTick3, JSON.stringify(rollbackResult));
+  check('restoreState reverts a mutated entity prop and globals array back to the snapshot, twice in a row from the same snapshot', rollbackResult.yAfterFirstRestore === rollbackResult.yBefore && rollbackResult.yAfterSecondRestore === rollbackResult.yBefore && rollbackResult.globalsRoundTrip, JSON.stringify(rollbackResult));
+  check('snapshotState is a deep copy, not a live reference — restoring twice from the same snapshot is idempotent', rollbackResult.yAfterSecondRestore === rollbackResult.yAfterFirstRestore, JSON.stringify(rollbackResult));
+  check('replaying the same input sequence from the same restored state is fully deterministic (props, globals, and the restructured RNG state all match)', rollbackResult.deterministic, JSON.stringify(rollbackResult));
+  check('resimulateFrom lands back on the same final tick after correcting an earlier tick\'s input', rollbackResult.resimOk && rollbackResult.tickMatchesPreResim, JSON.stringify(rollbackResult));
+  check('resimulateFrom with a different input actually changes the outcome (an earlier corrected flap changes the bird\'s final position vs. the original no-flap-that-tick run)', rollbackResult.afterResimY !== rollbackResult.runA.y, JSON.stringify(rollbackResult));
+  check('resimulateFrom fails cleanly ({ok:false}) once the requested tick has fallen out of the 8-tick window, instead of a bogus recovery', rollbackResult.exceededOk === false, JSON.stringify(rollbackResult));
+  check('none of the rollback exercise above ever faults the cart', !rollbackResult.fault, JSON.stringify(rollbackResult));
+
+  // RNG determinism after the mulberry32Next restructure: two fresh
+  // Worlds built from the same cart (same rngSeed) must land on the
+  // exact same rngState after an identical number of rng()-consuming
+  // ticks — the real-World equivalent of the standalone 1000-sample,
+  // 5-seed bit-for-bit check already run against mulberry32Next directly
+  // outside the browser (comparing it call-for-call against the old
+  // closure-based mulberry32 it replaced).
+  const rngWorldResult = await page.evaluate(() => {
+    const cartObj = window.__urlcadeDebug.getWorld().cart; // reuse the already-decoded flappy cart
+    const w1 = new (window.__urlcadeDebug.World)(cartObj);
+    const w2 = new (window.__urlcadeDebug.World)(cartObj);
+    for(let i=0;i<10;i++){ w1.inputs[0] = (i % 3 === 0) ? 16 : 0; w2.inputs[0] = (i % 3 === 0) ? 16 : 0; w1.step(); w2.step(); }
+    return { rngState1: w1.rngState, rngState2: w2.rngState, tick1: w1.tick, tick2: w2.tick };
+  });
+  check('two fresh Worlds from the same cart seed land on identical RNG state after the same tick sequence', rngWorldResult.rngState1 === rngWorldResult.rngState2 && rngWorldResult.tick1 === rngWorldResult.tick2, JSON.stringify(rngWorldResult));
+
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of
   // silently doing nothing.

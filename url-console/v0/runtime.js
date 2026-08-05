@@ -31,14 +31,22 @@ import { cssColorToRGB } from './color-utils.js';
 /* ============================================================
    7. World runtime — entities, hooks, collisions, game loop
    ============================================================ */
-function mulberry32(seed){
-  let a = seed >>> 0;
-  return function(){
-    a |= 0; a = (a + 0x6D2B79F5) | 0;
-    let t = Math.imul(a ^ (a >>> 15), 1 | a);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
+// A pure step — given the current 32-bit state, returns the next random
+// float in [0,1) plus the state to carry into the following call —
+// rather than the more usual closure-holding-private-state shape, so
+// World can read/rewind its RNG's internal state for rollback snapshots
+// (DESIGN.md §78): a closure's captured variable can't be inspected or
+// restored from outside it. Math identical to the original closure
+// version call-for-call (`a |= 0` at the top of each call there was a
+// no-op after the first, since `a` was already a signed int32 from the
+// previous call's own `|0` — folded in here as the single `aIn | 0` at
+// the top instead), so a given seed produces the exact same sequence
+// either way.
+function mulberry32Next(aIn){
+  let a = (aIn | 0) + 0x6D2B79F5 | 0;
+  let t = Math.imul(a ^ (a >>> 15), 1 | a);
+  t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+  return { value: ((t ^ (t >>> 14)) >>> 0) / 4294967296, state: a >>> 0 };
 }
 
 // FNV-1a, 32-bit — the persist[] localStorage key (see World's
@@ -118,20 +126,38 @@ const STATE_BYTE_CAP = 16384;
 // still stopping a runaway SETTILE loop well short of diverging the
 // full (worst-case 255x255) generated grid.
 const TILE_DIFF_CAP = 1024;
+// Rollback netcode (DESIGN.md §78) — how many ticks back a mispredicted
+// remote input can still be corrected locally by resimulating, rather
+// than falling back to a full resync. 8 ticks at 60 ticks/sec is ~133ms
+// of round-trip tolerance, in line with what rollback netcode in other
+// small P2P games budgets for; affordable to snapshot every tick
+// specifically because of §76's own STATE_BYTE_CAP — the whole point
+// that cap's own writeup called out this round as needing it for.
+const ROLLBACK_WINDOW = 8;
 
 class World {
   constructor(cart){
     this.cart = cart;
     this.entities = [];
     // Tile-diff log for SETTILE (DESIGN.md §76) — {x,y,tileId} per call,
-    // in tile-grid coordinates, capped at TILE_DIFF_CAP. Not consulted
-    // by anything yet (the actual rollback/resync machinery is a later
-    // round) — exists now so the cap itself, and setTileAt's no-op past
-    // it, can be real and tested today rather than retrofitted later.
+    // in tile-grid coordinates, capped at TILE_DIFF_CAP. Deliberately
+    // outside the rollback ring buffer below (DESIGN.md §78) — it's
+    // meant for a full resync (replay the log against a freshly
+    // generated base map) rather than per-tick rewinding, so a
+    // mispredicted SETTILE is a gap rollback accepts rather than covers.
     this.tileDiffLog = [];
     this.boxPool = []; // reused AABB scratch objects for collision detection, see getBoxInto()
     this.nextId = 1;
     this.globals = new Array(24).fill(0); // room to grow past the original 16 — LOADG/STOREG operands are already u8 (0-255), this was always just an array-size choice, not a format limit
+    // Rollback netcode (DESIGN.md §78) — `tick` counts simulated steps
+    // (starts at 0, incremented by step() before it runs each one);
+    // `rollbackRing` holds up to ROLLBACK_WINDOW {tick, state} entries,
+    // one per recent tick, each `state` a snapshotState() taken
+    // *before* that tick's mutations — i.e. the entry tagged `tick: N`
+    // is "the world exactly as it was about to simulate tick N." See
+    // step()'s own push and resimulateFrom() below for how it's used.
+    this.tick = 0;
+    this.rollbackRing = [];
     // Persistent storage (DESIGN.md §69) — same 24-slot shape as globals,
     // but backed by localStorage and keyed per-cart (hashCartBytes above)
     // so one cart's save data can't collide with another's, and editing a
@@ -167,7 +193,16 @@ class World {
       // just always sees zeros, same as a first-ever play.
       this.persistKey = null;
     }
-    this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
+    // rngState is the RNG's whole internal state — deliberately a plain
+    // field, not hidden in a closure, so snapshotState()/restoreState()
+    // (below) can capture and rewind it exactly like any other piece of
+    // simulation state.
+    this.rngState = Math.imul(cart.rngSeed+1, 2654435761) >>> 0;
+    this.rng = () => {
+      const { value, state } = mulberry32Next(this.rngState);
+      this.rngState = state;
+      return value;
+    };
     // this.inputs[4] — one bitmask per player slot (DESIGN.md §77). Slot 0
     // is the local player, populated every frame by loop() below from
     // buttonMaskFromKeys() plus the pointer-down bit; slots 1-3 stay 0
@@ -563,8 +598,70 @@ class World {
     if(!this.persistKey) return;
     try{ localStorage.setItem(this.persistKey, JSON.stringify(this.persist)); }catch(e){}
   }
+  // Rollback netcode (DESIGN.md §78) — a pure capture/restore pair for
+  // exactly what step() can change and nothing it can't. Deep-copies
+  // every active entity's id/typeId/active/props (props arrays are
+  // mutated in place by STOREE/STORE_SELF etc, so a shallow reference
+  // would let a later tick silently corrupt an old snapshot), nextId
+  // (so a resimulated SPAWN assigns the same id a forward-only run
+  // would have — skip it and entity identity desyncs the moment
+  // anything spawns or despawns between the snapshot and the
+  // correction), the 24 globals, the RNG's own state (mulberry32Next,
+  // above), cartFault, and tick itself. Deliberately excludes the
+  // tilemap and persist[] — see their own constructor comments for why.
+  snapshotState(){
+    return {
+      tick: this.tick,
+      entities: this.entities.map(e => ({ id: e.id, active: e.active, typeId: e.typeId, props: e.props.slice() })),
+      nextId: this.nextId,
+      globals: this.globals.slice(),
+      rngState: this.rngState,
+      cartFault: this.cartFault,
+    };
+  }
+  restoreState(snap){
+    this.tick = snap.tick;
+    this.entities = snap.entities.map(e => ({ id: e.id, active: e.active, typeId: e.typeId, props: e.props.slice() }));
+    this.nextId = snap.nextId;
+    // Mutated in place, not reassigned — this.ctxBase.globals (and
+    // ctxScratch, built from it) captured a reference to *this exact
+    // array object* at construction time, reused for the World's whole
+    // lifetime. Reassigning `this.globals` here would leave every hook
+    // call still reading/writing the old, now-orphaned array.
+    for(let i=0;i<this.globals.length;i++) this.globals[i] = snap.globals[i] || 0;
+    this.rngState = snap.rngState;
+    this.cartFault = snap.cartFault;
+  }
+  // Rewinds to the ring-buffer entry for `tick` (the state exactly as
+  // it was about to simulate that tick) and resimulates forward to
+  // whatever tick this World was actually at, calling `getInputs(t)`
+  // (if given) before each replayed tick to substitute corrected
+  // ctx.inputs in place of whatever was actually captured the first
+  // time through. Returns {ok:false, tick} without touching any state
+  // at all if `tick` has already fallen out of the ROLLBACK_WINDOW —
+  // the caller's signal that local recovery isn't possible anymore and
+  // a full resync is needed instead (a later round).
+  resimulateFrom(tick, getInputs){
+    const entry = this.rollbackRing.find(e => e.tick === tick);
+    if(!entry) return {ok:false, tick};
+    const upTo = this.tick;
+    this.restoreState(entry.state); // also rewinds this.tick to tick-1
+    this.rollbackRing = this.rollbackRing.filter(e => e.tick < tick);
+    for(let t=tick; t<=upTo; t++){
+      if(getInputs) this.inputs = getInputs(t);
+      this.step();
+    }
+    return {ok:true, resimulatedTicks: upTo - tick + 1};
+  }
   step(){
     if(this.cartFault) return;
+    // Record this tick's pre-mutation state into the rollback ring
+    // *before* anything below changes it — see snapshotState()/
+    // resimulateFrom() above and the ring's own constructor comment.
+    const tick = this.tick + 1;
+    this.rollbackRing.push({tick, state: this.snapshotState()});
+    if(this.rollbackRing.length > ROLLBACK_WINDOW) this.rollbackRing.shift();
+    this.tick = tick;
     // Snapshot pre-step state for render interpolation (§8 amendment) before
     // anything mutates it. Entities spawned *during* this step won't be
     // caught here (they don't exist yet) — they get a snapshot equal to
