@@ -170,10 +170,27 @@ class World {
   }
   spawnEntity(typeId){
     const type = this.cart.entityTypes[typeId];
-    const propCount = 8 + type.extFieldCount;
+    // One extra prop beyond the author's own 8 + extFieldCount, always at
+    // the very end — this entity's *current* assetIndex, defaulting to
+    // its type's. Deliberately NOT one of the base-8 "reserved" slots
+    // (props[6] looked free by grep, but doom-like.js already uses it —
+    // `const ANGLEPROP = 6` — via a named JS constant, invisible to a
+    // literal-text search for "STORE_SELF 6"; see DESIGN.md for the
+    // regression this caused). Appending past extFieldCount instead is
+    // safe by construction: it can't collide with any per-cart prop
+    // convention, named or not, since it's always one past whatever the
+    // author declared for themselves. See the three renderer call sites
+    // below, which read this instead of type.assetIndex directly.
+    // type.assetIndex is now only the spawn-time default, not a lifetime
+    // constant; STORE_SELF (8 + extFieldCount) from a hook retargets
+    // which sprite/tile-pair this one entity draws as, independent of
+    // every other instance of its type.
+    const assetIndexProp = 8 + type.extFieldCount;
+    const propCount = assetIndexProp + 1;
     const e = { id:this.nextId++, active:true, typeId, props:new Array(propCount).fill(0) };
     e.props[4] = typeId;
     e.props[7] = e.id;
+    e.props[assetIndexProp] = type.assetIndex;
     this.entities.push(e);
     return e;
   }
@@ -684,11 +701,12 @@ function buildCardThumbnail(cart){
   for(const e of w.entities){
     const type = cart.entityTypes[e.typeId];
     const ex = e.props[0] - camX, ey = e.props[1] - camY;
+    const assetIndex = Math.floor(e.props[8 + type.extFieldCount]); // spawn-time default from type.assetIndex, overridable per-entity — see spawnEntity()
     if(type.renderKind === 1){ // tile column
       const extent = Math.max(0, Math.floor(e.props[8]));
       const capAtTop = e.props[10] === 0;
-      const bodyCanvas = w.tileCanvases[type.assetIndex];
-      const capCanvas = w.tileCanvases[type.assetIndex+1];
+      const bodyCanvas = w.tileCanvases[assetIndex];
+      const capCanvas = w.tileCanvases[assetIndex+1];
       for(let row=0; row<extent; row++){
         const isCapRow = capAtTop ? row===0 : row===extent-1;
         c.drawImage(isCapRow?capCanvas:bodyCanvas, ex, ey+row*8);
@@ -696,7 +714,7 @@ function buildCardThumbnail(cart){
     } else if(type.renderKind === 2){ // custom draw — same on_draw path the live renderer uses
       strokeDrawCmds(c, ex, ey, w.palette, w.runDrawHook(e));
     } else {
-      const spr = w.spriteCanvases[type.assetIndex];
+      const spr = w.spriteCanvases[assetIndex];
       c.drawImage(spr, ex-spr.width/2, ey-spr.height/2);
     }
   }
@@ -880,11 +898,12 @@ function strokeDrawCmds(targetCtx, x, y, palette, cmds){
 function drawEntityCanvas(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
   const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
+  const assetIndex = Math.floor(e.props[8 + type.extFieldCount]); // spawn-time default from type.assetIndex, overridable per-entity — see spawnEntity()
   if(type.renderKind === 1){ // tile column — position interpolates, extent/cap don't (discrete, only change at spawn)
     const extent = Math.max(0, Math.floor(e.props[8]));
     const capAtTop = e.props[10] === 0;
-    const bodyCanvas = world.tileCanvases[type.assetIndex];
-    const capCanvas = world.tileCanvases[type.assetIndex+1];
+    const bodyCanvas = world.tileCanvases[assetIndex];
+    const capCanvas = world.tileCanvases[assetIndex+1];
     for(let row=0; row<extent; row++){
       const isCapRow = capAtTop ? row===0 : row===extent-1;
       ctx2d.drawImage(isCapRow?capCanvas:bodyCanvas, x, y+row*8);
@@ -892,7 +911,7 @@ function drawEntityCanvas(e, alpha){
   } else if(type.renderKind === 2){ // custom draw — runs on_draw, then paints whatever it emitted
     strokeDrawCmds(ctx2d, x, y, world.palette, world.runDrawHook(e));
   } else {
-    const spr = world.spriteCanvases[type.assetIndex];
+    const spr = world.spriteCanvases[assetIndex];
     if(type.rotateFlag){
       ctx2d.save();
       ctx2d.translate(x, y);
@@ -1031,11 +1050,12 @@ function glDrawLine(x, y, paletteRGB, cmd){
 function drawEntityGL(e, alpha){
   const type = world.cart.entityTypes[e.typeId];
   const x = ilerp(e, 0, alpha) - world.cameraX, y = ilerp(e, 1, alpha) - world.cameraY;
+  const assetIndex = Math.floor(e.props[8 + type.extFieldCount]); // spawn-time default from type.assetIndex, overridable per-entity — see spawnEntity()
   if(type.renderKind === 1){ // tile column
     const extent = Math.max(0, Math.floor(e.props[8]));
     const capAtTop = e.props[10] === 0;
-    const bodyTex = world.glTileTextures[type.assetIndex];
-    const capTex = world.glTileTextures[type.assetIndex+1];
+    const bodyTex = world.glTileTextures[assetIndex];
+    const capTex = world.glTileTextures[assetIndex+1];
     for(let row=0; row<extent; row++){
       const isCapRow = capAtTop ? row===0 : row===extent-1;
       glDrawTexturedQuad(isCapRow?capTex:bodyTex, x, y+row*8, 8, 8, 0);
@@ -1043,8 +1063,8 @@ function drawEntityGL(e, alpha){
   } else if(type.renderKind === 2){ // custom draw — runs on_draw, then paints whatever it emitted
     for(const cmd of world.runDrawHook(e)) glDrawLine(x, y, world.paletteRGB, cmd);
   } else {
-    const tex = world.glSpriteTextures[type.assetIndex];
-    const src = world.spriteCanvases[type.assetIndex]; // dimensions only — same source as Canvas2D
+    const tex = world.glSpriteTextures[assetIndex];
+    const src = world.spriteCanvases[assetIndex]; // dimensions only — same source as Canvas2D
     const rot = type.rotateFlag ? ilerpAngle(e, 8, alpha) * Math.PI/180 : 0;
     glDrawTexturedQuad(tex, x - src.width/2, y - src.height/2, src.width, src.height, rot);
   }

@@ -312,6 +312,67 @@ async function main(){
     check(`cart "${key}" plays (world exists, no cart fault)`, st.ok && !st.fault, JSON.stringify(st));
   }
 
+  // 1b. Per-entity assetIndex override (props[8 + extFieldCount], one slot
+  // past every ext field — see DESIGN.md for why not one of the base
+  // eight's nominally-free slots: doom-like.js's own props[6] usage,
+  // ANGLEPROP, is exactly the collision that ruled that out). A freshly
+  // spawned entity defaults to its type's assetIndex (auto-set in
+  // spawnEntity), but the renderer reads each entity's own current value
+  // every frame, not the type's constant — a hook overwriting one entity's
+  // slot should retarget just that entity, independent of every other
+  // instance of its type. Proven without any fragile pixel/canvas readback
+  // (this repo has no precedent for that, and the live game canvas may be
+  // WebGL without preserveDrawingBuffer, so toDataURL right after a draw
+  // isn't reliable): instead, wrap world.spriteCanvases in a Proxy that
+  // records which index actually got read during a real render() call —
+  // both the Canvas2D and WebGL draw paths index into that same array (the
+  // WebGL path uses it for texture dimensions), so this is backend-agnostic.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'roguelike');
+  await page.waitForTimeout(250);
+  const assetIndexResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    const type = w.cart.entityTypes[player.typeId];
+    const assetIndexProp = 8 + type.extFieldCount; // cave-crawler's PLAYER has extFieldCount:0, so this is prop 8
+    const defaultMatchesType = player.props[assetIndexProp] === type.assetIndex;
+
+    // Isolate rendering to just the player for this check — cave-crawler's
+    // world also has monster entities, and the Proxy below records the last
+    // spriteCanvases access across the *whole* render() call; with every
+    // entity still in the scene, whichever one happens to draw last (not
+    // necessarily the player) would decide lastIndex, not the entity this
+    // check actually cares about.
+    const originalEntities = w.entities;
+    w.entities = [player];
+
+    const original = w.spriteCanvases;
+    let lastIndex = null;
+    w.spriteCanvases = new Proxy(original, {
+      get(target, prop, receiver){
+        if(typeof prop === 'string' && /^\d+$/.test(prop)) lastIndex = Number(prop);
+        return Reflect.get(target, prop, receiver);
+      }
+    });
+
+    window.__urlcadeDebug.forceRender(1);
+    const indexAtSpawnDefault = lastIndex;
+
+    const savedProp = player.props[assetIndexProp];
+    player.props[assetIndexProp] = 1; // roguelike's second sprite (monster) — see carts/cave-crawler.js
+    lastIndex = null;
+    window.__urlcadeDebug.forceRender(1);
+    const indexAfterOverride = lastIndex;
+
+    w.entities = originalEntities; // restore before any other check touches this world
+
+    player.props[assetIndexProp] = savedProp; // restore — a stray frame before the next hash change shouldn't render a mutated world
+    w.spriteCanvases = original; // restore before any other check touches this world
+    return {defaultMatchesType, indexAtSpawnDefault, indexAfterOverride, faultAfter: w.cartFault};
+  });
+  check('spawned entity defaults its assetIndex prop to its type\'s assetIndex', assetIndexResult.defaultMatchesType, JSON.stringify(assetIndexResult));
+  check('renderer reads spriteCanvases at the spawn-default index before any override', assetIndexResult.indexAtSpawnDefault === 0, JSON.stringify(assetIndexResult));
+  check('overriding one entity\'s assetIndex prop retargets which sprite the renderer reads, with no cart fault', assetIndexResult.indexAfterOverride === 1 && !assetIndexResult.faultAfter, JSON.stringify(assetIndexResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.
