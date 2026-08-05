@@ -455,6 +455,79 @@ async function main(){
   check('Race Car: the player car\'s sprite strobes between normal and the flash frame during a lap flash', lapFlashResult.seenDuringFlash.includes(0) && lapFlashResult.seenDuringFlash.includes(3), JSON.stringify(lapFlashResult));
   check('Race Car: the player car\'s sprite is back to normal once the flash ends', lapFlashResult.afterFlash === 0 && !lapFlashResult.fault, JSON.stringify(lapFlashResult));
 
+  // 1d. Persistence (LOAD_PERSIST/STORE_PERSIST, localStorage-backed,
+  // hash-keyed per cart). Direct World-construction tests first — bypass
+  // gameplay entirely to isolate the storage mechanism itself — then one
+  // end-to-end test through Flappy's own real high-score hooks.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(250);
+  const persistMechanismResult = await page.evaluate(async () => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const flappyCart = w.cart;
+    const keyLooksRight = typeof w.persistKey === 'string' && w.persistKey.startsWith('urlcade_persist_');
+
+    w.persist[0] = 777;
+    w.savePersist();
+    const reloaded = new K.World(flappyCart); // fresh World, identical cart object
+    const roundTripped = reloaded.persist[0] === 777;
+    const sameKey = reloaded.persistKey === w.persistKey;
+
+    // A different cart (racer) must not see flappy's data — different
+    // encoded bytes, different hash, different localStorage key.
+    const { payload: racerPayload } = K.decodeCartUrl(K.CARTS.racer.fragment);
+    const racerCart = K.decodeCart(await K.decodePayloadToBytes(racerPayload));
+    const racerWorld = new K.World(racerCart);
+    const noCrossCartLeak = racerWorld.persist[0] !== 777;
+    const differentKey = racerWorld.persistKey !== w.persistKey;
+
+    // An edited cart (even a trivial change) must also get a fresh key —
+    // versioning "for free" from hashing the whole encoded cart, not a
+    // separate scheme. Clone flappy's own decoded cart and tweak one
+    // field before re-hashing via a new World.
+    const editedCart = JSON.parse(JSON.stringify(flappyCart));
+    editedCart.rngSeed = (editedCart.rngSeed + 1) & 0xff;
+    // hooks are Uint8Array — JSON round-tripping loses that, encodeCart
+    // needs the real type back before this cart is constructible again.
+    for(const name of Object.keys(editedCart.hooks)) editedCart.hooks[name] = new Uint8Array(Object.values(editedCart.hooks[name]));
+    const editedWorld = new K.World(editedCart);
+    const editDoesNotReadOldSave = editedWorld.persist[0] !== 777;
+    const editGetsDifferentKey = editedWorld.persistKey !== w.persistKey;
+
+    return {keyLooksRight, roundTripped, sameKey, noCrossCartLeak, differentKey, editDoesNotReadOldSave, editGetsDifferentKey};
+  });
+  check('persist key looks like the documented urlcade_persist_<hash> shape', persistMechanismResult.keyLooksRight, JSON.stringify(persistMechanismResult));
+  check('a value written via savePersist() round-trips through localStorage into a fresh World for the same cart', persistMechanismResult.roundTripped && persistMechanismResult.sameKey, JSON.stringify(persistMechanismResult));
+  check('a different cart does not see another cart\'s persisted data (different hash key)', persistMechanismResult.noCrossCartLeak && persistMechanismResult.differentKey, JSON.stringify(persistMechanismResult));
+  check('an edited cart (even one changed byte) gets a fresh key, not the old save', persistMechanismResult.editDoesNotReadOldSave && persistMechanismResult.editGetsDifferentKey, JSON.stringify(persistMechanismResult));
+
+  // End-to-end through Flappy's own hooks: force a score, confirm
+  // on_tick's STORE_PERSIST actually fires and on_init's LOAD_PERSIST
+  // actually reads it back on the next "play" of the same cart.
+  const flappyPersistResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const bird = w.entities.find(e => e.typeId === 0); // this cart's own g_player
+    const scoreGlobal = 2, highScoreGlobal = 6; // FLAPPY_GLOBAL_NAMES.g_score/g_high_score
+    w.globals[highScoreGlobal] = 0; // clean slate, in case an earlier check in this run left a stale in-memory value
+    // A real pipe entity (typeId 1, not a hijacked bird) positioned just
+    // behind the bird on the x axis and not yet marked scored — exactly
+    // the state on_tick's check_score branch expects, so this exercises
+    // that real hook logic rather than asserting against hand-set globals.
+    const pipe = w.spawnEntity(1);
+    pipe.props[0] = bird.props[0] - 10;
+    pipe.props[9] = 0; // not yet scored
+    w.globals[scoreGlobal] = 4;
+    w.step();
+    const scoreAfterStep = w.globals[scoreGlobal];
+    const highScoreAfterStep = w.globals[highScoreGlobal];
+
+    const fresh = new K.World(w.cart); // simulates the next "play" of this same cart — on_init runs for real
+    return {scoreAfterStep, highScoreAfterStep, persistedHighScore: fresh.globals[highScoreGlobal], fault: w.cartFault};
+  });
+  check('Flappy: scoring past the previous best updates g_high_score and persists it (real on_tick hooks)', flappyPersistResult.highScoreAfterStep === 5 && !flappyPersistResult.fault, JSON.stringify(flappyPersistResult));
+  check('Flappy: a fresh World for the same cart loads the persisted high score via on_init\'s own LOAD_PERSIST', flappyPersistResult.persistedHighScore === 5, JSON.stringify(flappyPersistResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.
@@ -571,7 +644,7 @@ async function main(){
   const hookTextBefore = await page.inputValue('#hookSourceInput');
   const haltCountBefore = (hookTextBefore.match(/^HALT$/gm) || []).length;
   const opcodeGroupOptions = await page.$$eval('.opcode-group-select option', els => els.map(e => e.value));
-  check('the opcode palette is a category dropdown, not all groups stacked open', opcodeGroupOptions.length === 9 && opcodeGroupOptions.includes('Entity lifecycle'), JSON.stringify(opcodeGroupOptions));
+  check('the opcode palette is a category dropdown, not all groups stacked open', opcodeGroupOptions.length === 10 && opcodeGroupOptions.includes('Entity lifecycle') && opcodeGroupOptions.includes('Persistence'), JSON.stringify(opcodeGroupOptions));
   await page.selectOption('.opcode-group-select', 'Drawing & control');
   await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="HALT"]');

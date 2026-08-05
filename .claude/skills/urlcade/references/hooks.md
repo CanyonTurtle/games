@@ -18,6 +18,12 @@ under budget in its worst case before shipping it).
 | `on_collide` | Once per **overlapping pair**, per simulation tick | `null` | the two entities (see below) |
 | `on_draw` | Once per `renderKind:2` entity, per **rendered frame** | that entity | `null` |
 
+`on_init` runs after `World.persist` (see `opcodes.md`'s Persistence
+section) has already been loaded from `localStorage`, so `LOAD_PERSIST`
+inside `on_init` itself can read a value saved on a previous play — not
+just `0` the way `globals` always starts. `STORE_PERSIST` works from any
+hook, `on_init` included.
+
 ## Simulation tick vs rendered frame
 
 Everything except `on_draw` runs on a fixed 60Hz simulation clock

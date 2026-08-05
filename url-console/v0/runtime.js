@@ -23,7 +23,7 @@ const {
   runHook, MAP_EDGE_TILE, BUTTON_BITS,
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION,
   TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
-  decodeCart, decodePayloadToBytes, decodeCartUrl, describeControls,
+  decodeCart, decodePayloadToBytes, decodeCartUrl, describeControls, encodeCart,
 } = K;
 import { CARTS } from './carts/index.js';
 import { cssColorToRGB } from './color-utils.js';
@@ -41,6 +41,25 @@ function mulberry32(seed){
   };
 }
 
+// FNV-1a, 32-bit — the persist[] localStorage key (see World's
+// constructor). Deliberately synchronous and dependency-free rather than
+// crypto.subtle.digest(): the latter is Promise-based, which would force
+// `new World(cart)` (a plain sync call everywhere it's used today, e.g.
+// main.js) into an async construction path just to derive a cache key
+// that doesn't need cryptographic collision-resistance — not worth
+// restructuring cart load for. Hashes encodeCart(cart)'s bytes, not the
+// raw URL fragment: a future compression-scheme change re-encoding the
+// same logical cart differently would otherwise silently orphan existing
+// save data with no actual change to the cart's own content.
+function hashCartBytes(bytes){
+  let h = 0x811c9dc5; // FNV offset basis
+  for(let i=0;i<bytes.length;i++){
+    h ^= bytes[i];
+    h = Math.imul(h, 0x01000193) >>> 0; // FNV prime
+  }
+  return h.toString(16).padStart(8,'0');
+}
+
 class World {
   constructor(cart){
     this.cart = cart;
@@ -48,6 +67,30 @@ class World {
     this.boxPool = []; // reused AABB scratch objects for collision detection, see getBoxInto()
     this.nextId = 1;
     this.globals = new Array(24).fill(0); // room to grow past the original 16 — LOADG/STOREG operands are already u8 (0-255), this was always just an array-size choice, not a format limit
+    // Persistent storage (DESIGN.md §69) — same 24-slot shape as globals,
+    // but backed by localStorage and keyed per-cart (hashCartBytes above)
+    // so one cart's save data can't collide with another's, and editing a
+    // cart at all (even a cosmetic change) starts it fresh rather than
+    // risking a stale/incompatible save silently loading. Loaded here,
+    // synchronously, before on_init runs below, so a cart can read a
+    // persisted value on its very first tick.
+    this.persist = new Array(24).fill(0);
+    this.persistKey = null;
+    try{
+      this.persistKey = 'urlcade_persist_' + hashCartBytes(encodeCart(cart));
+      const raw = localStorage.getItem(this.persistKey);
+      if(raw){
+        const saved = JSON.parse(raw);
+        if(Array.isArray(saved)) for(let i=0;i<24 && i<saved.length;i++) this.persist[i] = +saved[i] || 0;
+      }
+    }catch(e){
+      // localStorage can throw (private browsing, a sandboxed iframe,
+      // quota already exceeded by something else on the origin) — same
+      // "never let a storage failure break the game" posture as
+      // savePersist() below. A cart that never manages to load or save
+      // just always sees zeros, same as a first-ever play.
+      this.persistKey = null;
+    }
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
     this.input = 0;
     this.pointerX = 0; this.pointerY = 0; this.pointerDown = 0; // set once/frame by loop(), see LOAD_POINTER_* below
@@ -141,6 +184,8 @@ class World {
         if(!cmd){ cmd = {x1:0,y1:0,x2:0,y2:0,color:0}; self_.drawCmds[i] = cmd; }
         cmd.x1 = x1; cmd.y1 = y1; cmd.x2 = x2; cmd.y2 = y2; cmd.color = color;
       },
+      loadPersist: idx => self_.persist[idx] ?? 0,
+      storePersist: (idx, v) => { self_.persist[idx] = v; self_.savePersist(); },
     };
     // Reused across every hook call this session (self/a/b/input mutated in
     // place instead of Object.assign-ing a fresh object + copying the ~10
@@ -297,6 +342,18 @@ class World {
       o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
       o.stop(ctx.currentTime+0.15);
     }catch(e){}
+  }
+  // Called on every STORE_PERSIST (ctxBase.storePersist above) — writes
+  // are rare relative to ticks (a high score, an unlock flag, not a
+  // per-frame value), so saving the whole 24-slot array immediately
+  // rather than debouncing is simple and cheap enough. Silently a no-op
+  // if the constructor never managed to establish a key (localStorage
+  // unavailable) or a write fails now (quota exceeded) — same
+  // never-let-storage-break-the-game posture as the constructor's own
+  // load attempt.
+  savePersist(){
+    if(!this.persistKey) return;
+    try{ localStorage.setItem(this.persistKey, JSON.stringify(this.persist)); }catch(e){}
   }
   step(){
     if(this.cartFault) return;

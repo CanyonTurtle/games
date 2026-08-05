@@ -99,6 +99,24 @@ pop). Persist across ticks and hook calls for the whole run; a cart
 typically keeps a `GLOBAL_NAMES` name→index map in its authoring source
 (not part of the binary format).
 
+## Persistence
+
+`LOAD_PERSIST idx` / `STORE_PERSIST idx` (u8 slot index, 0-23 — same
+shape as `LOADG`/`STOREG`, a separate 24-element array) — read/write
+`World.persist[idx]` (push / pop), backed by `localStorage` and loaded
+before `on_init` runs, so a value written on one play is already there
+the next time the same cart loads. Unlike `globals`, survives a page
+reload/tab close; unlike a raw `localStorage` call a cart author might
+picture, there's no key to pick — the runtime keys it automatically per
+cart (a hash of the cart's own encoded bytes, so editing the cart at all
+starts its save data fresh rather than risking a stale/incompatible
+value silently loading). No `PERSIST_NAMES` convention yet, the way
+`GLOBAL_NAMES` exists for globals — pick a slot number and comment it,
+same as `LOAD_SELF`/`STORE_SELF`'s raw prop indices. Reads `0` and
+discards writes silently if `localStorage` isn't available at all
+(private browsing, a sandboxed iframe) — never throws, never blocks a
+hook that touches it.
+
 ## World queries
 
 | Op | Stack in (push order) | Stack out | Notes |
