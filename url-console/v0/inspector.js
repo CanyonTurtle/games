@@ -1262,6 +1262,14 @@ const OPCODE_GROUPS = [
   {label: 'Globals', ops: [
     {mnem:'LOADG', operandKind:'globalSlot'}, {mnem:'STOREG', operandKind:'globalSlot'},
   ]},
+  {label: 'Persistence', ops: [
+    // 'raw', not 'globalSlot' — persist[] is its own 24-slot array,
+    // separate from globals[], with no name-table concept of its own
+    // (yet); a plain numeric 0-23 slot picker is the honest shape until
+    // one's actually needed, same restraint as LOAD_SELF/STORE_SELF's
+    // own raw prop-index entry.
+    {mnem:'LOAD_PERSIST', operandKind:'raw'}, {mnem:'STORE_PERSIST', operandKind:'raw'},
+  ]},
   {label: 'World queries', ops: [
     {mnem:'PUSHI', operandKind:'tileId', label:'PUSHI (tile id)'},
     {mnem:'RAND_RANGE'}, {mnem:'SIN'}, {mnem:'COS'}, {mnem:'ATAN2'}, {mnem:'DIST'},

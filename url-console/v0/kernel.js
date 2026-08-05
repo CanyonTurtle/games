@@ -96,6 +96,14 @@ const OPS = [
   // color in that order (color ends up on top, same "last pushed operand
   // on top" convention as SETTILE's x,y,tileId).
   ['DRAW_LINE',[]],
+  // Persistent storage (DESIGN.md §69) — a second, localStorage-backed
+  // globals array, same u8-slot shape as LOADG/STOREG, keyed per-cart by
+  // the runtime so one cart's save data can't collide with another's.
+  // Survives a page reload; LOADG/STOREG don't. See runtime.js's World
+  // for the ctx.loadPersist/storePersist this actually routes through —
+  // the VM itself has no localStorage access, same reason SETTILE routes
+  // through ctx.setTile instead of touching the map directly.
+  ['LOAD_PERSIST',['u8']],['STORE_PERSIST',['u8']],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -172,11 +180,14 @@ function assemble(lines, sym){
        world:{cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
        getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}),
        rng:Math.random, playSound:()=>{}, setTile:()=>{} }
-   `pointerX`/`pointerY`/`pointerDown` and `drawLine` are optional on top
-   of that — LOAD_POINTER_* reads 0 when absent (same as a cart that never
-   declares inputWantsPointer), and DRAW_LINE is simply a no-op when
-   `drawLine` isn't supplied, so this minimum shape still runs any hook,
-   including on_draw, without throwing.
+   `pointerX`/`pointerY`/`pointerDown`, `drawLine`, and `loadPersist`/
+   `storePersist` are optional on top of that — LOAD_POINTER_* reads 0
+   when absent (same as a cart that never declares inputWantsPointer),
+   DRAW_LINE is simply a no-op when `drawLine` isn't supplied, and
+   LOAD_PERSIST/STORE_PERSIST behave the same way (read 0, write
+   discarded) when `loadPersist`/`storePersist` aren't supplied — so this
+   minimum shape still runs any hook, including on_draw or one that
+   touches persistent storage, without throwing.
    ============================================================ */
 const MAX_STEPS = 20000;
 const vmStack = [];
@@ -283,6 +294,8 @@ function runHook(bytecode, ctx){
         if(ctx.drawLine) ctx.drawLine(x1,y1,x2,y2,color);
         break;
       }
+      case 57: { const idx=u8(); stack.push(ctx.loadPersist ? ctx.loadPersist(idx) : 0); break; } // LOAD_PERSIST
+      case 58: { const idx=u8(); const v=stack.pop(); if(ctx.storePersist) ctx.storePersist(idx, v); break; } // STORE_PERSIST
       default: throw new Error('runHook: unknown opcode '+op+' at ip '+(ip-1));
     }
   }

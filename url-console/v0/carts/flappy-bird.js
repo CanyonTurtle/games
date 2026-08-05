@@ -16,7 +16,12 @@ const FLAPPY_CONST_NAMES = {
   GRAVITY:0, FLAP_IMPULSE:1, SCROLL_SPEED:2, GAP_SIZE:3, GAP_MIN_Y:4, GAP_MAX_Y:5,
   SPAWN_PERIOD:6, SCREEN_H:7, SCREEN_W:8, BIRD_START_X:9, BIRD_START_Y:10, GROUND_MARGIN:11,
 };
-const FLAPPY_GLOBAL_NAMES = { g_player:0, g_dead:1, g_score:2, g_scratch:3, g_spawn_timer:4, g_gap:5 };
+const FLAPPY_GLOBAL_NAMES = { g_player:0, g_dead:1, g_score:2, g_scratch:3, g_spawn_timer:4, g_gap:5, g_high_score:6 };
+// Persist slot 0: this cart's own all-time high score (see
+// opcodes.md's Persistence section) — no PERSIST_NAMES convention exists
+// yet, so just one commented slot number, same restraint as any raw
+// LOAD_SELF/STORE_SELF prop index.
+const PERSIST_HIGH_SCORE = 0;
 const FLAPPY_SYM = {constants:FLAPPY_CONST_NAMES, globals:FLAPPY_GLOBAL_NAMES};
 
 const FLAPPY_HOOKS_SRC = {
@@ -31,6 +36,8 @@ const FLAPPY_HOOKS_SRC = {
     STOREG g_dead
     PUSHI 0
     STOREG g_score
+    LOAD_PERSIST ${PERSIST_HIGH_SCORE}
+    STOREG g_high_score
     PUSHC SPAWN_PERIOD
     STOREG g_spawn_timer
     HALT
@@ -168,6 +175,20 @@ const FLAPPY_HOOKS_SRC = {
     PUSHI 1
     ADD
     STOREG g_score
+    ; New high score? g_high_score starts this run at whatever on_init
+    ; loaded (0 on a first-ever play), so this compares against last
+    ; run's best the moment it's first beaten — then, since g_high_score
+    ; itself gets updated right below, keeps comparing against the
+    ; *current* run's own growing best from then on, firing (and
+    ; persisting) again each further point past it, not just once.
+    LOADG g_score
+    LOADG g_high_score
+    CMPLE
+    JNZ tick_end
+    LOADG g_score
+    STOREG g_high_score
+    LOADG g_score
+    STORE_PERSIST ${PERSIST_HIGH_SCORE}
     tick_end:
     HALT
   `,
@@ -278,6 +299,7 @@ function buildFlappyCart(){
     inputButtonLabels: {16: 'Flap'},
     hudSpec: [
       {kind:0, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_score, srcB:0, delta:0, suffixConstIdx:255, label:'Score'},
+      {kind:0, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_high_score, srcB:0, delta:0, suffixConstIdx:255, label:'Best'},
       {kind:1, sourceKind:0, srcA:FLAPPY_GLOBAL_NAMES.g_dead, srcB:0, delta:0, suffixConstIdx:255, label:'Crashed - refresh link to retry'},
     ],
     // GRAVITY/FLAP_IMPULSE/SCROLL_SPEED halved and SPAWN_PERIOD doubled vs
