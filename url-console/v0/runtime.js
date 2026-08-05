@@ -168,8 +168,13 @@ class World {
       this.persistKey = null;
     }
     this.rng = mulberry32(Math.imul(cart.rngSeed+1, 2654435761) >>> 0);
-    this.input = 0;
+    // this.inputs[4] — one bitmask per player slot (DESIGN.md §77). Slot 0
+    // is the local player, populated every frame by loop() below from
+    // buttonMaskFromKeys() plus the pointer-down bit; slots 1-3 stay 0
+    // until multiplayer wires remote input into them.
+    this.inputs = [0, 0, 0, 0];
     this.pointerX = 0; this.pointerY = 0; this.pointerDown = 0; // set once/frame by loop(), see LOAD_POINTER_* below
+    this.pointerXs = [0, 0, 0, 0]; this.pointerYs = [0, 0, 0, 0]; // per-player, see LOAD_POINTER_P
     // Scratch, refilled by runDrawHook() each render call — see DRAW_LINE.
     // Object *identity* is reused across frames (drawLine mutates an
     // existing pooled entry in place rather than pushing a fresh literal),
@@ -275,12 +280,12 @@ class World {
       loadPersist: idx => self_.persist[idx] ?? 0,
       storePersist: (idx, v) => { self_.persist[idx] = v; self_.savePersist(); },
     };
-    // Reused across every hook call this session (self/a/b/input mutated in
+    // Reused across every hook call this session (self/a/b/inputs mutated in
     // place instead of Object.assign-ing a fresh object + copying the ~10
     // unchanging ctxBase fields every single invocation — up to ~7 hook
     // calls/tick * 60 ticks/sec). Safe because runHook only ever reads ctx
     // synchronously and never retains a reference past the call.
-    this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, input:0, pointerX:0, pointerY:0, pointerDown:0});
+    this.ctxScratch = Object.assign({}, this.ctxBase, {self:null, a:null, b:null, inputs:this.inputs, pointerX:0, pointerY:0, pointerDown:0, pointerXs:this.pointerXs, pointerYs:this.pointerYs});
     this.runGlobalHook('on_init');
   }
   buildBitmap(asset, transparent){
@@ -340,22 +345,25 @@ class World {
   runGlobalHook(name){
     const bc = this.cart.hooks[name];
     const ctx = this.ctxScratch;
-    ctx.self = null; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.self = null; ctx.a = null; ctx.b = null; ctx.inputs = this.inputs;
     ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
+    ctx.pointerXs = this.pointerXs; ctx.pointerYs = this.pointerYs;
     return runHook(bc, ctx);
   }
   runEntityHook(name, entity){
     const bc = this.cart.hooks[name];
     const ctx = this.ctxScratch;
-    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.inputs = this.inputs;
     ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
+    ctx.pointerXs = this.pointerXs; ctx.pointerYs = this.pointerYs;
     return runHook(bc, ctx);
   }
   runCollideHook(a,b){
     const bc = this.cart.hooks['on_collide'];
     const ctx = this.ctxScratch;
-    ctx.self = null; ctx.a = a; ctx.b = b; ctx.input = this.input;
+    ctx.self = null; ctx.a = a; ctx.b = b; ctx.inputs = this.inputs;
     ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
+    ctx.pointerXs = this.pointerXs; ctx.pointerYs = this.pointerYs;
     return runHook(bc, ctx);
   }
   // Render-time, not tick-time (see HOOK_NAMES's own comment in kernel.js)
@@ -374,8 +382,9 @@ class World {
     this.drawCmdCount = 0;
     const bc = this.cart.hooks.on_draw;
     const ctx = this.ctxScratch;
-    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.input = this.input;
+    ctx.self = entity; ctx.a = null; ctx.b = null; ctx.inputs = this.inputs;
     ctx.pointerX = this.pointerX; ctx.pointerY = this.pointerY; ctx.pointerDown = this.pointerDown;
+    ctx.pointerXs = this.pointerXs; ctx.pointerYs = this.pointerYs;
     runHook(bc, ctx);
     // Trim any stale entries left over from a previous, longer frame (e.g.
     // one more monster billboard was visible then than now) — cheap: this
@@ -869,12 +878,17 @@ let pointerX = 0, pointerY = 0, pointerDown = 0;
 // aspect — see #screen's own CSS) while its pixel buffer stays at the
 // cart's native resolution; a raw clientX/Y needs both the letterbox
 // offset and the uniform scale factor removed to land in cart-pixel space.
+// Rounded to whole cart pixels at capture time (not just for display) —
+// rollback netplay (DESIGN.md §77) replays a peer's own captured input
+// verbatim on every other peer, so a value that isn't already quantized
+// here would need reconciling downstream, and since it's the sender's own
+// authoritative input, any such divergence would never self-correct.
 function pointerToCartCoords(e){
   const rect = canvas.getBoundingClientRect();
   const scale = Math.min(rect.width / canvas.width, rect.height / canvas.height);
   const dispW = canvas.width * scale, dispH = canvas.height * scale;
   const offX = rect.left + (rect.width - dispW) / 2, offY = rect.top + (rect.height - dispH) / 2;
-  return { x: (e.clientX - offX) / scale, y: (e.clientY - offY) / scale };
+  return { x: Math.round((e.clientX - offX) / scale), y: Math.round((e.clientY - offY) / scale) };
 }
 (function wirePointerTracking(){
   const move = e => { const p = pointerToCartCoords(e); pointerX = p.x; pointerY = p.y; };
@@ -1391,8 +1405,15 @@ function loop(ts){
     if(lastTime === null) lastTime = ts;
     accumulator = Math.min(accumulator + (ts - lastTime), MAX_ACCUMULATED_MS);
     lastTime = ts;
-    world.input = buttonMaskFromKeys();
+    // inputs[0] is the local player's slot — buttonMaskFromKeys() (bits
+    // 0-4, BUTTON_BITS) plus bit 5 (value 32) folded in for pointer-held,
+    // a convention kept deliberately separate from BUTTON_BITS itself (see
+    // kernel.js's LOAD_POINTER_P comment): it's always-on infrastructure,
+    // not an authored/labeled button. The old scalar pointerX/Y/Down stay
+    // set too, unchanged, since LOAD_POINTER_X/Y/DOWN still read them.
+    world.inputs[0] = buttonMaskFromKeys() | (pointerDown ? 32 : 0);
     world.pointerX = pointerX; world.pointerY = pointerY; world.pointerDown = pointerDown;
+    world.pointerXs[0] = pointerX; world.pointerYs[0] = pointerY;
     while(accumulator >= STEP_MS){
       world.step();
       accumulator -= STEP_MS;

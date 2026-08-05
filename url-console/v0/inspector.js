@@ -1642,8 +1642,15 @@ const OPCODE_GROUPS = [
     {mnem:'SPAWN', operandKind:'entityType'}, {mnem:'KILL_SELF'}, {mnem:'MOVE_SOLID'}, {mnem:'SETTILE'},
   ]},
   {label: 'Input', ops: [
-    {mnem:'TESTBIT', operandKind:'testbit'}, {mnem:'LOAD_INPUT'},
+    {mnem:'TESTBIT', operandKind:'testbit'},
+    // 'raw' — LOAD_INPUT's operand is a player slot (0-3), no cart-data
+    // table to pick from, same reasoning as the Sound group's voice
+    // indices above. LOAD_POINTER_X/Y/DOWN stay single-player/local-only,
+    // untouched. LOAD_POINTER_P takes two raw operands (slot, axis);
+    // 'raw' fills in one zero per declared operand automatically.
+    {mnem:'LOAD_INPUT', operandKind:'raw'},
     {mnem:'LOAD_POINTER_X'}, {mnem:'LOAD_POINTER_Y'}, {mnem:'LOAD_POINTER_DOWN'},
+    {mnem:'LOAD_POINTER_P', operandKind:'raw'},
   ]},
   {label: 'Drawing & control', ops: [
     {mnem:'DRAW_LINE'}, {mnem:'PLAYSOUND', operandKind:'raw'}, {mnem:'HALT'},

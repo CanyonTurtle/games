@@ -72,7 +72,7 @@ const RACER_HOOKS_SRC = {
   on_input: `
     LOADG g_race_over
     JNZ done
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chkright
     LOADE g_car_player 8
@@ -80,7 +80,7 @@ const RACER_HOOKS_SRC = {
     SUB
     STOREE g_car_player 8
     chkright:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ chkaccel
     LOADE g_car_player 8
@@ -88,7 +88,7 @@ const RACER_HOOKS_SRC = {
     ADD
     STOREE g_car_player 8
     chkaccel:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ done
     LOADE g_car_player 8

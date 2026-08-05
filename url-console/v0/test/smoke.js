@@ -640,10 +640,10 @@ async function main(){
     const calls = [];
     const origTrigger = w.triggerVoice.bind(w);
     w.triggerVoice = v => { calls.push(v); origTrigger(v); };
-    w.input = 16; // action bit — flap
+    w.inputs[0] = 16; // action bit — flap
     w.step();
     const flapCalls = calls.filter(v => v === 0).length;
-    w.input = 0;
+    w.inputs[0] = 0;
     const pipe = w.spawnEntity(1);
     pipe.props[0] = bird.props[0] - 10;
     pipe.props[9] = 0;
@@ -1341,6 +1341,23 @@ async function main(){
     await page.mouse.move(dragCx + i * 5, dragCy, {steps: 2});
     await page.waitForTimeout(80);
   }
+  // Mid-drag snapshot (DESIGN.md §77) — the local player's slot 0, taken
+  // while the pointer is still physically held, is the only point in this
+  // test where pointerDown is actually true. Checks three things at once:
+  // quantization at capture time (pointerX/Y land on whole cart pixels,
+  // not the fractional CSS-scale math pointerToCartCoords would otherwise
+  // produce), the new per-player pointerXs/Ys arrays staying in lockstep
+  // with the old scalar pointerX/Y (LOAD_POINTER_X/Y and LOAD_POINTER_P
+  // must agree), and the pointer-held bit (index 5, value 32) folded into
+  // inputs[0] alongside whatever keyboard buttons are also held.
+  const midDragState = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    return {
+      pointerX: w.pointerX, pointerY: w.pointerY, pointerDown: w.pointerDown,
+      pointerXs0: w.pointerXs[0], pointerYs0: w.pointerYs[0],
+      inputs0: w.inputs[0], inputs1: w.inputs[1],
+    };
+  });
   await page.mouse.up();
   await page.waitForTimeout(1500); // let at least one dropped drop fall to the soil line and get absorbed
   const plantState = await page.evaluate(() => {
@@ -1349,6 +1366,12 @@ async function main(){
   });
   check('dragging on the plant cart grows it (pointer input reaches hooks, water > 0)',
     plantState.ok && !plantState.fault && plantState.water > 0, JSON.stringify(plantState));
+  check('pointer position is quantized to whole cart pixels at capture time (rollback determinism, DESIGN.md §77)',
+    Number.isInteger(midDragState.pointerX) && Number.isInteger(midDragState.pointerY), JSON.stringify(midDragState));
+  check('the new per-player pointerXs[0]/pointerYs[0] stay in lockstep with the old scalar pointerX/pointerY',
+    midDragState.pointerXs0 === midDragState.pointerX && midDragState.pointerYs0 === midDragState.pointerY, JSON.stringify(midDragState));
+  check('pointer-held folds into inputs[0] as bit index 5 (value 32) while other player slots stay untouched',
+    midDragState.pointerDown === 1 && (midDragState.inputs0 & 32) === 32 && midDragState.inputs1 === 0, JSON.stringify(midDragState));
 
   // 5b2. The restart button: startGame() re-decodes the fragment and
   // rebuilds the World from scratch, re-running on_init — clicking it
@@ -1560,6 +1583,53 @@ async function main(){
   });
   check('SETTILE\'s tile-diff log stops growing at exactly 1024 entries', tileDiffCapResult.capIsExactly1024, JSON.stringify(tileDiffCapResult));
   check('a capped SETTILE neither grows the log nor mutates the grid any further, and never faults the cart', tileDiffCapResult.logLenAfterOneMore === 1024 && tileDiffCapResult.gridAfterOneMore === tileDiffCapResult.gridAfterCap && !tileDiffCapResult.fault, JSON.stringify(tileDiffCapResult));
+
+  // 5g. Multi-player input model (DESIGN.md §77) — VM-level opcode
+  // dispatch, checked with a mock ctx (same two-layer approach as the
+  // Sound section's voice-opcode test above): LOAD_INPUT now takes a
+  // player-slot operand instead of reading a single shared value, and
+  // LOAD_POINTER_P is the new per-player counterpart to LOAD_POINTER_X/Y.
+  // Values are routed through STOREG into globals so they can be read
+  // back — these two opcodes only ever push onto the stack, with no
+  // side-effecting ctx callback to spy on the way the voice opcodes have.
+  const inputOpcodeDispatchResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    const ctx = {
+      constants: [], globals: [0,0,0,0], self:null, a:null, b:null,
+      inputs: [5, 0, 7, 0], pointerXs: [0, 11, 0, 0], pointerYs: [0, 0, 0, 13],
+      world: {cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
+      getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}), rng:Math.random,
+    };
+    const bc = K2.assemble([
+      'LOAD_INPUT 0', 'STOREG 0',   // slot 0 -> 5
+      'LOAD_INPUT 2', 'STOREG 1',   // slot 2 -> 7
+      'LOAD_POINTER_P 1 0', 'STOREG 2', // slot 1, axis x -> pointerXs[1] = 11
+      'LOAD_POINTER_P 3 1', 'STOREG 3', // slot 3, axis y -> pointerYs[3] = 13
+      'HALT',
+    ], {constants:{},globals:{}});
+    const ok = K2.runHook(bc, ctx);
+    return {ok, globals: ctx.globals};
+  });
+  check('LOAD_INPUT slot reads the right player\'s bitmask out of ctx.inputs, not a single shared value',
+    JSON.stringify(inputOpcodeDispatchResult.globals) === JSON.stringify([5,7,11,13]) && inputOpcodeDispatchResult.ok,
+    JSON.stringify(inputOpcodeDispatchResult));
+  const inputFallbackResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    // A minimal ctx with no inputs/pointerXs/pointerYs at all — the
+    // documented "minimum ctx shape" (kernel.js's own runHook doc
+    // comment) must still run every hook without throwing.
+    const ctx = {
+      constants: [], globals: [0,0], self:null, a:null, b:null,
+      world: {cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
+      getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}), rng:Math.random,
+    };
+    const bc = K2.assemble(['LOAD_INPUT 0', 'STOREG 0', 'LOAD_POINTER_P 0 0', 'STOREG 1', 'HALT'], {constants:{},globals:{}});
+    const ok = K2.runHook(bc, ctx);
+    return {ok, globals: ctx.globals};
+  });
+  check('LOAD_INPUT and LOAD_POINTER_P both read 0 (not throw) when ctx.inputs/pointerXs/pointerYs are absent entirely',
+    inputFallbackResult.ok && inputFallbackResult.globals[0] === 0 && inputFallbackResult.globals[1] === 0,
+    JSON.stringify(inputFallbackResult));
 
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of

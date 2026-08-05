@@ -205,7 +205,7 @@ const DESTRUCT_HOOKS_SRC = {
     LOADG g_launched
     JNZ done
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chk_right
     LOADG g_angle
@@ -213,7 +213,7 @@ const DESTRUCT_HOOKS_SRC = {
     ADD
     STOREG g_angle
     chk_right:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ clamp_lo
     LOADG g_angle
@@ -236,7 +236,7 @@ const DESTRUCT_HOOKS_SRC = {
     STOREG g_angle
     chk_charge:
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ chk_release
     LOADG g_power
@@ -282,7 +282,7 @@ const DESTRUCT_HOOKS_SRC = {
     STOREG g_power
 
     store_prev:
-    LOAD_INPUT
+    LOAD_INPUT 0
     STOREG g_prev_input
     done:
     HALT

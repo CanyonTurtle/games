@@ -116,7 +116,7 @@ const ROGUELIKE_HOOKS_SRC = {
     LOADE g_player 1
     STOREG g_target_y
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chk_right
     LOADG g_prev_input
@@ -127,7 +127,7 @@ const ROGUELIKE_HOOKS_SRC = {
     SUB
     STOREG g_target_x
     chk_right:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ chk_up
     LOADG g_prev_input
@@ -138,7 +138,7 @@ const ROGUELIKE_HOOKS_SRC = {
     ADD
     STOREG g_target_x
     chk_up:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ chk_down
     LOADG g_prev_input
@@ -149,7 +149,7 @@ const ROGUELIKE_HOOKS_SRC = {
     SUB
     STOREG g_target_y
     chk_down:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 3
     JZ do_move
     LOADG g_prev_input
@@ -207,7 +207,7 @@ const ROGUELIKE_HOOKS_SRC = {
     STOREE g_player 1
 
     store_prev:
-    LOAD_INPUT
+    LOAD_INPUT 0
     STOREG g_prev_input
     HALT
   `,

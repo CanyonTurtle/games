@@ -46,7 +46,7 @@ const cartSource = {
       'HALT',
     ],
     on_tick: [ // runs once per active entity — self is the box here
-      'LOAD_INPUT', 'TESTBIT 1', 'JZ done', // bit index 1 = right (value 2)
+      'LOAD_INPUT 0', 'TESTBIT 1', 'JZ done', // slot 0 (local player), bit index 1 = right (value 2)
       'LOAD_SELF 0', 'PUSHI 1', 'ADD', 'STORE_SELF 0',
       'done:', 'HALT',
     ],
@@ -79,7 +79,7 @@ const ctx = {
   globals: new Array(24).fill(0),
   world: { cartFault: false, cart: cart.cart }, // .cart needed only if the hook uses MOVE_SOLID
   self: { id: 1, typeId: 0, active: true, props: [80, 80, 0, 0, 0, 0, 0, 1] },
-  a: null, b: null, input: 2, // bit value 2 = right held
+  a: null, b: null, inputs: [2, 0, 0, 0], // slot 0 (local player), bit value 2 = right held
   findEntity: id => null,           // resolve LOADE/STOREE handle lookups
   getTile: (x, y) => 2,             // GETTILE / MOVE_SOLID's map query
   tileSurface: t => t,              // identity unless testing tileSurfaceOverrides

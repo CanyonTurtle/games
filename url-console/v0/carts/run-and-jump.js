@@ -123,7 +123,7 @@ const PLATFORM_HOOKS_SRC = {
     LOADG g_won
     JNZ done
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 0
     JZ chk_right
     PUSHC MOVE_SPEED
@@ -131,7 +131,7 @@ const PLATFORM_HOOKS_SRC = {
     STOREE g_player 2
     JMP moved_x
     chk_right:
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 1
     JZ zero_x
     PUSHC MOVE_SPEED
@@ -142,7 +142,7 @@ const PLATFORM_HOOKS_SRC = {
     STOREE g_player 2
     moved_x:
 
-    LOAD_INPUT
+    LOAD_INPUT 0
     TESTBIT 2
     JZ chk_jump_release
     LOADE g_player 0
@@ -170,7 +170,7 @@ const PLATFORM_HOOKS_SRC = {
     STOREE g_player 3
 
     store_prev:
-    LOAD_INPUT
+    LOAD_INPUT 0
     STOREG g_prev_input
     done:
     HALT

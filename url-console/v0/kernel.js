@@ -80,14 +80,25 @@ const OPS = [
   ['SPAWN',['u8']],['KILL_SELF',[]],
   ['GETTILE',[]],['TILE_SURFACE',[]],['GET_CHECKPOINT',[]],
   ['DIST',[]],['CLAMP_ABS',[]],['LERP',[]],['NORM_ANGLE',[]],
-  ['TESTBIT',['u8']],['LOAD_INPUT',[]],['PLAYSOUND',['u8']],['HALT',[]],
+  // LOAD_INPUT gained its u8 operand in DESIGN.md §77 (multi-player
+  // input) — a player slot, 0-3 (0 is always the local player; 1-3 read
+  // 0 until a networking round actually populates them). Breaking
+  // change to hook bytecode semantics specifically, not the binary cart
+  // header format `formatVersion` covers — no version bump, matching
+  // every other opcode-only change this project has shipped, but any
+  // previously-shared fragment using the old no-operand LOAD_INPUT needs
+  // recompiling under this kernel, same "pre-v1, no compat branch"
+  // policy as a formatVersion bump.
+  ['TESTBIT',['u8']],['LOAD_INPUT',['u8']],['PLAYSOUND',['u8']],['HALT',[]],
   ['SETTILE',[]],
   ['MOVE_SOLID',[]],
   // Pointer input (DESIGN.md §36) — raw analog position/held-state, the
   // continuous counterpart to LOAD_INPUT's discrete button bitmask. Only
   // meaningful when the cart declares inputWantsPointer; reads 0 otherwise
   // (see runHook below), same "always safe to read, cart declares intent"
-  // shape as the button system.
+  // shape as the button system. Single-player/local-only, unchanged by
+  // §77 — LOAD_POINTER_P (bottom of this table) is the per-player
+  // counterpart, for a cart that actually wants another player's pointer.
   ['LOAD_POINTER_X',[]],['LOAD_POINTER_Y',[]],['LOAD_POINTER_DOWN',[]],
   // Immediate-mode drawing (DESIGN.md §36) — issued from a renderKind-2
   // entity's on_draw hook, at render time, in entity-local pixel space
@@ -128,6 +139,26 @@ const OPS = [
   // ctx.loadPersist exist) — see runtime.js's World for what they do.
   ['SET_VOICE_FREQ',['u8']],['SET_VOICE_WAVE',['u8','u8']],
   ['SET_VOICE_GAIN',['u8']],['TRIGGER_VOICE',['u8']],
+  // Multi-player input (DESIGN.md §77). `this.input`/`ctx.input` became
+  // `this.inputs`/`ctx.inputs` — a fixed 4-slot array, one bitmask per
+  // player, mirroring WASM-4's "fixed memory map, not per-call context"
+  // trick: every hook already reads the exact same shared input value
+  // every tick (LOAD_INPUT, above), so widening it to 4 slots needed no
+  // change to hook invocation at all, just an operand naming which slot.
+  //
+  // LOAD_POINTER_P <u8 slot> <u8 axis> — the per-player counterpart to
+  // LOAD_POINTER_X/Y (still single-player/local-only, untouched above),
+  // mirroring the handle-plus-field shape LOADE already uses for
+  // cross-entity prop reads. axis: 0=x, 1=y. No per-player "down"
+  // opcode — a player's pointer-held state folds into their own
+  // LOAD_INPUT slot instead, as bit index 5 (value 32, tested via
+  // ordinary TESTBIT 5) — conceptually just another button, not a
+  // second parallel array. That bit is reserved outside BUTTON_BITS
+  // (indices 0-4, kernel.js:482) on purpose: BUTTON_BITS is which
+  // *authored, labeled* buttons a cart declares wanting, an unrelated
+  // concept to "is this player's pointer currently held," the same way
+  // LOAD_POINTER_DOWN was always separate from the button system.
+  ['LOAD_POINTER_P',['u8','u8']],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -200,20 +231,24 @@ function assemble(lines, sym){
    `ctx` is a plain object the caller builds; nothing here reaches for
    a browser global. Minimum shape to run a hook that touches only the
    stack/globals (no self/a/b, no entities, no tilemap):
-     { constants:[], globals:[], self:null, a:null, b:null, input:0,
+     { constants:[], globals:[], self:null, a:null, b:null, inputs:[0,0,0,0],
        world:{cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
        getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}),
        rng:Math.random, playSound:()=>{}, setTile:()=>{} }
-   `pointerX`/`pointerY`/`pointerDown`, `drawLine`, `loadPersist`/
-   `storePersist`, and `setVoiceFreq`/`setVoiceWave`/`setVoiceGain`/
-   `triggerVoice` are optional on top of that — LOAD_POINTER_* reads 0
-   when absent (same as a cart that never declares inputWantsPointer),
-   DRAW_LINE is simply a no-op when `drawLine` isn't supplied,
-   LOAD_PERSIST/STORE_PERSIST behave the same way (read 0, write
-   discarded) when `loadPersist`/`storePersist` aren't supplied, and the
-   four voice opcodes are no-ops when their callbacks aren't supplied —
-   so this minimum shape still runs any hook, including on_draw or one
-   that touches persistent storage or sound, without throwing.
+   `pointerX`/`pointerY`/`pointerDown` (single-player/local-only),
+   `pointerXs`/`pointerYs` (per-player, read by LOAD_POINTER_P), `drawLine`,
+   `loadPersist`/`storePersist`, and `setVoiceFreq`/`setVoiceWave`/
+   `setVoiceGain`/`triggerVoice` are optional on top of that —
+   LOAD_POINTER_X/Y/DOWN and LOAD_POINTER_P read 0 when absent (same as a cart that
+   never declares inputWantsPointer), DRAW_LINE is simply a no-op when
+   `drawLine` isn't supplied, LOAD_PERSIST/STORE_PERSIST behave the same
+   way (read 0, write discarded) when `loadPersist`/`storePersist` aren't
+   supplied, and the four voice opcodes are no-ops when their callbacks
+   aren't supplied — so this minimum shape still runs any hook, including
+   on_draw or one that touches persistent storage or sound, without
+   throwing. LOAD_INPUT reads 0 when `inputs[slot]` is absent/undefined
+   (same `||0` fallback as before), so a bare `inputs:[0,0,0,0]` covers
+   every declared player slot.
    ============================================================ */
 const MAX_STEPS = 20000;
 const vmStack = [];
@@ -277,7 +312,7 @@ function runHook(bytecode, ctx){
       case 45: { const t=stack.pop(), b=stack.pop(), a=stack.pop(); stack.push(a+(b-a)*t); break; }
       case 46: { const a=stack.pop(); stack.push(((a+180)%360+360)%360-180); break; }
       case 47: { const bit=u8(); const mask=stack.pop(); stack.push((mask>>bit)&1); break; }
-      case 48: { stack.push(ctx.input||0); break; }
+      case 48: { const slot=u8(); stack.push((ctx.inputs && ctx.inputs[slot]) || 0); break; } // LOAD_INPUT
       case 49: { const id=u8(); if(ctx.playSound) ctx.playSound(id); break; }
       case 50: return true; // HALT
       case 51: { const tileId=stack.pop(), y=stack.pop(), x=stack.pop(); ctx.setTile(x,y,tileId); break; } // SETTILE
@@ -326,6 +361,12 @@ function runHook(bytecode, ctx){
       case 60: { const voice=u8(), wave=u8(); if(ctx.setVoiceWave) ctx.setVoiceWave(voice, wave); break; } // SET_VOICE_WAVE
       case 61: { const voice=u8(); const gain=stack.pop(); if(ctx.setVoiceGain) ctx.setVoiceGain(voice, gain); break; } // SET_VOICE_GAIN
       case 62: { const voice=u8(); if(ctx.triggerVoice) ctx.triggerVoice(voice); break; } // TRIGGER_VOICE
+      case 63: { // LOAD_POINTER_P <u8 slot> <u8 axis> — axis 0=x, 1=y
+        const slot=u8(), axis=u8();
+        const arr = axis===0 ? ctx.pointerXs : ctx.pointerYs;
+        stack.push((arr && arr[slot]) || 0);
+        break;
+      }
       default: throw new Error('runHook: unknown opcode '+op+' at ip '+(ip-1));
     }
   }
