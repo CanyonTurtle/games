@@ -95,6 +95,21 @@ involved otherwise). If a cart has more than one `renderKind:2` entity,
 must itself branch on `self`'s `typeId`/props to know which one it's
 drawing.
 
+## Sound is presentation-only, like `on_draw`
+
+The four `SET_VOICE_*`/`TRIGGER_VOICE` opcodes (`opcodes.md`) drive real
+audio hardware through `ctx.setVoiceFreq`/etc., not the simulation state
+itself — calling them (or not, e.g. a muted/backgrounded client) never
+changes what any hook computes. The one sharp edge: if a cart's melody or
+percussion logic calls `RAND_RANGE` to humanize timing or pitch, that
+call still consumes the *shared*, deterministic RNG stream every other
+opcode draws from (`ctx.rng`) — it has to run identically on every peer
+in a replay/multiplayer context even on a client where the sound itself
+is muted or never actually heard, or the shared RNG stream desyncs the
+real simulation. If a hook needs sound-only randomness that's safe to
+skip when muted, it needs its own separate, non-deterministic source —
+nothing in the opcode set provides one today.
+
 ## `cartFault`
 
 Once set, `world.cartFault` stays `true`; the runtime shows a fault

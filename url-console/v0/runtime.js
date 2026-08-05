@@ -76,6 +76,14 @@ class World {
     // persisted value on its very first tick.
     this.persist = new Array(24).fill(0);
     this.persistKey = null;
+    // Sound (DESIGN.md §72) — 4 persistent voices, index-addressed by the
+    // SET_VOICE_*/TRIGGER_VOICE opcodes. Each slot starts null and is
+    // lazily built (see _ensureVoice below) the first time a cart actually
+    // touches it, same "don't create an AudioContext until a cart makes a
+    // sound" discipline the old one-shot playSound() already used — a
+    // cart that's silent for its whole session never triggers an
+    // autoplay-policy prompt.
+    this.voices = [null, null, null, null];
     try{
       this.persistKey = 'urlcade_persist_' + hashCartBytes(encodeCart(cart));
       const raw = localStorage.getItem(this.persistKey);
@@ -171,6 +179,10 @@ class World {
       getCheckpoint: i => (self_.map && self_.map.checkpoints[i]) || {x:0,y:0},
       rng: () => self_.rng(),
       playSound: id => self_.playSound(id),
+      setVoiceFreq: (voice, freq) => self_.setVoiceFreq(voice, freq),
+      setVoiceWave: (voice, wave) => self_.setVoiceWave(voice, wave),
+      setVoiceGain: (voice, gain) => self_.setVoiceGain(voice, gain),
+      triggerVoice: voice => self_.triggerVoice(voice),
       // DRAW_LINE's sink — only ever populated during a runDrawHook() call
       // (renderKind:2 entities, at render time), but harmless to have here
       // unconditionally: every other hook's bytecode simply never contains
@@ -341,6 +353,99 @@ class World {
       o.connect(g); g.connect(ctx.destination);
       o.start(); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime+0.15);
       o.stop(ctx.currentTime+0.15);
+    }catch(e){}
+  }
+  // Lazily builds voice `i`'s persistent node graph on first use — an
+  // oscillator (sine/square/triangle, its `.type` swapped live rather than
+  // rebuilt) and a looping white-noise buffer source, each gated through
+  // its own gain into a shared `mainGain` that SET_VOICE_GAIN/
+  // TRIGGER_VOICE actually control, then to the destination. Both sources
+  // are started once and simply left running for the game's whole
+  // lifetime (silent via gain 0 until selected) — swapping `.type` or a
+  // gain value is real-time-safe on a running node, no stop/restart
+  // needed, so "4 persistent voices" really does mean 4 nodes total per
+  // voice, created once, not one per note.
+  _ensureVoice(i){
+    if(this.voices[i]) return this.voices[i];
+    if(!this._actx) this._actx = new (window.AudioContext||window.webkitAudioContext)();
+    const ctx = this._actx;
+    if(!this._noiseBuffer){
+      this._noiseBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+      const data = this._noiseBuffer.getChannelData(0);
+      for(let j=0;j<data.length;j++) data[j] = Math.random()*2-1;
+    }
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+    osc.frequency.value = 440;
+    const oscGain = ctx.createGain(); oscGain.gain.value = 1;
+    const noiseSrc = ctx.createBufferSource();
+    noiseSrc.buffer = this._noiseBuffer;
+    noiseSrc.loop = true;
+    const noiseGain = ctx.createGain(); noiseGain.gain.value = 0;
+    const mainGain = ctx.createGain(); mainGain.gain.value = 0;
+    osc.connect(oscGain); oscGain.connect(mainGain);
+    noiseSrc.connect(noiseGain); noiseGain.connect(mainGain);
+    mainGain.connect(ctx.destination);
+    osc.start(); noiseSrc.start();
+    const v = {osc, oscGain, noiseSrc, noiseGain, mainGain};
+    this.voices[i] = v;
+    return v;
+  }
+  setVoiceFreq(voice, freq){
+    try{ this._ensureVoice(voice).osc.frequency.value = freq; }catch(e){}
+  }
+  // waveform: 0=square 1=triangle 2=noise 3=sine — see kernel.js's
+  // SET_VOICE_WAVE comment. Noise and the oscillator share one mainGain,
+  // so switching waveform just re-routes which source's own gain is open
+  // (1) vs closed (0) rather than tearing down and rebuilding a node.
+  setVoiceWave(voice, waveform){
+    try{
+      const v = this._ensureVoice(voice);
+      if(waveform === 2){
+        v.oscGain.gain.value = 0; v.noiseGain.gain.value = 1;
+      } else {
+        v.noiseGain.gain.value = 0; v.oscGain.gain.value = 1;
+        v.osc.type = waveform===0 ? 'square' : waveform===1 ? 'triangle' : 'sine';
+      }
+    }catch(e){}
+  }
+  // Sustained volume for a held note/drone — cancels any TRIGGER_VOICE
+  // decay ramp still in flight so a cart can interrupt a decaying hit with
+  // a held note on the same voice without the two fighting over the gain
+  // value.
+  setVoiceGain(voice, gain){
+    try{
+      const v = this._ensureVoice(voice);
+      // cancelScheduledValues, then a plain assignment rather than
+      // setValueAtTime(gain, ctx.currentTime) — behaviorally the same
+      // ("this value, right now"), but a direct AudioParam.value write is
+      // guaranteed to read back synchronously; setValueAtTime schedules
+      // an automation-timeline event that only takes effect once the
+      // audio thread next processes a render quantum, which a caller
+      // reading `.value` back immediately (a test, or another opcode
+      // this same tick) can't rely on.
+      v.mainGain.gain.cancelScheduledValues(this._actx.currentTime);
+      v.mainGain.gain.value = gain;
+    }catch(e){}
+  }
+  // Fixed percussive envelope, same 0.05 peak / 150ms exponential decay
+  // the old one-shot playSound() used — scoped to one persistent voice
+  // instead of a throwaway node pair. cancelScheduledValues first so
+  // re-triggering the same voice before its previous decay finishes
+  // restarts cleanly instead of the two ramps stacking. The peak itself
+  // is a plain assignment, not setValueAtTime — see setVoiceGain's
+  // comment; exponentialRampToValueAtTime below still needs the
+  // automation-timeline API since a ramp can't be expressed any other
+  // way, but its implicit start point (current value, current time) is
+  // exactly this synchronously-applied peak.
+  triggerVoice(voice){
+    try{
+      const v = this._ensureVoice(voice);
+      const ctx = this._actx;
+      const now = ctx.currentTime;
+      v.mainGain.gain.cancelScheduledValues(now);
+      v.mainGain.gain.value = 0.05;
+      v.mainGain.gain.exponentialRampToValueAtTime(0.001, now+0.15);
     }catch(e){}
   }
   // Called on every STORE_PERSIST (ctxBase.storePersist above) — writes

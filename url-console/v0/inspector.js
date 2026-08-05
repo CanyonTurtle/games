@@ -1270,6 +1270,16 @@ const OPCODE_GROUPS = [
     // own raw prop-index entry.
     {mnem:'LOAD_PERSIST', operandKind:'raw'}, {mnem:'STORE_PERSIST', operandKind:'raw'},
   ]},
+  {label: 'Sound', ops: [
+    // 'raw' for all four — a voice index (0-3) and, for SET_VOICE_WAVE,
+    // a second waveform id (0-3) have no cart-data table to pick from
+    // (unlike constIdx/globalSlot), same reasoning as Persistence's plain
+    // slot picker above. 'raw' already fills in one zero per declared
+    // operand (see onOpcodeButtonClick), so SET_VOICE_WAVE correctly gets
+    // two.
+    {mnem:'SET_VOICE_FREQ', operandKind:'raw'}, {mnem:'SET_VOICE_WAVE', operandKind:'raw'},
+    {mnem:'SET_VOICE_GAIN', operandKind:'raw'}, {mnem:'TRIGGER_VOICE', operandKind:'raw'},
+  ]},
   {label: 'World queries', ops: [
     {mnem:'PUSHI', operandKind:'tileId', label:'PUSHI (tile id)'},
     {mnem:'RAND_RANGE'}, {mnem:'SIN'}, {mnem:'COS'}, {mnem:'ATAN2'}, {mnem:'DIST'},

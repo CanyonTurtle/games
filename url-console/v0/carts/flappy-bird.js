@@ -15,7 +15,12 @@ import { hexRowsToPixels } from './shared-sprites.js';
 const FLAPPY_CONST_NAMES = {
   GRAVITY:0, FLAP_IMPULSE:1, SCROLL_SPEED:2, GAP_SIZE:3, GAP_MIN_Y:4, GAP_MAX_Y:5,
   SPAWN_PERIOD:6, SCREEN_H:7, SCREEN_W:8, BIRD_START_X:9, BIRD_START_Y:10, GROUND_MARGIN:11,
+  FLAP_FREQ:12, SCORE_FREQ:13,
 };
+// Voice assignment (DESIGN.md §72) — one persistent voice each, waveform
+// picked once in on_init and never changed again, so every trigger site
+// only needs to (re)set frequency (if it varies) and fire TRIGGER_VOICE.
+const VOICE_FLAP = 0, VOICE_SCORE = 1, VOICE_CRASH = 2;
 const FLAPPY_GLOBAL_NAMES = { g_player:0, g_dead:1, g_score:2, g_scratch:3, g_spawn_timer:4, g_gap:5, g_high_score:6 };
 // Persist slot 0: this cart's own all-time high score (see
 // opcodes.md's Persistence section) — no PERSIST_NAMES convention exists
@@ -50,6 +55,16 @@ const FLAPPY_HOOKS_SRC = {
     JZ done
     PUSHC FLAP_IMPULSE
     STOREE g_player 3
+    ; Waveform set at every trigger, not once in on_init — a voice's node
+    ; graph (and the AudioContext behind it) is built lazily on first
+    ; touch (see runtime.js's _ensureVoice); setting it in on_init would
+    ; force that eagerly on every single World construction, even a play
+    ; session that turns out silent, defeating the whole point of the
+    ; lazy-init discipline. Square, for a short percussive blip.
+    SET_VOICE_WAVE ${VOICE_FLAP} 0
+    PUSHC FLAP_FREQ
+    SET_VOICE_FREQ ${VOICE_FLAP}
+    TRIGGER_VOICE ${VOICE_FLAP}
     done:
     HALT
   `,
@@ -175,6 +190,10 @@ const FLAPPY_HOOKS_SRC = {
     PUSHI 1
     ADD
     STOREG g_score
+    SET_VOICE_WAVE ${VOICE_SCORE} 3
+    PUSHC SCORE_FREQ
+    SET_VOICE_FREQ ${VOICE_SCORE}
+    TRIGGER_VOICE ${VOICE_SCORE}
     ; New high score? g_high_score starts this run at whatever on_init
     ; loaded (0 on a first-ever play), so this compares against last
     ; run's best the moment it's first beaten — then, since g_high_score
@@ -211,6 +230,16 @@ const FLAPPY_HOOKS_SRC = {
     JNZ crash
     JMP done
     crash:
+    ; Only trigger the crash sound on the tick g_dead actually transitions
+    ; 0->1 — the bird keeps falling and can stay overlapping the pipe for
+    ; several further ticks (on_tick's bird branch doesn't check g_dead),
+    ; which would otherwise re-fire on_collide, and this trigger, every
+    ; tick until it clears.
+    LOADG g_dead
+    JNZ already_dead
+    SET_VOICE_WAVE ${VOICE_CRASH} 2
+    TRIGGER_VOICE ${VOICE_CRASH}
+    already_dead:
     PUSHI 1
     STOREG g_dead
     done:
@@ -308,7 +337,7 @@ function buildFlappyCart(){
     // same *real-time* feel; only the render smoothness changed, not the pace.
     // GAP_SIZE/GAP_MIN_Y/GAP_MAX_Y/BIRD_START_Y retuned for the shorter
     // 160px-tall square screen (was 220 tall) — see DESIGN.md §18.
-    constants: [0.175, -1.6, 1.0, 32, 14, 88, 140, 160, 160, 40, 70, 16],
+    constants: [0.175, -1.6, 1.0, 32, 14, 88, 140, 160, 160, 40, 70, 16, 660, 990],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
