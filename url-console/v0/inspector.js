@@ -424,6 +424,10 @@ function renderInspectOverview(cart){
   html += `<div class="header-field-row"><label>Screen</label><input type="number" id="field-screenW" min="0" max="65535" value="${h.screenW}"> × <input type="number" id="field-screenH" min="0" max="65535" value="${h.screenH}"></div>`;
   html += `<div class="header-field-row"><label>RNG seed</label><input type="number" id="field-rngSeed" min="0" max="255" value="${h.rngSeed}"></div>`;
   html += `<div class="header-field-row"><label>Mode flags</label><input type="number" id="field-modeFlags" min="0" max="255" value="${h.modeFlags}"><span class="field-hint" id="modeFlagsBinary">0b${h.modeFlags.toString(2).padStart(8,'0')}</span></div>`;
+  html += `<div class="header-field-row"><label>Max players</label><select id="field-maxPlayers">
+    <option value="1"${h.maxPlayers===1?' selected':''}>1 — single-player</option>
+    <option value="2"${h.maxPlayers===2?' selected':''}>2 — multiplayer</option>
+  </select><span class="field-hint">2-player cap in v1 (rollback netcode)</span></div>`;
   html += `<div class="header-field-row"><label>Map generator</label><span>${h.mapGenerator} — ${MAP_GEN_NAMES[h.mapGenerator] || 'unknown'} <span class="field-hint">(read-only — switching generators needs a full config block, a future editor)</span></span></div>`;
   html += '<div id="paletteEditorSlot"></div>';
 
@@ -476,6 +480,7 @@ function wireInspectOverview(){
   bindHeaderField(document.getElementById('field-modeFlags'), ['modeFlags'], {onAfter: () => {
     document.getElementById('modeFlagsBinary').textContent = '0b' + lastParsedHeader.modeFlags.toString(2).padStart(8,'0');
   }});
+  bindHeaderField(document.getElementById('field-maxPlayers'), ['maxPlayers']);
   bindHeaderField(document.getElementById('field-camFollow'), ['camera','followGlobal']);
   bindHeaderField(document.getElementById('field-camClampMinX'), ['camera','clampMinX']);
   bindHeaderField(document.getElementById('field-camClampMaxX'), ['camera','clampMaxX']);
@@ -2069,14 +2074,14 @@ async function compileSourceText(){
 // through encode→decode too, consistent with every other path into this
 // view — no separate "nothing decoded yet" state to maintain).
 const STARTER_TEMPLATE = {
-  formatVersion: 4, cartType: 63,
+  formatVersion: 5, cartType: 63,
   // A modest terrain hue plus generatePalette()'s own guaranteed-vivid
   // entity floors (DESIGN.md §41/§43) is enough to make a first cart
   // look intentional without the author having to think about palettes
   // at all yet — see the Palette section of
   // spec/skill/references/cart-object.md.
   paletteParams: [200, 0, 15, 40, 15, 60, 128, 128],
-  rngSeed: 1, modeFlags: 0, screenW: 160, screenH: 160,
+  rngSeed: 1, modeFlags: 0, maxPlayers: 1, screenW: 160, screenH: 160,
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
   inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {},
   hudSpec: [

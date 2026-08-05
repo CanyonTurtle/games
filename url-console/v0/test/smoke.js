@@ -17,7 +17,7 @@ const os = require('os');
 const http = require('http');
 const { execFileSync } = require('child_process');
 
-const MIME = { '.html':'text/html', '.js':'text/javascript', '.md':'text/markdown', '.json':'application/json' };
+const MIME = { '.html':'text/html', '.js':'text/javascript', '.mjs':'text/javascript', '.md':'text/markdown', '.json':'application/json' };
 
 // `prefix`, when given, simulates a subpath deployment (this site published
 // under e.g. https://a-custom-domain/games/ rather than the domain root —
@@ -715,7 +715,7 @@ async function main(){
   const mapShapesEncodeResult = await page.evaluate(() => {
     const K2 = window.UrlcadeKernel;
     const cart = {
-      formatVersion: 4, cartType: 0, rngSeed: 1, modeFlags: 0, screenW: 64, screenH: 64,
+      formatVersion: 5, cartType: 0, rngSeed: 1, modeFlags: 0, screenW: 64, screenH: 64,
       paletteParams: [0,0,0,0,0,0,0,0], backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
       tileSurfaceOverrides: {}, inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {}, inputWantsPointer: false,
       hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [],
@@ -1014,6 +1014,18 @@ async function main(){
     hasLabel: 8 in window.__urlcadeDebug.getInspectCartInfo().cart.inputButtonLabels,
   }));
   check('unchecking drops the bit and its label from the recompiled cart, not just hides the input', (afterUncheckState.activeButtons & 8) === 0 && !afterUncheckState.hasLabel, JSON.stringify(afterUncheckState));
+
+  // Max players (DESIGN.md §79) — defaults to single-player, a select
+  // (not a free-number input) since 2 is a hard v1 ceiling, not a
+  // suggested default.
+  const maxPlayersBefore = await page.inputValue('#field-maxPlayers');
+  check('the max players field defaults to 1 (single-player)', maxPlayersBefore === '1', maxPlayersBefore);
+  await page.selectOption('#field-maxPlayers', '2');
+  await page.waitForTimeout(600);
+  const maxPlayersAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.maxPlayers);
+  check('picking "2 — multiplayer" reaches the recompiled cart', maxPlayersAfter === 2, maxPlayersAfter);
+  await page.selectOption('#field-maxPlayers', '1'); // leave state clean for whatever loads next
+  await page.waitForTimeout(600);
 
   // Drift-proof round trip: hand-edit a field directly in the Source
   // tab's textarea, confirm the form on Logic picks it up afterward —
@@ -1763,6 +1775,138 @@ async function main(){
     return { rngState1: w1.rngState, rngState2: w2.rngState, tick1: w1.tick, tick2: w2.tick };
   });
   check('two fresh Worlds from the same cart seed land on identical RNG state after the same tick sequence', rngWorldResult.rngState1 === rngWorldResult.rngState2 && rngWorldResult.tick1 === rngWorldResult.tick2, JSON.stringify(rngWorldResult));
+
+  // 5i. Multiplayer signaling + lobby UI (DESIGN.md §79). Live P2P
+  // connectivity cannot be tested here — the vendored Trystero (torrent
+  // strategy) reaches real BitTorrent trackers over the open internet,
+  // which this sandboxed environment's network policy blocks (confirmed
+  // manually: real WebSocket-connection-failed errors, not a bug in the
+  // wiring). Everything reachable *without* a live network is covered
+  // instead: the kernel-level maxPlayers field, and the full lobby UI/
+  // state machine driven through window.__urlcadeDebug's openMultiplayer
+  // Lobby/hostMatch/joinMatch with a mock joinRoomFn standing in for
+  // Trystero's real one — multiplayer.js's own openLobby() accepts this
+  // same {joinRoomFn} override the real "Multiplayer" button's click
+  // handler never supplies, specifically so this is possible.
+  const maxPlayersKernelResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    const base = {
+      formatVersion: 5, cartType: 0, rngSeed: 1, modeFlags: 0, screenW: 64, screenH: 64,
+      paletteParams: [0,0,0,0,0,0,0,0], backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
+      tileSurfaceOverrides: {}, inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {}, inputWantsPointer: false,
+      hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [], mapGenerator: 0, camera: null, aimLine: null, hooks: {},
+    };
+    const omittedDecoded = K2.decodeCart(K2.encodeCart(base)); // maxPlayers omitted entirely
+    const explicit2Decoded = K2.decodeCart(K2.encodeCart(Object.assign({}, base, {maxPlayers: 2})));
+    let threwFor0 = false, threwFor3 = false;
+    try{ K2.encodeCart(Object.assign({}, base, {maxPlayers: 0})); }catch(e){ threwFor0 = true; }
+    try{ K2.encodeCart(Object.assign({}, base, {maxPlayers: 3})); }catch(e){ threwFor3 = true; }
+    return { omittedMaxPlayers: omittedDecoded.maxPlayers, explicit2MaxPlayers: explicit2Decoded.maxPlayers, threwFor0, threwFor3 };
+  });
+  check('maxPlayers defaults to 1 (single-player) when omitted, round-tripping through encode/decode', maxPlayersKernelResult.omittedMaxPlayers === 1, JSON.stringify(maxPlayersKernelResult));
+  check('an explicit maxPlayers:2 round-trips through encode/decode unchanged', maxPlayersKernelResult.explicit2MaxPlayers === 2, JSON.stringify(maxPlayersKernelResult));
+  check('encodeCart throws for maxPlayers outside 1-2 (a hard v1 cap, not a soft default)', maxPlayersKernelResult.threwFor0 && maxPlayersKernelResult.threwFor3, JSON.stringify(maxPlayersKernelResult));
+
+  // Button visibility: shown only for a cart that opted in.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(300);
+  const btnHiddenForSingplePlayer = await page.evaluate(() => getComputedStyle(document.getElementById('multiplayerBtn')).display === 'none');
+  check('the Multiplayer button stays hidden for a single-player cart (maxPlayers:1)', btnHiddenForSingplePlayer);
+
+  const mpFragment = await page.evaluate(async () => {
+    const K2 = window.__urlcadeDebug;
+    const { payload } = K2.decodeCartUrl(K2.CARTS['flappy'].fragment);
+    const decoded = K2.decodeCart(await K2.decodePayloadToBytes(payload));
+    decoded.maxPlayers = 2;
+    return await K2.encodePayload(K2.encodeCart(decoded));
+  });
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const btnVisibleForMultiplayer = await page.evaluate(() => getComputedStyle(document.getElementById('multiplayerBtn')).display !== 'none');
+  check('the Multiplayer button appears for a maxPlayers:2 cart', btnVisibleForMultiplayer);
+
+  // Full lobby state machine, driven with a mock joinRoomFn (no real
+  // network): host -> a peer joins -> connected, shows the right player
+  // number -> that peer leaves -> peer-left -> close leaves the room.
+  const lobbyResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
+      room.leave = () => { room.leaveCalled = true; };
+      return room;
+    }
+    const rooms = [];
+    const mockJoinRoomFn = (config, roomId) => { const room = makeMockRoom(); rooms.push({config, roomId, room}); return room; };
+
+    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    const choiceHtml = document.getElementById('mpBody').innerHTML;
+    document.getElementById('mpHostBtn').click();
+    const roomCodeShown = document.querySelector('.mp-room-code')?.textContent;
+    const roomIdMatches = rooms[0] && rooms[0].roomId === roomCodeShown;
+
+    rooms[0].room.onPeerJoin('mockPeerId');
+    const connectedHtml = document.getElementById('mpBody').innerHTML;
+
+    rooms[0].room.onPeerLeave('mockPeerId');
+    const peerLeftHtml = document.getElementById('mpBody').innerHTML;
+
+    document.getElementById('mpCancelBtn').click();
+    const overlayActiveAfterClose = document.getElementById('mpOverlay').classList.contains('active');
+
+    return {
+      hadHostJoinButtons: choiceHtml.includes('mpHostBtn') && choiceHtml.includes('mpJoinBtn'),
+      roomCodeLen: (roomCodeShown || '').length,
+      roomIdMatches,
+      connectedShowsPlayerNumber: /Player 1 of 2/.test(connectedHtml),
+      peerLeftShowsDisconnect: /disconnected/i.test(peerLeftHtml),
+      roomLeaveWasCalled: rooms[0].room.leaveCalled,
+      overlayActiveAfterClose,
+    };
+  });
+  check('the lobby opens on a Host/Join choice screen', lobbyResult.hadHostJoinButtons, JSON.stringify(lobbyResult));
+  check('hosting shows a room code that matches what was passed to joinRoomFn', lobbyResult.roomCodeLen > 0 && lobbyResult.roomIdMatches, JSON.stringify(lobbyResult));
+  check('a mock peer joining shows the connected state with the assigned player number', lobbyResult.connectedShowsPlayerNumber, JSON.stringify(lobbyResult));
+  check('that peer leaving shows the disconnected state (room stays open, not silently frozen)', lobbyResult.peerLeftShowsDisconnect, JSON.stringify(lobbyResult));
+  check('closing the lobby actually leaves the underlying room, not just hides the modal', lobbyResult.roomLeaveWasCalled && !lobbyResult.overlayActiveAfterClose, JSON.stringify(lobbyResult));
+
+  // Join flow: room code input is normalized (trimmed, uppercased)
+  // before being handed to joinRoomFn.
+  const joinResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const rooms = [];
+    const mockJoinRoomFn = (config, roomId) => { rooms.push(roomId); return {onPeerJoin:null, onPeerLeave:null, leave(){}}; };
+    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    document.getElementById('mpJoinBtn').click();
+    const joinFormShown = !!document.getElementById('mpJoinCode');
+    document.getElementById('mpJoinCode').value = '  abcde  ';
+    document.getElementById('mpJoinConnectBtn').click();
+    const normalizedCode = rooms[0];
+    D.closeMultiplayerLobby();
+    return { joinFormShown, normalizedCode };
+  });
+  check('the join form is reachable from the choice screen', joinResult.joinFormShown, JSON.stringify(joinResult));
+  check('a typed room code is trimmed and uppercased before joining', joinResult.normalizedCode === 'ABCDE', JSON.stringify(joinResult));
+
+  // A synchronously-throwing joinRoomFn (a config bug, not a live network
+  // failure — see multiplayer.js's own note) surfaces as a visible error
+  // state, not a silent no-op.
+  const mpErrorResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const throwingJoinRoomFn = () => { throw new Error('mock signaling failure'); };
+    D.openMultiplayerLobby(cart, {joinRoomFn: throwingJoinRoomFn});
+    document.getElementById('mpHostBtn').click();
+    const errorHtml = document.getElementById('mpBody').innerHTML;
+    D.closeMultiplayerLobby();
+    return { showsError: errorHtml.includes('mock signaling failure') };
+  });
+  check('a joinRoomFn that throws surfaces a visible error state instead of a silent no-op', mpErrorResult.showsError, JSON.stringify(mpErrorResult));
 
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of

@@ -28,7 +28,7 @@ const cartSource = {
   // These eight have no default (defaultCartFields doesn't set them) —
   // every other top-level field cart-object.md lists does, and can be
   // omitted for a first draft.
-  formatVersion: 3, cartType: 0, rngSeed: 1, modeFlags: 0,
+  formatVersion: 5, cartType: 0, rngSeed: 1, modeFlags: 0,
   screenW: 160, screenH: 160,
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
   inputActiveButtons: 1|2|4|8, inputTouchTemplate: 4, // DPAD_ONLY

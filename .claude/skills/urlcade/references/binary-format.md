@@ -13,8 +13,9 @@ on encode — a real V0 scope cut, not a bug to work around).
 
 Exactly this sequence, nothing implicit:
 
-1. `formatVersion` (u8, must be `4`), `cartType` (u8), `rngSeed` (u8),
-   `modeFlags` (u8)
+1. `formatVersion` (u8, must be `5`), `cartType` (u8), `rngSeed` (u8),
+   `modeFlags` (u8), `maxPlayers` (u8 — `1` or `2`; `encodeCart` throws
+   for anything else)
 2. `screenW`, `screenH` (u16 each)
 3. `paletteParams` — exactly 8 raw bytes (padded with `0` if given fewer)
 4. `backdropFillIndex`, `backdropGroundHeight`, `backdropGroundIndex` (u8 each)

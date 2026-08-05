@@ -28,10 +28,11 @@ fine — every field described below this line defaults via
 
 | Field | Type | Notes |
 |---|---|---|
-| `formatVersion` | u8 | Must be `3` (the only version this kernel decodes). |
+| `formatVersion` | u8 | Must be `5` (the only version this kernel decodes). |
 | `cartType` | u8 | Advisory/display metadata only — never a runtime dispatch key. |
 | `rngSeed` | u8 | Seeds `World`'s PRNG (`mulberry32`). |
 | `modeFlags` | u8 | Reserved for cart-specific mode bits; not interpreted by the runtime itself. |
+| `maxPlayers` | u8 | Defaults to `1` (single-player) if omitted — the only header field with a default that isn't `defaultCartFields()` (`encodeCart` itself fills it in). `2` opts into the multiplayer lobby; `encodeCart` throws for anything else — a hard v1 cap, not a soft default, matching what the rollback ring buffer and match UI actually support. |
 | `screenW`, `screenH` | u16 each | Viewport size in pixels. Every shipped cart uses 160x160. |
 
 ## Palette — `paletteParams` (8 bytes)

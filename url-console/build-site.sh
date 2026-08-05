@@ -23,7 +23,14 @@ cp "$ROOT/v0/color-utils.js" "$DEST/color-utils.js"
 cp "$ROOT/v0/runtime.js" "$DEST/runtime.js"
 cp "$ROOT/v0/inspector.js" "$DEST/inspector.js"
 cp "$ROOT/v0/main.js" "$DEST/main.js"
+cp "$ROOT/v0/multiplayer.js" "$DEST/multiplayer.js"
 cp -r "$ROOT/v0/carts" "$DEST/carts"
+# Vendored Trystero (DESIGN.md §79) — third-party .mjs files copied
+# verbatim, not cache-busted below: pinned to a specific vendored
+# version and only ever changes via a deliberate re-vendor (see
+# vendor/trystero/README.md), not on every commit the way main.js/
+# runtime.js do.
+cp -r "$ROOT/v0/vendor" "$DEST/vendor"
 
 cp "$ROOT/v0/kernel.js" "$DEST/spec/kernel.js"
 cp "$ROOT/v0/fixtures.md" "$DEST/spec/fixtures.md"
@@ -53,7 +60,7 @@ cp "$ROOT/../spec/learn/index.html" "$DEST/spec/learn/index.html"
 # time if this isn't a git checkout (e.g. a tarball).
 VERSION="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || date +%s)"
 CACHEBUST_FILES=(
-  "$DEST/index.html" "$DEST/main.js" "$DEST/runtime.js" "$DEST/inspector.js"
+  "$DEST/index.html" "$DEST/main.js" "$DEST/runtime.js" "$DEST/inspector.js" "$DEST/multiplayer.js"
   "$DEST/carts/index.js" "$DEST/carts"/*.js
   "$DEST/spec/learn/index.html"
 )

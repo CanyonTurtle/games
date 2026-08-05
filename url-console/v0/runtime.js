@@ -1535,4 +1535,5 @@ export {
   pauseGame, resumeGame, getCurrentFragment,
   render, getWorld, isUsingGL, startLoop,
   isAudioEnabled, setAudioEnabled,
+  hashCartBytes,
 };

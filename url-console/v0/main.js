@@ -22,9 +22,11 @@
 const K = window.UrlcadeKernel;
 import * as Runtime from './runtime.js';
 import * as Inspector from './inspector.js';
+import * as Multiplayer from './multiplayer.js';
 import { CARTS, registerAllCarts } from './carts/index.js';
 
 function goToMenu(){
+  Multiplayer.closeLobby(); // leaves any open room rather than abandoning it silently in the background
   Runtime.stopGame();
   Inspector.closeInspector();
   Runtime.showMenu();
@@ -46,6 +48,7 @@ function goToMenu(){
 // see. That's exactly what "Debug/New Cart do nothing" turned out to
 // be. See inspector.js's startInspect/startNewCart for the same fix.
 async function openDebug(payload){
+  Multiplayer.closeLobby(); // same reasoning as goToMenu() — never leave a room joined in the background
   const resuming = !!Runtime.getWorld() && Runtime.getCurrentFragment() === payload;
   if(resuming) Runtime.pauseGame(); else Runtime.stopGame();
   let ok = false;
@@ -89,7 +92,7 @@ async function boot(){
       // Debug's Source/Compile tabs produce, or a link a friend shared,
       // works exactly the same way). If it doesn't decode, fall into
       // Debug's own decode-error UI instead of duplicating that messaging.
-      if(await Runtime.startGame(hash)) return;
+      if(await Runtime.startGame(hash)){ Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart); return; }
       if(await Inspector.startInspect(hash)) return;
     } catch(err){
       console.error('boot failed:', err);
@@ -124,9 +127,15 @@ document.getElementById('restartBtn').addEventListener('click', async () => {
   if(!fragment) return;
   try{
     await Runtime.startGame(fragment);
+    Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart);
   } catch(err){
     console.error('restart failed:', err);
   }
+});
+Multiplayer.initMultiplayerUI();
+document.getElementById('multiplayerBtn').addEventListener('click', () => {
+  const world = Runtime.getWorld();
+  if(world) Multiplayer.openLobby(world.cart);
 });
 document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDebug);
 document.getElementById('debugBtn').addEventListener('click', () => {
@@ -194,4 +203,10 @@ window.__urlcadeDebug = {
   deflateRawCompress: K.deflateRawCompress, deflateRawDecompress: K.deflateRawDecompress,
   hasCompression: () => K.HAS_COMPRESSION,
   isAudioEnabled: Runtime.isAudioEnabled, setAudioEnabled: Runtime.setAudioEnabled,
+  // Multiplayer (DESIGN.md §79) — openLobby's optional {joinRoomFn} lets
+  // this drive the full lobby UI/state-machine with a mock transport,
+  // the only way to exercise it without reaching a real signaling
+  // network this sandbox/CI can't reach (see multiplayer.js's own note).
+  openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
+  hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch,
 };

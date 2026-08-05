@@ -389,7 +389,7 @@
   .topbar-left, .topbar-right{flex:0 0 auto;display:flex;gap:10px;pointer-events:none;}
   #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
     text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;}
-  #backBtn, #restartBtn, #debugBtn, #audioToggleBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
+  #backBtn, #restartBtn, #debugBtn, #audioToggleBtn, #multiplayerBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
     border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
     font-family:var(--mono);font-size:12px;letter-spacing:.03em;
     /* no backdrop-filter: it forces a re-sample of whatever's behind it on every
@@ -402,7 +402,45 @@
      primary action) while still meeting a real touch target via padding,
      not font-size alone. */
   #audioToggleBtn{padding:7px 10px;font-size:14px;}
-  #backBtn:hover, #restartBtn:hover, #debugBtn:hover, #audioToggleBtn:hover{border-color:var(--accent);color:var(--accent);}
+  #backBtn:hover, #restartBtn:hover, #debugBtn:hover, #audioToggleBtn:hover, #multiplayerBtn:hover{border-color:var(--accent);color:var(--accent);}
+
+  /* Multiplayer lobby (DESIGN.md §79) — a centered modal over the game
+     view, same "dark scrim behind an elevated card" shape as every other
+     blocking dialog would use here (there wasn't one yet — every prior
+     popover in this codebase, e.g. the color picker, is small and
+     anchored to its trigger, not a fitting pattern for a multi-step
+     host/join flow with its own back-and-forth). Sits above .topbar
+     (z-index 3) and #faultBanner (z-index 4).
+  */
+  .mp-overlay{display:none;position:fixed;inset:0;z-index:10;
+    background:rgba(0,0,0,.6);
+    align-items:center;justify-content:center;padding:20px;}
+  .mp-overlay.active{display:flex;}
+  .mp-card{position:relative;background:var(--bg-card);border:1px solid var(--rule);
+    border-radius:6px;padding:22px;max-width:360px;width:100%;
+    box-shadow:0 8px 32px rgba(0,0,0,.4);}
+  .mp-close{position:absolute;top:10px;right:10px;background:none;border:none;
+    color:var(--ink-dim);font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;}
+  .mp-close:hover{color:var(--accent);}
+  .mp-card h3{margin:0 0 14px;font-size:14px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink);}
+  .mp-card p{margin:0 0 14px;font-size:12.5px;color:var(--ink-dim);line-height:1.5;}
+  .mp-actions{display:flex;gap:10px;flex-wrap:wrap;}
+  .mp-actions button, .mp-card input[type=text]{font-family:var(--mono);font-size:13px;
+    padding:9px 14px;border-radius:4px;border:1px solid var(--rule);}
+  .mp-actions button{background:var(--bg-elevated);color:var(--ink);cursor:pointer;flex:1 1 auto;}
+  .mp-actions button:hover{border-color:var(--accent);color:var(--accent);}
+  .mp-actions button.mp-primary{background:var(--accent);color:var(--bg);border-color:var(--accent);font-weight:700;}
+  .mp-card input[type=text]{background:var(--bg);color:var(--ink);width:100%;margin-bottom:10px;
+    text-transform:uppercase;letter-spacing:.08em;}
+  .mp-room-code{font-size:28px;font-weight:700;letter-spacing:.12em;text-align:center;
+    color:var(--accent);background:var(--bg);border:1px dashed var(--rule);
+    border-radius:4px;padding:14px;margin-bottom:14px;user-select:all;}
+  .mp-status{display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:14px;}
+  .mp-status-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:var(--ink-dim);}
+  .mp-status-dot.mp-good{background:var(--good);}
+  .mp-status-dot.mp-bad{background:var(--bad);}
+  .mp-status-dot.mp-pending{background:var(--accent);animation:mp-pulse 1.2s ease-in-out infinite;}
+  @keyframes mp-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
   #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
     z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
@@ -466,6 +504,7 @@
     </div>
     <div id="hud"></div>
     <div class="topbar-right">
+      <button id="multiplayerBtn" title="Play with a friend" style="display:none">&#128101; Multiplayer</button>
       <button id="audioToggleBtn" title="Sound is off by default — click to turn it on">&#128263;</button>
       <button id="debugBtn">&#128296; Tinker</button>
     </div>
@@ -474,6 +513,13 @@
   <div class="controls" id="controlsText"></div>
   <div id="faultBanner">CART FAULT — step budget exceeded</div>
   <div id="touchControls" class="touch-controls"></div>
+</div>
+
+<div id="mpOverlay" class="mp-overlay">
+  <div class="mp-card">
+    <button id="mpCloseBtn" class="mp-close" title="Close">&times;</button>
+    <div id="mpBody"></div>
+  </div>
 </div>
 
 <div id="inspectWrap" class="view">
