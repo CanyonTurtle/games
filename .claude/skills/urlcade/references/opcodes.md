@@ -51,15 +51,30 @@ an oversight).
 
 ## Entity state
 
-Every entity has `8 + extFieldCount` numeric props (`extFieldCount` from
-its `entityTypes[]` entry). The runtime reserves four of the base eight:
-`props[0]`/`[1]` = x/y (camera- and render-interpolated), `props[4]` =
-its own `typeId` (auto-set on spawn), `props[7]` = its own entity id
-(auto-set on spawn). `props[2]`/`[3]`/`[5]`/`[6]` and any ext slots
-(`[8]`+) are free for cart use — `props[2]`/`[3]` conventionally hold
-velocity when a cart uses `MOVE_SOLID` (which reads/writes them
-directly), and `props[5]` is the de-facto "hp" slot by convention across
-every shipped cart with combat (not runtime-enforced).
+Every entity has `9 + extFieldCount` numeric props (`extFieldCount` from
+its `entityTypes[]` entry): the base eight, `extFieldCount` slots for the
+cart's own use starting at `[8]`, then one more the runtime appends
+*after* those — `props[8 + extFieldCount]`, this entity's own current
+`assetIndex` (auto-set on spawn to its type's `assetIndex`, then read
+every frame by the renderer instead of the type's — `STORE_SELF (8 +
+extFieldCount)` retargets which sprite/tile-pair this one entity draws
+as, independent of every other instance of its type). Deliberately
+placed *after* every ext field rather than reusing one of the base
+eight's nominally-"free" slots: a slot that looks unused by grep can
+still be spoken for by a cart via a named constant (`doom-like.js`'s
+`ANGLEPROP = 6` writes to `props[6]` with no literal `"6"` anywhere near
+a `STORE_SELF` call in its source) — appending past `extFieldCount`
+can't collide with any per-cart convention, named or not, since it's
+always one past whatever the author declared for themselves.
+
+The runtime reserves four of the base eight: `props[0]`/`[1]` = x/y
+(camera- and render-interpolated), `props[4]` = its own `typeId`
+(auto-set on spawn), `props[7]` = its own entity id (auto-set on spawn).
+`props[2]`/`[3]`/`[5]`/`[6]` and any ext slots (`[8]` through
+`[7 + extFieldCount]`) are free for cart use — `props[2]`/`[3]`
+conventionally hold velocity when a cart uses `MOVE_SOLID` (which
+reads/writes them directly), and `props[5]` is the de-facto "hp" slot by
+convention across every shipped cart with combat (not runtime-enforced).
 
 | Op | Operands | Effect |
 |---|---|---|

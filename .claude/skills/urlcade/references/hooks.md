@@ -49,15 +49,26 @@ ending in the same shared cleanup label).
 
 ## Entity props: what's reserved
 
-Every entity has `8 + extFieldCount` numeric props. The runtime itself
+Every entity has `9 + extFieldCount` numeric props. The runtime itself
 reserves and auto-manages: `props[0]`/`[1]` (x/y — read by the renderer
 and camera, written by whatever hook moves the entity), `props[4]`
 (`typeId`, set once at spawn, never written by a hook), `props[7]` (its
-own entity id, set once at spawn). Everything else — `[2]`, `[3]`, `[5]`,
-`[6]`, and any ext slots from `[8]` up — is free for the cart to define
+own entity id, set once at spawn), and `props[8 + extFieldCount]` — one
+slot past every ext field, this entity's current `assetIndex`, set at
+spawn from `entityTypes[typeId].assetIndex` as a default, then read
+every frame by the renderer instead of the type's; a hook is free to
+overwrite it later (`STORE_SELF (8 + extFieldCount)`) to retarget just
+this one entity's sprite/tile. That slot is placed *after* every ext
+field rather than folded into the base eight on purpose — a base slot
+that looks unused by a literal-text search can still be spoken for via
+a named constant a cart defines itself (see `cart-object.md`'s note on
+`doom-like.js`'s `ANGLEPROP`), so appending past whatever the author
+declared is the only placement that can't collide with anything.
+Everything else — `[2]`, `[3]`, `[5]`, `[6]`, and any ext slots from
+`[8]` through `[7 + extFieldCount]` — is free for the cart to define
 meaning for; see `cart-object.md`'s Entity state note for the informal
-conventions (`[2]`/`[3]` as velocity when using `MOVE_SOLID`, `[5]` as
-hp) that aren't runtime-enforced but every shipped cart follows.
+conventions (`[2]`/`[3]` as velocity when using `MOVE_SOLID`, `[5]` as hp) that
+aren't runtime-enforced but every shipped cart follows.
 
 ## `on_draw` specifics
 

@@ -312,6 +312,149 @@ async function main(){
     check(`cart "${key}" plays (world exists, no cart fault)`, st.ok && !st.fault, JSON.stringify(st));
   }
 
+  // 1b. Per-entity assetIndex override (props[8 + extFieldCount], one slot
+  // past every ext field — see DESIGN.md for why not one of the base
+  // eight's nominally-free slots: doom-like.js's own props[6] usage,
+  // ANGLEPROP, is exactly the collision that ruled that out). A freshly
+  // spawned entity defaults to its type's assetIndex (auto-set in
+  // spawnEntity), but the renderer reads each entity's own current value
+  // every frame, not the type's constant — a hook overwriting one entity's
+  // slot should retarget just that entity, independent of every other
+  // instance of its type. Proven without any fragile pixel/canvas readback
+  // (this repo has no precedent for that, and the live game canvas may be
+  // WebGL without preserveDrawingBuffer, so toDataURL right after a draw
+  // isn't reliable): instead, wrap world.spriteCanvases in a Proxy that
+  // records which index actually got read during a real render() call —
+  // both the Canvas2D and WebGL draw paths index into that same array (the
+  // WebGL path uses it for texture dimensions), so this is backend-agnostic.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'roguelike');
+  await page.waitForTimeout(250);
+  const assetIndexResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    const type = w.cart.entityTypes[player.typeId];
+    const assetIndexProp = 8 + type.extFieldCount; // cave-crawler's PLAYER has extFieldCount:0, so this is prop 8
+    const defaultMatchesType = player.props[assetIndexProp] === type.assetIndex;
+
+    // Isolate rendering to just the player for this check — cave-crawler's
+    // world also has monster entities, and the Proxy below records the last
+    // spriteCanvases access across the *whole* render() call; with every
+    // entity still in the scene, whichever one happens to draw last (not
+    // necessarily the player) would decide lastIndex, not the entity this
+    // check actually cares about.
+    const originalEntities = w.entities;
+    w.entities = [player];
+
+    const original = w.spriteCanvases;
+    let lastIndex = null;
+    w.spriteCanvases = new Proxy(original, {
+      get(target, prop, receiver){
+        if(typeof prop === 'string' && /^\d+$/.test(prop)) lastIndex = Number(prop);
+        return Reflect.get(target, prop, receiver);
+      }
+    });
+
+    window.__urlcadeDebug.forceRender(1);
+    const indexAtSpawnDefault = lastIndex;
+
+    const savedProp = player.props[assetIndexProp];
+    player.props[assetIndexProp] = 1; // roguelike's second sprite (monster) — see carts/cave-crawler.js
+    lastIndex = null;
+    window.__urlcadeDebug.forceRender(1);
+    const indexAfterOverride = lastIndex;
+
+    w.entities = originalEntities; // restore before any other check touches this world
+
+    player.props[assetIndexProp] = savedProp; // restore — a stray frame before the next hash change shouldn't render a mutated world
+    w.spriteCanvases = original; // restore before any other check touches this world
+    return {defaultMatchesType, indexAtSpawnDefault, indexAfterOverride, faultAfter: w.cartFault};
+  });
+  check('spawned entity defaults its assetIndex prop to its type\'s assetIndex', assetIndexResult.defaultMatchesType, JSON.stringify(assetIndexResult));
+  check('renderer reads spriteCanvases at the spawn-default index before any override', assetIndexResult.indexAtSpawnDefault === 0, JSON.stringify(assetIndexResult));
+  check('overriding one entity\'s assetIndex prop retargets which sprite the renderer reads, with no cart fault', assetIndexResult.indexAfterOverride === 1 && !assetIndexResult.faultAfter, JSON.stringify(assetIndexResult));
+
+  // 1c. Four real uses of the assetIndex-override feature, each checked
+  // against its own cart's actual hook logic (direct prop manipulation +
+  // world.step(), not pixel reads — same reasoning as 1b above).
+
+  // Flappy: wing-flap frame follows vertical velocity sign every tick,
+  // computed fresh each step rather than latched — set vy hard negative
+  // (rising) and hard positive (falling) and confirm props[8] follows.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(250);
+  const flapResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const bird = w.entities.find(e => e.typeId === 0);
+    bird.props[3] = -10; // hard rising
+    w.step();
+    const upFrame = bird.props[8];
+    bird.props[3] = 10; // hard falling
+    w.step();
+    const downFrame = bird.props[8];
+    return {upFrame, downFrame, fault: w.cartFault};
+  });
+  check('Flappy: rising velocity shows the wing-up frame', flapResult.upFrame === 1 && !flapResult.fault, JSON.stringify(flapResult));
+  check('Flappy: falling velocity shows the wing-down frame', flapResult.downFrame === 0 && !flapResult.fault, JSON.stringify(flapResult));
+
+  // Cave Crawler: player switches to its dead sprite the moment HP
+  // reaches 0 (on_frame), and a monster holds its dead sprite for
+  // DEATH_HOLD_TICKS (24) before actually being removed, rather than
+  // vanishing the instant it dies.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'roguelike');
+  await page.waitForTimeout(250);
+  const roguelikeDeathResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    player.props[5] = 0; // HP
+    w.step();
+    const playerDeadFrame = player.props[8];
+
+    const monster = w.entities.find(e => e.typeId === 1);
+    const monsterId = monster.id;
+    monster.props[5] = 0; // HP
+    w.step();
+    const monsterStillThere = !!w.entities.find(e => e.id === monsterId);
+    const monsterDeadFrame = monsterStillThere ? w.entities.find(e => e.id === monsterId).props[9] : null;
+    for(let i = 0; i < 30; i++) w.step(); // past DEATH_HOLD_TICKS (24)
+    const monsterRemoved = !w.entities.find(e => e.id === monsterId);
+    return {playerDeadFrame, monsterStillThere, monsterDeadFrame, monsterRemoved, fault: w.cartFault};
+  });
+  check('Cave Crawler: player shows its dead sprite the frame HP reaches 0', roguelikeDeathResult.playerDeadFrame === 2, JSON.stringify(roguelikeDeathResult));
+  check('Cave Crawler: monster holds its dead sprite instead of vanishing instantly', roguelikeDeathResult.monsterStillThere && roguelikeDeathResult.monsterDeadFrame === 3, JSON.stringify(roguelikeDeathResult));
+  check('Cave Crawler: monster is actually removed once the death hold expires', roguelikeDeathResult.monsterRemoved && !roguelikeDeathResult.fault, JSON.stringify(roguelikeDeathResult));
+
+  // Run & Jump: same player-death sprite switch as Cave Crawler, on_frame,
+  // the moment HP reaches 0.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'platformer');
+  await page.waitForTimeout(250);
+  const platformerDeathResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.typeId === 0);
+    player.props[5] = 0; // HP
+    w.step();
+    return {deadFrame: player.props[8], fault: w.cartFault};
+  });
+  check('Run & Jump: player shows its dead sprite the frame HP reaches 0', platformerDeathResult.deadFrame === 3 && !platformerDeathResult.fault, JSON.stringify(platformerDeathResult));
+
+  // Race Car: the player car's own current assetIndex (props[12], 8 +
+  // extFieldCount(4)) strobes between normal (0) and the flash sprite (3)
+  // while g_lap_flash counts down, and is forced back to normal (0) the
+  // instant the countdown reaches 0 — not left at whatever the strobe
+  // last landed on.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'racer');
+  await page.waitForTimeout(250);
+  const lapFlashResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const player = w.entities.find(e => e.id === w.globals[0]);
+    w.globals[10] = 8; // g_lap_flash — one full strobe cycle (MOD 8) left
+    const seenDuringFlash = new Set();
+    for(let i = 0; i < 8; i++){ w.step(); seenDuringFlash.add(player.props[12]); }
+    const afterFlash = player.props[12];
+    return {seenDuringFlash: [...seenDuringFlash], afterFlash, fault: w.cartFault};
+  });
+  check('Race Car: the player car\'s sprite strobes between normal and the flash frame during a lap flash', lapFlashResult.seenDuringFlash.includes(0) && lapFlashResult.seenDuringFlash.includes(3), JSON.stringify(lapFlashResult));
+  check('Race Car: the player car\'s sprite is back to normal once the flash ends', lapFlashResult.afterFlash === 0 && !lapFlashResult.fault, JSON.stringify(lapFlashResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.
@@ -739,8 +882,13 @@ async function main(){
 
   // 5a3. Entity-type editor (Logic tab) — add/remove entity types, edit
   // per-type fields, and reassign which sprite/tile a type draws as. Race
-  // Car ships 3 renderKind:0 entity types and 3 kind:1 sprites, a real
-  // domain to reassign within (not just index 0 -> index 0).
+  // Car ships 3 renderKind:0 entity types and 4 kind:1 sprites (the 4th,
+  // carFlashShapes, is never an entityType's own spawn-time default — it's
+  // only ever reached at runtime via the player car's own assetIndex-
+  // override prop during the lap-complete flash, see RACER_HOOKS_SRC.
+  // on_frame — but it's still real sprite-domain data the asset picker
+  // has to show), a real domain to reassign within (not just index 0 ->
+  // index 0).
   await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.racer.fragment; });
   await page.waitForTimeout(300);
   await page.click('.inspect-tab[data-tab="Logic"]');
@@ -765,7 +913,7 @@ async function main(){
   await page.click('#entityAssetPicker0 .entity-asset-trigger');
   await page.waitForTimeout(100);
   const pickerItemCount = await page.evaluate(() => document.querySelectorAll('#entityAssetPopover0 .entity-asset-item').length);
-  check('the asset picker popover shows one thumbnail per sprite in the sprite domain', pickerItemCount === 3, pickerItemCount);
+  check('the asset picker popover shows one thumbnail per sprite in the sprite domain', pickerItemCount === 4, pickerItemCount);
   await page.click('#entityAssetPopover0 .entity-asset-item[data-value="1"]');
   await page.waitForTimeout(600);
   const assetIndexAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes[0].assetIndex);

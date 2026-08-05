@@ -1024,11 +1024,17 @@ function renderInspectMap(cart){
 /* ============================================================
    Entity-type editor (Logic tab) — add/remove entity types, edit
    renderKind/rotate/collision/extFieldCount, and reassign which sprite
-   or tile column a type draws as. Each card edits lastParsedHeader
-   directly and debounce-recompiles, same convention as every other
-   header-form field (bindHeaderField) — only renderKind changes and the
-   asset-picker need custom wiring, since those change *which options are
-   valid* rather than just writing a scalar.
+   or tile column a type *starts* drawing as. That's spawn-time only:
+   assetIndex here is copied into each spawned entity's own
+   props[8 + extFieldCount] as a default (one slot past every ext
+   field — see World.spawnEntity in runtime.js), and any hook can
+   retarget one specific instance from there via ordinary
+   STORE_SELF (8 + extFieldCount) without touching this type-level
+   default at all. Each card edits lastParsedHeader directly and
+   debounce-recompiles, same convention as every other header-form field
+   (bindHeaderField) — only renderKind changes and the asset-picker need
+   custom wiring, since those change *which options are valid* rather
+   than just writing a scalar.
    ============================================================ */
 
 // typeId is a plain array index into entityTypes — nothing rewrites a

@@ -138,19 +138,40 @@ authoring source (not part of the binary format) so hook source can write
 ## `entityTypes` — array
 
 Each: `{ renderKind, assetIndex, rotateFlag, collisionW, collisionH, extFieldCount }`
-(all u8). `spawnEntity(typeId)` gives every instance `8 + extFieldCount`
-props, auto-setting `props[4] = typeId` and `props[7] = ` its own id — see
+(all u8). `spawnEntity(typeId)` gives every instance `9 + extFieldCount`
+props, auto-setting `props[4] = typeId`, `props[7] = ` its own id, and
+`props[8 + extFieldCount] = assetIndex` (that instance's own current
+asset index, one slot past every ext field — see below) — see
 `hooks.md` for the full prop layout.
 
+- `assetIndex` here is only the **spawn-time default**, not a lifetime
+  constant: the renderer reads each entity's own `props[8 +
+  extFieldCount]`, not `entityTypes[typeId].assetIndex`, every frame. An
+  ordinary `STORE_SELF (8 + extFieldCount)` from a hook changes which
+  sprite/tile-pair one specific entity draws as (e.g. a walk-cycle frame
+  swap) without touching the type's default or any other instance of
+  that type. That slot is placed after every ext field rather than
+  reused from one of the base eight's nominally-free ones on purpose:
+  `doom-like.js` already writes to `props[6]` via a named constant
+  (`const ANGLEPROP = 6`, for the player's facing angle) that a
+  literal-text search for `STORE_SELF 6` never turns up — appending
+  past whatever `extFieldCount` an author declared is the only
+  placement that can't collide with a per-cart convention hiding behind
+  a name like that.
 - `renderKind`:
-  - `0` — sprite. `assetIndex` indexes `sprites[]`. If `rotateFlag`,
-    drawn rotated by `props[8]` (degrees, interpolated).
-  - `1` — tile column. `assetIndex` and `assetIndex+1` index `tiles[]`
-    (body tile, cap tile). `props[8]` = column height in tiles,
-    `props[10] === 0` means the cap renders at the top row instead of the
-    bottom.
+  - `0` — sprite. `props[8 + extFieldCount]` (that entity's current
+    `assetIndex`) indexes `sprites[]`. If `rotateFlag`, drawn rotated by
+    `props[8]` (degrees, interpolated) — note this is ext field 0, a
+    *different* slot from the asset-index one whenever `extFieldCount >
+    0`.
+  - `1` — tile column. `props[8 + extFieldCount]` and that value `+1`
+    index `tiles[]` (body tile, cap tile). `props[8]` = column height in
+    tiles (ext field 0), `props[10] === 0` (ext field 2) means the cap
+    renders at the top row instead of the bottom — both still ordinary
+    ext fields, unaffected by the asset-index slot appended after them.
   - `2` — custom draw. Runs the cart's single `on_draw` hook at render
-    time with this entity bound as `self`; `assetIndex` is unused.
+    time with this entity bound as `self`; `assetIndex`/the asset-index
+    prop is unused.
 - `collisionW`/`collisionH`: full AABB width/height in pixels, centered
   on `props[0]`/`props[1]` (i.e. the box extends ±width/2, ±height/2).
 
