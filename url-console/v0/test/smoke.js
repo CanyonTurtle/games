@@ -558,6 +558,89 @@ async function main(){
   check('Mini Golf: holing out sets g_won and records a new best-stroke count (real on_tick hooks)', golfPersistResult.wonAfterStep === 1 && golfPersistResult.bestAfterStep === 3 && !golfPersistResult.fault, JSON.stringify(golfPersistResult));
   check('Mini Golf: a fresh World for the same cart loads the persisted best via on_init\'s own LOAD_PERSIST', golfPersistResult.persistedBest === 3, JSON.stringify(golfPersistResult));
 
+  // 1e. Sound — 4 persistent voices driven by SET_VOICE_FREQ/WAVE/GAIN
+  // and TRIGGER_VOICE. Two layers: (a) the VM-level opcode dispatch,
+  // checked with a mock ctx so it's independent of whether headless
+  // Chromium's Web Audio actually runs, then (b) the real World's node
+  // graph, checked via its actual node/param state.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(250);
+  const voiceOpcodeDispatchResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    const calls = [];
+    const ctx = {
+      constants: [523], globals: [0,0,0,0], self:null, a:null, b:null, input:0,
+      world: {cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
+      getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}), rng:Math.random,
+      setVoiceFreq: (v,f) => calls.push(['freq',v,f]),
+      setVoiceWave: (v,w) => calls.push(['wave',v,w]),
+      setVoiceGain: (v,g) => calls.push(['gain',v,g]),
+      triggerVoice: v => calls.push(['trigger',v]),
+    };
+    const bc = K2.assemble(['PUSHC 0','SET_VOICE_FREQ 2','SET_VOICE_WAVE 3 1','PUSHI 1','SET_VOICE_GAIN 1','TRIGGER_VOICE 0','HALT'], {constants:{},globals:{}});
+    const ok = K2.runHook(bc, ctx);
+    return {ok, calls};
+  });
+  check('SET_VOICE_FREQ pops the stack value and routes (voice, freq) to ctx.setVoiceFreq', JSON.stringify(voiceOpcodeDispatchResult.calls[0]) === JSON.stringify(['freq',2,523]), JSON.stringify(voiceOpcodeDispatchResult));
+  check('SET_VOICE_WAVE takes both operands immediate, routes (voice, waveform) to ctx.setVoiceWave', JSON.stringify(voiceOpcodeDispatchResult.calls[1]) === JSON.stringify(['wave',3,1]), JSON.stringify(voiceOpcodeDispatchResult));
+  check('SET_VOICE_GAIN pops the stack value and routes (voice, gain) to ctx.setVoiceGain', JSON.stringify(voiceOpcodeDispatchResult.calls[2]) === JSON.stringify(['gain',1,1]), JSON.stringify(voiceOpcodeDispatchResult));
+  check('TRIGGER_VOICE has no stack effect and routes voice to ctx.triggerVoice', JSON.stringify(voiceOpcodeDispatchResult.calls[3]) === JSON.stringify(['trigger',0]) && voiceOpcodeDispatchResult.ok, JSON.stringify(voiceOpcodeDispatchResult));
+
+  const voiceWorldResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const noVoicesYet = w.voices.every(v => v === null);
+    w.setVoiceWave(0, 3); // sine
+    w.setVoiceFreq(0, 523);
+    const afterSine = {type: w.voices[0].osc.type, freq: w.voices[0].osc.frequency.value, oscGain: w.voices[0].oscGain.gain.value, noiseGain: w.voices[0].noiseGain.gain.value};
+    w.setVoiceWave(0, 2); // noise — same voice, should re-route gain, not rebuild the node
+    const afterNoise = {oscGain: w.voices[0].oscGain.gain.value, noiseGain: w.voices[0].noiseGain.gain.value, sameOsc: !!w.voices[0].osc};
+    w.setVoiceGain(1, 0.4);
+    const heldGain = w.voices[1].mainGain.gain.value;
+    w.triggerVoice(2);
+    const triggeredGain = w.voices[2].mainGain.gain.value;
+    return {noVoicesYet, afterSine, afterNoise, heldGain, triggeredGain, fault: w.cartFault};
+  });
+  check('voices are not created until first used (lazy audio init, no unprompted AudioContext)', voiceWorldResult.noVoicesYet, JSON.stringify(voiceWorldResult));
+  check('SET_VOICE_WAVE sine + SET_VOICE_FREQ set the oscillator\'s type/frequency and route it (not noise) through the mix', voiceWorldResult.afterSine.type === 'sine' && voiceWorldResult.afterSine.freq === 523 && voiceWorldResult.afterSine.oscGain === 1 && voiceWorldResult.afterSine.noiseGain === 0, JSON.stringify(voiceWorldResult));
+  check('switching the same voice to noise re-routes gain instead of rebuilding the node graph', voiceWorldResult.afterNoise.oscGain === 0 && voiceWorldResult.afterNoise.noiseGain === 1 && voiceWorldResult.afterNoise.sameOsc, JSON.stringify(voiceWorldResult));
+  // AudioParam values are internally float32 (0.4 reads back as
+  // 0.4000000059604645) — epsilon comparison, not strict equality.
+  check('SET_VOICE_GAIN sets a sustained volume directly', Math.abs(voiceWorldResult.heldGain - 0.4) < 1e-4, JSON.stringify(voiceWorldResult));
+  check('TRIGGER_VOICE snaps to its fixed peak volume to start the decay envelope', Math.abs(voiceWorldResult.triggeredGain - 0.05) < 1e-4 && !voiceWorldResult.fault, JSON.stringify(voiceWorldResult));
+
+  // End-to-end through Flappy's own hooks: flapping, scoring, and
+  // crashing each fire their assigned voice exactly once (not, e.g., the
+  // crash voice re-triggering every tick the dead bird keeps overlapping
+  // the pipe — see the on_collide already_dead guard).
+  const flappyVoiceResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const bird = w.entities.find(e => e.typeId === 0);
+    w.globals[1] = 0; // g_dead — clean slate in case an earlier check left this run mid-death
+    const calls = [];
+    const origTrigger = w.triggerVoice.bind(w);
+    w.triggerVoice = v => { calls.push(v); origTrigger(v); };
+    w.input = 16; // action bit — flap
+    w.step();
+    const flapCalls = calls.filter(v => v === 0).length;
+    w.input = 0;
+    const pipe = w.spawnEntity(1);
+    pipe.props[0] = bird.props[0] - 10;
+    pipe.props[9] = 0;
+    w.step();
+    const scoreCalls = calls.filter(v => v === 1).length;
+    const staller = w.spawnEntity(1); // a full-height column pinned to the bird's x every tick, standing in for a pipe the dead bird keeps overlapping as it falls
+    staller.props[8] = 20; // extent in tiles (*8px) — spans the whole 160px-tall screen regardless of the bird's y
+    staller.props[9] = 1; // already-scored, so check_score's own branch never fires here
+    for(let i=0;i<5;i++){ staller.props[0] = bird.props[0]; staller.props[1] = 0; w.step(); } // stays overlapping every one of these ticks
+    const crashCalls = calls.filter(v => v === 2).length;
+    return {flapCalls, scoreCalls, crashCalls, fault: w.cartFault};
+  });
+  check('Flappy: flapping triggers the flap voice (real on_input hook)', flappyVoiceResult.flapCalls === 1, JSON.stringify(flappyVoiceResult));
+  check('Flappy: scoring triggers the score voice (real on_tick hook)', flappyVoiceResult.scoreCalls === 1, JSON.stringify(flappyVoiceResult));
+  check('Flappy: crashing triggers the crash voice exactly once, not once per tick still overlapping (real on_collide hook)', flappyVoiceResult.crashCalls === 1 && !flappyVoiceResult.fault, JSON.stringify(flappyVoiceResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.
@@ -674,7 +757,7 @@ async function main(){
   const hookTextBefore = await page.inputValue('#hookSourceInput');
   const haltCountBefore = (hookTextBefore.match(/^HALT$/gm) || []).length;
   const opcodeGroupOptions = await page.$$eval('.opcode-group-select option', els => els.map(e => e.value));
-  check('the opcode palette is a category dropdown, not all groups stacked open', opcodeGroupOptions.length === 10 && opcodeGroupOptions.includes('Entity lifecycle') && opcodeGroupOptions.includes('Persistence'), JSON.stringify(opcodeGroupOptions));
+  check('the opcode palette is a category dropdown, not all groups stacked open', opcodeGroupOptions.length === 11 && opcodeGroupOptions.includes('Entity lifecycle') && opcodeGroupOptions.includes('Persistence') && opcodeGroupOptions.includes('Sound'), JSON.stringify(opcodeGroupOptions));
   await page.selectOption('.opcode-group-select', 'Drawing & control');
   await page.waitForTimeout(50);
   await page.click('.opcode-btn[data-mnem="HALT"]');

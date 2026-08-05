@@ -117,6 +117,42 @@ discards writes silently if `localStorage` isn't available at all
 (private browsing, a sandboxed iframe) — never throws, never blocks a
 hook that touches it.
 
+## Sound
+
+Four persistent **voices** (channels 0-3), each a real oscillator+noise
+node graph held for the whole play session — driven by these opcodes
+every frame instead of indexing a table of pre-authored clips. A cart
+computes its own melody/arpeggio/percussion logic in `on_frame`/`on_tick`
+(the same arithmetic opcodes already used for anything else per-tick —
+`ADD`, `MOD`, etc.) and pokes a voice's registers directly, the way a
+real sound chip's registers work. `PLAYSOUND` (below, under Control) is
+unrelated and untouched — it's still a valid one-shot beep, this is an
+additive, more expressive layer on top, not a replacement.
+
+- `SET_VOICE_FREQ voice` (u8 operand) — pops a value (Hz) off the stack,
+  sets that voice's oscillator frequency. Fixed note frequencies (e.g.
+  `440.0` for A4) are ordinary `f32` entries in `cart.constants[]`,
+  pushed with `PUSHC` — no in-VM pitch math needed for a fixed scale;
+  live modulation (a slide, an arpeggio) is `SET_VOICE_FREQ` called again
+  with a computed value.
+- `SET_VOICE_WAVE voice waveform` (two u8 operands, both immediate — no
+  stack pop) — `waveform`: `0`=square, `1`=triangle, `2`=noise, `3`=sine.
+- `SET_VOICE_GAIN voice` (u8 operand) — pops a value (sustained volume,
+  roughly `0`-`1`) off the stack, sets it directly. For a held note or a
+  drone; overrides any `TRIGGER_VOICE` decay still in flight on that
+  voice.
+- `TRIGGER_VOICE voice` (u8 operand) — no stack effect. Applies a fixed,
+  engine-side decay envelope (not a duration operand — `SET_VOICE_GAIN`
+  already covers a longer/sustained note, so a tunable percussive
+  duration would be surface for a need that's already met) for a
+  percussive hit: coin, jump, damage.
+
+All four are silent no-ops (nothing thrown, nothing played) if the
+runtime has no audio sink to route them through — same "always safe to
+call" posture `PLAYSOUND` already has. See `hooks.md` for the
+determinism caveat: sound logic is presentation-only, like `on_draw`, and
+must never be the only place a cart reads shared RNG.
+
 ## World queries
 
 | Op | Stack in (push order) | Stack out | Notes |

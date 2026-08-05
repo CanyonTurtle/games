@@ -104,6 +104,30 @@ const OPS = [
   // the VM itself has no localStorage access, same reason SETTILE routes
   // through ctx.setTile instead of touching the map directly.
   ['LOAD_PERSIST',['u8']],['STORE_PERSIST',['u8']],
+  // Sound (DESIGN.md §72) — 4 persistent voices (channels), each a real
+  // oscillator+noise+gain node graph held for the game's whole lifetime
+  // in runtime.js, driven by these opcodes instead of indexing a header
+  // table of pre-authored clips. A cart computes its own melody/arpeggio
+  // logic in on_frame/on_tick (ADD/MOD are already exactly the right
+  // tools for that) and pokes the registers every tick, the same way a
+  // real sound chip works. PLAYSOUND (above) is untouched and still a
+  // valid one-shot beep — this is an addition, not a replacement, so
+  // existing compiled bytecode never needs to change.
+  //   SET_VOICE_FREQ <u8 voice>  — pops Hz off the stack.
+  //   SET_VOICE_WAVE <u8 voice> <u8 waveform> — both immediate; waveform
+  //     0=square 1=triangle 2=noise 3=sine.
+  //   SET_VOICE_GAIN <u8 voice> — pops a sustained 0..1 volume off the
+  //     stack; for a held note or drone.
+  //   TRIGGER_VOICE <u8 voice> — no stack operand; applies a fixed,
+  //     engine-side decay envelope (mirrors the old PLAYSOUND's 150ms
+  //     exponential decay) for a percussive hit. Not a duration operand
+  //     on purpose — a cart wanting a longer/sustained note already has
+  //     SET_VOICE_GAIN for that.
+  // All four route through ctx callbacks the VM never implements itself
+  // (no direct AudioContext access here, same reason ctx.setTile/
+  // ctx.loadPersist exist) — see runtime.js's World for what they do.
+  ['SET_VOICE_FREQ',['u8']],['SET_VOICE_WAVE',['u8','u8']],
+  ['SET_VOICE_GAIN',['u8']],['TRIGGER_VOICE',['u8']],
 ];
 const OPINDEX = {};
 OPS.forEach((o,i)=>OPINDEX[o[0]]=i);
@@ -180,14 +204,16 @@ function assemble(lines, sym){
        world:{cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
        getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}),
        rng:Math.random, playSound:()=>{}, setTile:()=>{} }
-   `pointerX`/`pointerY`/`pointerDown`, `drawLine`, and `loadPersist`/
-   `storePersist` are optional on top of that — LOAD_POINTER_* reads 0
+   `pointerX`/`pointerY`/`pointerDown`, `drawLine`, `loadPersist`/
+   `storePersist`, and `setVoiceFreq`/`setVoiceWave`/`setVoiceGain`/
+   `triggerVoice` are optional on top of that — LOAD_POINTER_* reads 0
    when absent (same as a cart that never declares inputWantsPointer),
-   DRAW_LINE is simply a no-op when `drawLine` isn't supplied, and
+   DRAW_LINE is simply a no-op when `drawLine` isn't supplied,
    LOAD_PERSIST/STORE_PERSIST behave the same way (read 0, write
-   discarded) when `loadPersist`/`storePersist` aren't supplied — so this
-   minimum shape still runs any hook, including on_draw or one that
-   touches persistent storage, without throwing.
+   discarded) when `loadPersist`/`storePersist` aren't supplied, and the
+   four voice opcodes are no-ops when their callbacks aren't supplied —
+   so this minimum shape still runs any hook, including on_draw or one
+   that touches persistent storage or sound, without throwing.
    ============================================================ */
 const MAX_STEPS = 20000;
 const vmStack = [];
@@ -296,6 +322,10 @@ function runHook(bytecode, ctx){
       }
       case 57: { const idx=u8(); stack.push(ctx.loadPersist ? ctx.loadPersist(idx) : 0); break; } // LOAD_PERSIST
       case 58: { const idx=u8(); const v=stack.pop(); if(ctx.storePersist) ctx.storePersist(idx, v); break; } // STORE_PERSIST
+      case 59: { const voice=u8(); const freq=stack.pop(); if(ctx.setVoiceFreq) ctx.setVoiceFreq(voice, freq); break; } // SET_VOICE_FREQ
+      case 60: { const voice=u8(), wave=u8(); if(ctx.setVoiceWave) ctx.setVoiceWave(voice, wave); break; } // SET_VOICE_WAVE
+      case 61: { const voice=u8(); const gain=stack.pop(); if(ctx.setVoiceGain) ctx.setVoiceGain(voice, gain); break; } // SET_VOICE_GAIN
+      case 62: { const voice=u8(); if(ctx.triggerVoice) ctx.triggerVoice(voice); break; } // TRIGGER_VOICE
       default: throw new Error('runHook: unknown opcode '+op+' at ip '+(ip-1));
     }
   }
