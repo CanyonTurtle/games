@@ -353,12 +353,13 @@
     background:linear-gradient(to bottom, rgba(0,0,0,.5), transparent);
     pointer-events:none;}
   /* topbar-left (back + restart) — hud (center, takes remaining space) —
-     debugBtn (right): a real element balancing each side is what centers
-     the HUD text, not a hand-tuned padding offset for a lopsided bar. */
-  .topbar-left{flex:0 0 auto;display:flex;gap:10px;pointer-events:none;}
+     topbar-right (audio toggle + debugBtn): a real element balancing each
+     side is what centers the HUD text, not a hand-tuned padding offset
+     for a lopsided bar. */
+  .topbar-left, .topbar-right{flex:0 0 auto;display:flex;gap:10px;pointer-events:none;}
   #hud{flex:1;color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.6);font-size:12.5px;letter-spacing:.03em;
     text-align:center;font-variant-numeric:tabular-nums;text-transform:uppercase;}
-  #backBtn, #restartBtn, #debugBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
+  #backBtn, #restartBtn, #debugBtn, #audioToggleBtn{flex:0 0 auto;pointer-events:auto;background:rgba(20,17,13,.82);color:#fff;
     border:1px solid rgba(255,255,255,.25);padding:7px 12px;border-radius:3px;cursor:pointer;
     font-family:var(--mono);font-size:12px;letter-spacing:.03em;
     /* no backdrop-filter: it forces a re-sample of whatever's behind it on every
@@ -366,7 +367,12 @@
        avoidable GPU cost on mobile, found while chasing a reported touch
        stutter. A flatter, more opaque background reads almost identically. */
     touch-action:manipulation;}
-  #backBtn:hover, #restartBtn:hover, #debugBtn:hover{border-color:var(--accent);color:var(--accent);}
+  /* Icon-only, square-ish rather than debugBtn's label-width padding —
+     small and quiet on purpose (a site-wide preference toggle, not a
+     primary action) while still meeting a real touch target via padding,
+     not font-size alone. */
+  #audioToggleBtn{padding:7px 10px;font-size:14px;}
+  #backBtn:hover, #restartBtn:hover, #debugBtn:hover, #audioToggleBtn:hover{border-color:var(--accent);color:var(--accent);}
 
   #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
     z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
@@ -429,7 +435,10 @@
       <button id="restartBtn" title="Restart this game">&#8635; restart</button>
     </div>
     <div id="hud"></div>
-    <button id="debugBtn">&#128296; Tinker</button>
+    <div class="topbar-right">
+      <button id="audioToggleBtn" title="Sound is off by default — click to turn it on">&#128263;</button>
+      <button id="debugBtn">&#128296; Tinker</button>
+    </div>
   </div>
   <div class="canvas-area"><canvas id="screen"></canvas></div>
   <div class="controls" id="controlsText"></div>
