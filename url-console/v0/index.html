@@ -195,19 +195,25 @@
   .opcode-btn.active{color:var(--accent);border-color:var(--accent);}
   .operand-picker{background:var(--bg-elevated);border:1px solid var(--rule);border-radius:3px;
     padding:10px;margin-bottom:14px;}
+  /* .map-tile-grid/-item (tilemap shape editor's tile picker, Logic tab)
+     joins the same shared selector for the same reason .entity-asset-*
+     already does below — a third picker on the same tab, at the same
+     time, needs its own class name, not a shared one a page-global
+     selector could match more than once. */
   /* .entity-asset-grid/-item (entity-type editor's asset picker, Logic
      tab) share these rules but stay separate class names on purpose —
      the opcode palette's SPAWN picker and an entity card's asset popover
      can both be present in the DOM at once, and a page-global selector
      like '.operand-picker-item[data-value="0"]' would otherwise match
      one of each. */
-  .operand-picker-grid, .entity-asset-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:10px;}
-  .operand-picker-item, .entity-asset-item{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
+  .operand-picker-grid, .entity-asset-grid, .map-tile-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(72px,1fr));gap:10px;}
+  .operand-picker-item, .entity-asset-item, .map-tile-item{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
     padding:6px;text-align:center;cursor:pointer;font-family:var(--mono);font-size:10.5px;
     color:var(--ink-dim);}
   .operand-picker-item:hover, .operand-picker-item:focus-visible,
-  .entity-asset-item:hover, .entity-asset-item:focus-visible{color:var(--accent);border-color:var(--accent);}
-  .operand-picker-item canvas, .entity-asset-item canvas{image-rendering:pixelated;width:100%;height:auto;
+  .entity-asset-item:hover, .entity-asset-item:focus-visible,
+  .map-tile-item:hover, .map-tile-item:focus-visible{color:var(--accent);border-color:var(--accent);}
+  .operand-picker-item canvas, .entity-asset-item canvas, .map-tile-item canvas{image-rendering:pixelated;width:100%;height:auto;
     border:1px solid var(--rule);background:var(--bg);margin-bottom:4px;}
   .operand-picker-list{display:flex;flex-direction:column;gap:4px;}
   .operand-picker-row{background:var(--bg-card);border:1px solid var(--rule);border-radius:3px;
@@ -305,6 +311,30 @@
   .entity-asset-trigger:hover, .entity-asset-trigger:focus-visible{outline:1px solid var(--accent);}
   .entity-asset-trigger canvas{width:100%;height:100%;image-rendering:pixelated;display:block;}
   .entity-asset-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:5;
+    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:4px;padding:8px;
+    width:min(260px,80vw);max-height:240px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.35);}
+
+  /* Tilemap shape editor (Logic tab, DESIGN.md §75) — the sprite shape
+     editor's exact select/move/resize interaction, retargeted to
+     tile-grid cells instead of sub-pixel sprite units. Shown at native
+     pixel size inside a horizontally-scrolling wrapper (.cfg-scroll,
+     already used for the CFG graph and this section's old read-only map
+     display) rather than shrunk to fit like the sprite/tile editors —
+     a map grid is already much bigger than a sprite, and shrinking a
+     40+-tile-wide grid down to a narrow viewport would make individual
+     tiles and drag handles too small to hit precisely. Reuses
+     .shape-list/.shape-row/.shape-btn as-is for the layer list — same
+     rows, same reorder/delete buttons, just a tile picker instead of a
+     color picker in the middle slot.  */
+  .map-shape-editor{margin-bottom:14px;}
+  .map-shape-editor-canvas-wrap canvas{display:block;image-rendering:pixelated;
+    touch-action:none;cursor:crosshair;}
+  .map-tile-picker{position:relative;display:inline-block;}
+  .map-tile-trigger{width:32px;height:32px;border-radius:3px;border:1px solid var(--rule);
+    background:var(--bg);padding:2px;cursor:pointer;}
+  .map-tile-trigger:hover, .map-tile-trigger:focus-visible{outline:1px solid var(--accent);}
+  .map-tile-trigger canvas{width:100%;height:100%;image-rendering:pixelated;display:block;}
+  .map-tile-popover{position:absolute;top:calc(100% + 6px);left:0;z-index:5;
     background:var(--bg-elevated);border:1px solid var(--rule);border-radius:4px;padding:8px;
     width:min(260px,80vw);max-height:240px;overflow-y:auto;box-shadow:0 4px 14px rgba(0,0,0,.35);}
 
