@@ -227,7 +227,7 @@ function table(rows){
 // entityTypes/sprites/tiles, mapGenerator's config block, and hudSpec
 // stay out of scope here — dedicated editors for those are later phases.
 // formatVersion and mapGenerator stay read-only display: the kernel only
-// ever decodes formatVersion 3, and switching mapGenerator needs a whole
+// ever decodes formatVersion 4, and switching mapGenerator needs a whole
 // new valid config sub-block generated, which is that future editor's
 // job, not a plain scalar edit.
 
@@ -1708,7 +1708,7 @@ async function compileSourceText(){
 // through encode→decode too, consistent with every other path into this
 // view — no separate "nothing decoded yet" state to maintain).
 const STARTER_TEMPLATE = {
-  formatVersion: 3, cartType: 63,
+  formatVersion: 4, cartType: 63,
   // A modest terrain hue plus generatePalette()'s own guaranteed-vivid
   // entity floors (DESIGN.md §41/§43) is enough to make a first cart
   // look intentional without the author having to think about palettes

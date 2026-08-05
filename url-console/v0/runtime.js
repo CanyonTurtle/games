@@ -19,7 +19,7 @@
 "use strict";
 const K = window.UrlcadeKernel;
 const {
-  generatePalette, buildTrack, buildCave, buildPlatformLevel, renderShapeList,
+  generatePalette, buildTrack, buildCave, buildPlatformLevel, buildBlankMap, applyMapShapes, renderShapeList,
   runHook, MAP_EDGE_TILE, BUTTON_BITS,
   TOUCH_TEMPLATE_NONE, TOUCH_TEMPLATE_SINGLE, TOUCH_TEMPLATE_STEER_ACTION,
   TOUCH_TEMPLATE_DPAD_ACTION, TOUCH_TEMPLATE_DPAD_ONLY,
@@ -180,6 +180,14 @@ class World {
     if(cart.mapGenerator === 1) this.map = buildTrack(cart.track);
     else if(cart.mapGenerator === 2) this.map = buildCave(cart.cave, () => this.rng());
     else if(cart.mapGenerator === 3) this.map = buildPlatformLevel(cart.platform);
+    // Tilemap authoring — shape layers (DESIGN.md §74). mapGenerator:0
+    // has no grid at all today unless a shapes-only cart actually needs
+    // one to stamp into; every other generator already has a grid by
+    // this point, so mapShapes composites onto whatever's already there
+    // rather than replacing it. Both are no-ops (this.map stays null,
+    // or unchanged) for the 8 of 9 example carts that don't use this.
+    else if(cart.mapGenerator === 0 && cart.mapShapes && cart.mapShapes.length) this.map = buildBlankMap(cart.blankMap);
+    if(this.map && cart.mapShapes && cart.mapShapes.length) applyMapShapes(this.map.grid, cart.mapShapes);
     if(this.map){
       // Pre-render the static tilemap once at load instead of redrawing every
       // tile every frame. A CPU profile under random input (see README) found

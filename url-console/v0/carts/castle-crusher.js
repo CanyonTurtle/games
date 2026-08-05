@@ -925,7 +925,7 @@ function buildCastleCrusherCart(){
   const levelWpx = gridW*8, levelHpx = platform.gridH*8;
 
   const cart = {
-    formatVersion: 3,
+    formatVersion: 4,
     name: 'Castle Crusher', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 5,
     // Terrain hue 210 (cool stone/sky grey). Entity hue hints: ~12 (red)

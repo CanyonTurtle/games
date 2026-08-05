@@ -97,3 +97,49 @@ Tile ids: `1` = `PLATFORM_AIR`, `2` = `PLATFORM_GROUND`, `3` =
 `numCoins`/`numEnemies` counts so a hook's spawn loop knows how many of
 each type to walk through (`checkpoints[0]` is the start position;
 `checkpoints[1 .. numCoins]` are coins; the rest are enemies).
+
+## Tilemap authoring — shape layers (`mapShapes`)
+
+Not a fourth generator alongside track/cave/platform — an orthogonal
+post-processing pass that composites on top of whichever base is in
+play, including none. `cart.mapShapes` (an array, default empty — most
+carts never set it) stamps a declared tile id over the cells each shape
+covers, **in array order — later shapes win on overlap**, the same
+z-order-collapses-down rule a sprite's own `shapes[]` list already uses.
+Applied once, at load time (before `on_init` runs, before anything can
+render or query the map), directly mutating the generator's own grid —
+`SETTILE` is completely untouched by this and keeps its own separate
+job: narrow, sparse, *live* mutation during actual gameplay (a gold
+pickup, a broken block), not level-building.
+
+Each shape is `{ tileX0, tileY0, tileX1, tileY1, tileId }` — **tile-grid
+cells, not pixels.** `tileX0,tileY0` inclusive, `tileX1,tileY1`
+exclusive (a plain half-open range); out-of-range coordinates are
+silently clipped to the grid, same forgiving posture `SETTILE` already
+has at runtime. There's no ellipse/rect distinction the way a sprite
+shape has — every entry is a rect, since a tile grid has no sub-pixel
+coverage to anti-alias the way `renderShapeList` has to for sprites.
+
+**With `mapGenerator: 1/2/3`:** the procedural grid builds exactly as
+documented above, then `mapShapes` stamps on top of it. Typical use: a
+generator's own marker convention doesn't fit one specific spot (see
+`carts/mini-golf.js` — `buildTrack`'s `CHECKPOINT` token always stamps a
+full `trackWidth`-wide gate line, which reads wrong for "the hole";
+`mapShapes` reverts the flanking tiles to fairway and restamps just the
+centerline tile, computed once by calling `buildTrack()` directly at
+cart-build time rather than re-deriving the geometry by hand).
+
+**With `mapGenerator: 0`:** normally means no map at all (`GETTILE`
+always returns `-1`). A `mapShapes`-only cart needs an actual grid to
+stamp into first, declared via `cart.blankMap = { width, height,
+fillTileId }` — a flat single-fill grid (every cell `fillTileId`) built
+before the compositing pass runs. `blankMap` is only read (and only
+needs declaring) when `mapGenerator` is `0` **and** `mapShapes` is
+non-empty; a `mapGenerator: 0` cart with no shapes costs nothing extra
+and behaves exactly as it always has.
+
+`buildBlankMap(blankMap)` returns the same `{grid, checkpoints}` shape
+every real generator does (`checkpoints: []` — nothing to derive one
+from; declare logical positions as ordinary constants instead if a
+shapes-only map needs them). `applyMapShapes(grid, mapShapes)` does the
+actual stamping, mutating `grid` in place.

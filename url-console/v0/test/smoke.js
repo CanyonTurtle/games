@@ -687,6 +687,59 @@ async function main(){
   // regardless of which parity the two clicks above landed on.
   await page.evaluate(() => window.__urlcadeDebug.setAudioEnabled(false));
 
+  // 1f. Tilemap authoring — shape layers (mapShapes/blankMap, DESIGN.md
+  // §74). Three layers: (a) the kernel-level compositing primitives
+  // directly, (b) a full encodeCart/decodeCart round-trip through the
+  // new fields, then (c) Mini Golf's own real course, end to end through
+  // an actual World — the hole fixup that used to be 4 SETTILE calls in
+  // on_init is now purely declarative.
+  const mapShapesKernelResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    const blank = K2.buildBlankMap({width: 6, height: 4, fillTileId: 1});
+    const gridBefore = blank.grid.map(r => r.join(''));
+    K2.applyMapShapes(blank.grid, [
+      {tileX0: 1, tileY0: 1, tileX1: 5, tileY1: 3, tileId: 2},
+      {tileX0: 2, tileY0: 1, tileX1: 3, tileY1: 2, tileId: 9}, // later shape, overlaps the first — should win
+    ]);
+    const gridAfter = blank.grid.map(r => r.join(''));
+    // Out-of-range coordinates clip to the grid instead of throwing.
+    let clipThrew = false;
+    try{ K2.applyMapShapes(blank.grid, [{tileX0:-5, tileY0:-5, tileX1:100, tileY1:100, tileId:3}]); }
+    catch(e){ clipThrew = true; }
+    return {checkpointsEmpty: blank.checkpoints.length === 0, gridBefore, gridAfter, clipThrew};
+  });
+  check('buildBlankMap fills a flat grid with no checkpoints of its own', mapShapesKernelResult.gridBefore.every(r => r === '111111') && mapShapesKernelResult.checkpointsEmpty, JSON.stringify(mapShapesKernelResult));
+  check('applyMapShapes stamps in array order, later shapes winning on overlap', mapShapesKernelResult.gridAfter[1] === '129221' && mapShapesKernelResult.gridAfter[2] === '122221', JSON.stringify(mapShapesKernelResult));
+  check('an out-of-range shape clips to the grid instead of throwing', !mapShapesKernelResult.clipThrew, JSON.stringify(mapShapesKernelResult));
+
+  const mapShapesEncodeResult = await page.evaluate(() => {
+    const K2 = window.UrlcadeKernel;
+    const cart = {
+      formatVersion: 4, cartType: 0, rngSeed: 1, modeFlags: 0, screenW: 64, screenH: 64,
+      paletteParams: [0,0,0,0,0,0,0,0], backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
+      tileSurfaceOverrides: {}, inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {}, inputWantsPointer: false,
+      hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [],
+      mapGenerator: 0, camera: null, aimLine: null, hooks: {},
+      blankMap: {width: 10, height: 8, fillTileId: 2},
+      mapShapes: [{tileX0:1,tileY0:1,tileX1:4,tileY1:3,tileId:5}, {tileX0:2,tileY0:2,tileX1:3,tileY1:3,tileId:7}],
+    };
+    const bytes = K2.encodeCart(cart);
+    const rt = K2.decodeCart(bytes);
+    return {blankMap: rt.blankMap, mapShapes: rt.mapShapes};
+  });
+  check('mapShapes/blankMap round-trip through encodeCart/decodeCart unchanged', JSON.stringify(mapShapesEncodeResult.blankMap) === JSON.stringify({width:10,height:8,fillTileId:2}) && mapShapesEncodeResult.mapShapes.length === 2 && mapShapesEncodeResult.mapShapes[1].tileId === 7, JSON.stringify(mapShapesEncodeResult));
+
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'golf');
+  await page.waitForTimeout(250);
+  const golfMapShapesResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const holeGX = Math.floor(w.globals[7] / 8), holeGY = Math.floor(w.globals[8] / 8); // GOLF_GLOBAL_NAMES.g_hole_x/g_hole_y
+    const row = w.map.grid[holeGY].slice(holeGX - 3, holeGX + 4);
+    return {mapShapesDeclared: w.cart.mapShapes.length, row, holeTile: w.map.grid[holeGY][holeGX]};
+  });
+  check('Mini Golf declares its hole fixup as mapShapes, not runtime SETTILE calls', golfMapShapesResult.mapShapesDeclared === 2, JSON.stringify(golfMapShapesResult));
+  check('Mini Golf: the hole\'s own tile is the checkpoint graphic (id 5) at the fairway\'s centerline, flanked by fairway (id 2), edges untouched', JSON.stringify(golfMapShapesResult.row) === JSON.stringify([1,2,2,5,2,2,1]), JSON.stringify(golfMapShapesResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.

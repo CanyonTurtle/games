@@ -16,7 +16,7 @@ format can describe, useful for checking the header fields alone.
 
 ```js
 {
-  formatVersion: 3, cartType: 0, rngSeed: 1, modeFlags: 0,
+  formatVersion: 4, cartType: 0, rngSeed: 1, modeFlags: 0,
   screenW: 64, screenH: 64,
   paletteParams: [0,0,0,0,0,0,0,0],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -24,30 +24,34 @@ format can describe, useful for checking the header fields alone.
   inputActiveButtons: 0, inputTouchTemplate: 0, inputButtonLabels: {}, inputWantsPointer: false,
   hudSpec: [], constants: [], entityTypes: [], sprites: [], tiles: [],
   mapGenerator: 0, camera: null, aimLine: null, hooks: {},
+  // mapShapes/blankMap both absent — same as an empty mapShapes: [],
+  // costs exactly one byte (its own zero count), see Fixture 2's byte
+  // dump for the omitted-vs-explicit-empty-array note.
 }
 ```
 
-**Encoded bytes (51):** one byte shorter than formatVersion 2's 52 —
-`paletteMode` is gone; palette generation is unconditional now (DESIGN.md
-§43), so there's nothing left to select a mode with:
+**Encoded bytes (52):** one byte longer than formatVersion 3's 51 —
+tilemap authoring (DESIGN.md §74) always writes a `mapShapes` count byte
+now, even when empty (`00`, the second-to-last byte before `camera`
+below):
 ```
-03 00 01 00 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00
+04 00 01 00 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00
 ```
 
-**Raw fragment** (`b64urlEncode`, no compression, 70 chars):
+**Raw fragment** (`b64urlEncode`, no compression, 72 chars):
 ```
-r.AwABAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD_AAAAAAAAAAAAAAAAAAAAAAAAAAAA
+r.BAABAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_wAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 **Chosen fragment** (`encodePayload` picks whichever tag is shorter —
-even at just 51 raw bytes, DEFLATE still wins narrowly here, 22 chars
-against the raw form's 70):
+even at just 52 raw bytes, DEFLATE still wins narrowly here, 22 chars
+against the raw form's 72):
 ```
-z.Y2ZgZHBgcGDACv5jFQUA
+z.Y2FgZHBgcGDADv5jFQUA
 ```
-Decompressing this reproduces the exact 51 bytes above.
+Decompressing this reproduces the exact 52 bytes above.
 
 ## Fixture 2: one sprite, one HUD line, one hook
 
@@ -58,7 +62,7 @@ constant into global 0.
 
 ```js
 {
-  formatVersion: 3, cartType: 63, rngSeed: 7, modeFlags: 0,
+  formatVersion: 4, cartType: 63, rngSeed: 7, modeFlags: 0,
   screenW: 32, screenH: 32,
   paletteParams: [10,20,30,40,50,60,70,80],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -93,23 +97,24 @@ operand `00`), `HALT` (opcode `32`). Cross-check against the opcode
 table in `kernel.js`'s `OPS` array (`PUSHC` is index 2 = `0x02`,
 `STOREG` is index 31 = `0x1f`, `HALT` is index 50 = `0x32`).
 
-**Encoded cart bytes (92):** one byte shorter than formatVersion 2's
-93 — no `paletteMode` byte to write:
+**Encoded cart bytes (93):** one byte longer than formatVersion 3's
+92 — the same new `mapShapes` count byte Fixture 1 gets (`00`, right
+before `camera`'s own bytes begin):
 ```
-03 3f 07 00 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02 47
+04 3f 07 00 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02 47
 6f 00 01 00 00 00 00 00 ff 00 05 53 63 6f 72 65 01 00 00 60 40 01 00 00
-00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 ff 00 00 00 00 00 00
-00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
+00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 00 ff 00 00 00 00 00
+00 00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
 ```
 
-**Raw fragment** (125 chars):
+**Raw fragment** (126 chars):
 ```
-r.Az8HACAAIAAKFB4oMjxGUAAAAAABAQJHbwABAAAAAAD_AAVTY29yZQEAAGBAAQAAAAgIAAEBEBABAEBAMDAAAAD_AAAAAAAAAAAABQACAB8AMgAAAAAAAAAAAAA
+r.BD8HACAAIAAKFB4oMjxGUAAAAAABAQJHbwABAAAAAAD_AAVTY29yZQEAAGBAAQAAAAgIAAEBEBABAEBAMDAAAAAA_wAAAAAAAAAAAAUAAgAfADIAAAAAAAAAAAAA
 ```
 
 **Chosen fragment** (`encodePayload`, compression wins here, 100 chars):
 ```
-z.Y7ZnZ1BgUGDgEpHTMLJxC2BgYGBgZGRyz2dgBDEZ_jOwBifnF6UyMjAkOICEODgYGBkFBBgZHBwMDMAKYICVgYlBnsEIzmcAAA
+z.Y7FnZ1BgUGDgEpHTMLJxC2BgYGBgZGRyz2dgBDEZ_jOwBifnF6UyMjAkOICEODgYGBkFBBgZHBwMDCAqYICVgYlBnsEIzmcAAA
 ```
 
 **Running `on_init` through `runHook`** (no browser, no World, just a
