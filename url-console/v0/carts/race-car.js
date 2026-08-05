@@ -119,7 +119,32 @@ const RACER_HOOKS_SRC = {
     LOADG g_lap_flash
     PUSHI 1
     SUB
+    DUP
     STOREG g_lap_flash
+    JNZ still_flashing
+    ; Countdown just reached 0 this frame — force the sprite back to
+    ; normal (sprites[0]) and stop, rather than leaving it at whatever
+    ; the strobe below last landed on.
+    PUSHI 0
+    STOREE g_car_player 12
+    JMP chk_race_over
+    still_flashing:
+    ; Strobe the player's own current assetIndex (props[12], 8 +
+    ; extFieldCount(4)) between normal (0) and carFlashShapes (3) every 4
+    ; ticks — ~7.5Hz at 60Hz, fast enough to read as a flash rather than a
+    ; slow color fade, for the whole LAP_FLASH_DURATION countdown.
+    LOADG g_lap_flash
+    PUSHI 8
+    MOD
+    PUSHI 4
+    CMPLT
+    JZ flash_frame
+    PUSHI 0
+    STOREE g_car_player 12
+    JMP chk_race_over
+    flash_frame:
+    PUSHI 3
+    STOREE g_car_player 12
     chk_race_over:
     LOADE g_car_player 11
     JZ done
@@ -405,6 +430,25 @@ function buildRacerCart(){
     {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:8},
     {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:8},
   ];
+  // "Lap complete!" flash (sprites[3]) — the player car's own carShapes
+  // geometry, recolored to the terrain ramp's two extremes (0 darkest, 7
+  // lightest) instead of a third independent hue: a stark photo-flash
+  // look that reads as "this car, but flashing" rather than "a different
+  // car," and the terrain ramp is guaranteed visually distinct from both
+  // entity ramps by construction (DESIGN.md §43/§44) — nothing new to
+  // hint or risk colliding with. Strobed against carShapes while
+  // g_lap_flash counts down (on_frame, extending the existing HUD-only
+  // flash from DESIGN.md §49 to the sprite itself).
+  const carFlashShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.3,ry:4.6, color:0},
+    {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:6.0,ry:4.3, color:7},
+    {type:SHAPE_RECT, x:8.3,y:5.2, w:3.3,h:5.6, color:0},
+    {type:SHAPE_RECT, x:3.2,y:6.7, w:5.0,h:2.6, color:7},
+    {type:SHAPE_RECT, x:3.0,y:0.4, w:2.2,h:2.4, color:0},
+    {type:SHAPE_RECT, x:10.8,y:0.4, w:2.2,h:2.4, color:0},
+    {type:SHAPE_RECT, x:3.0,y:13.2, w:2.2,h:2.4, color:0},
+    {type:SHAPE_RECT, x:10.8,y:13.2, w:2.2,h:2.4, color:0},
+  ];
   const particleShapes = [
     {type:SHAPE_ELLIPSE, cx:4,cy:4, rx:3.2,ry:3.2, color:1},
     {type:SHAPE_ELLIPSE, cx:4,cy:4, rx:2.6,ry:2.6, color:2},
@@ -622,6 +666,7 @@ function buildRacerCart(){
       {kind:1, w:16, h:16, shapes:carShapes},
       {kind:1, w:8, h:8, shapes:particleShapes},
       {kind:1, w:16, h:16, shapes:aiCarShapes},
+      {kind:1, w:16, h:16, shapes:carFlashShapes},
     ],
     tiles: [
       {w:8,h:8,pixels:grassPixels}, {w:8,h:8,pixels:roadPixels},

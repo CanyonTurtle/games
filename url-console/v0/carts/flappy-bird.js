@@ -107,6 +107,24 @@ const FLAPPY_HOOKS_SRC = {
     PUSHC GRAVITY
     ADD
     STORE_SELF 3
+    ; Wing-flap frame, picked from vertical velocity every tick rather
+    ; than a separate timer: rising (vy<0, right after a flap impulse or
+    ; still coasting up from one) shows sprites[1] (wing up), falling
+    ; shows sprites[0] (wing down/resting). This writes the bird's own
+    ; current assetIndex (props[8], extFieldCount:0 so 8 + 0 — see
+    ; spawnEntity in runtime.js), not entityTypes[0].assetIndex, which
+    ; stays the spawn-time default.
+    LOAD_SELF 3
+    PUSHI 0
+    CMPLT
+    JZ wing_down
+    PUSHI 1
+    STORE_SELF 8
+    JMP wing_done
+    wing_down:
+    PUSHI 0
+    STORE_SELF 8
+    wing_done:
     LOAD_SELF 1
     LOAD_SELF 3
     ADD
@@ -201,6 +219,23 @@ function buildFlappyCart(){
     {type:SHAPE_ELLIPSE, cx:10.1,cy:5.3, rx:1.8,ry:1.8, color:11},
     {type:SHAPE_ELLIPSE, cx:10.9,cy:5.4, rx:0.9,ry:0.9, color:8},
   ];
+  // Wing-up pose for the flap cycle (sprites[1]) — identical outline,
+  // body, beak, eye, and pupil to birdShapes; only the wing ellipse
+  // (shape index 2) moves, up and in from its resting position below the
+  // body to above-and-beside it, narrower and taller to read as raised
+  // rather than just relocated. Which frame shows is picked every tick
+  // from vertical velocity (see on_tick below) — this is the entity's own
+  // current per-instance assetIndex (props[8 + extFieldCount], written
+  // via STORE_SELF), not entityTypes[0].assetIndex, which stays the
+  // spawn-time default (frame 0, wing down).
+  const birdShapesUp = [
+    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.3,ry:6.4, color:8},
+    {type:SHAPE_ELLIPSE, cx:7.6,cy:8.3, rx:6.0,ry:6.1, color:10},
+    {type:SHAPE_ELLIPSE, cx:6.2,cy:4.8, rx:2.6,ry:3.2, color:9},
+    {type:SHAPE_ELLIPSE, cx:13.6,cy:7.9, rx:2.2,ry:1.3, color:9},
+    {type:SHAPE_ELLIPSE, cx:10.1,cy:5.3, rx:1.8,ry:1.8, color:11},
+    {type:SHAPE_ELLIPSE, cx:10.9,cy:5.4, rx:0.9,ry:0.9, color:8},
+  ];
   // Pipes drawn from entity B's ramp (12-15), not the terrain ramp —
   // this cart's terrain hue is the *sky*, not the pipes (see the cart's
   // palette comment below), so pipe pixels point at entity B's indices
@@ -256,7 +291,7 @@ function buildFlappyCart(){
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:8, extFieldCount:0},
       {renderKind:1, assetIndex:0, rotateFlag:0, collisionW:8, collisionH:0, extFieldCount:3},
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:birdShapes} ],
+    sprites: [ {kind:1, w:16, h:16, shapes:birdShapes}, {kind:1, w:16, h:16, shapes:birdShapesUp} ],
     tiles: [ {w:8,h:8,pixels:pipeBody}, {w:8,h:8,pixels:pipeCap} ],
     hooks: {},
   };

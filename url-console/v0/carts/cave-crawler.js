@@ -7,7 +7,7 @@
 "use strict";
 const K = window.UrlcadeKernel;
 const {
-  assemble, HOOK_NAMES, TOUCH_TEMPLATE_DPAD_ONLY,
+  assemble, HOOK_NAMES, TOUCH_TEMPLATE_DPAD_ONLY, SHAPE_ELLIPSE,
   CAVE_WALL, CAVE_FLOOR, CAVE_STAIRS, CAVE_GOLD,
 } = K;
 import { hexRowsToPixels, blobPlayerShapes, blobMonsterShapes } from './shared-sprites.js';
@@ -24,6 +24,7 @@ import { hexRowsToPixels, blobPlayerShapes, blobMonsterShapes } from './shared-s
 const ROGUELIKE_CONST_NAMES = {
   PLAYER_START_HP:0, MONSTER_START_HP:1, PLAYER_ATK:2, MONSTER_ATK:3,
   MOVE_INTERVAL:4, CHASE_RADIUS:5, MAP_W:6, MAP_H:7, NUM_MONSTERS:8,
+  DEATH_HOLD_TICKS:9,
   // MAP_W/MAP_H are the cave's own pixel size (gridW*8/gridH*8), used only
   // for random monster-spawn placement — distinct from the cart's
   // screenW/screenH, which is now the fixed 160x160 viewport the camera
@@ -221,6 +222,13 @@ const ROGUELIKE_HOOKS_SRC = {
     JZ done
     PUSHI 1
     STOREG g_dead
+    ; sprites[2] = deadPlayerShapes. Writes the player's own current
+    ; assetIndex (props[8], extFieldCount:0 so 8 + 0), not
+    ; entityTypes[0].assetIndex — this only ever runs once, the frame HP
+    ; first reaches 0 (the g_dead check above short-circuits every frame
+    ; after), so no need to guard against re-writing it.
+    PUSHI 2
+    STOREE g_player 8
     done:
     HALT
   `,
@@ -234,8 +242,35 @@ const ROGUELIKE_HOOKS_SRC = {
     PUSHI 0
     CMPLE
     JZ alive
+
+    ; Dead (hp<=0), but not removed yet — held a moment so the death
+    ; sprite is actually visible instead of vanishing the same tick it
+    ; died. props[9] is this instance's own current assetIndex (8 +
+    ; extFieldCount(1)); once it's showing sprites[3] (deadMonsterShapes),
+    ; props[8] — normally the movement-pacing timer (ext field 0) — is
+    ; repurposed as a death-hold countdown instead, since a dead monster
+    ; no longer needs to move.
+    LOAD_SELF 9
+    PUSHI 3
+    CMPEQ
+    JNZ dying_hold
+    PUSHI 3
+    STORE_SELF 9
+    PUSHC DEATH_HOLD_TICKS
+    STORE_SELF 8
+    JMP tick_end
+    dying_hold:
+    LOAD_SELF 8
+    PUSHI 1
+    SUB
+    DUP
+    STORE_SELF 8
+    PUSHI 0
+    CMPGT
+    JNZ tick_end
     KILL_SELF
     JMP tick_end
+
     alive:
 
     LOAD_SELF 8
@@ -467,6 +502,23 @@ function buildRoguelikeCart(){
   // alone (see DESIGN.md's postmortem) — now it's structurally
   // impossible to repeat, for this cart or any other.
   const monsterShapes = blobMonsterShapes(14, 12, 15, 12);
+  // Death poses (sprites[2]/[3]) — a flattened silhouette instead of the
+  // upright head+body+feet / round-body+eyes blob look, same two-tone
+  // outline+fill each ramp already uses (a first version used only the
+  // darkest "ink" shade for the whole shape and, screenshot-checked, read
+  // as a near-invisible dark smudge rather than a body — a second tone
+  // was needed for the shape to actually read at this size, not just for
+  // the "collapsed" pose to be clear). Shown once HP reaches 0 (player,
+  // on_frame) or held briefly before removal (monster, on_tick) — see the
+  // assetIndex-override writes above.
+  const deadPlayerShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:11.5, rx:6.6,ry:3.4, color:8},
+    {type:SHAPE_ELLIPSE, cx:8,cy:11.5, rx:5.6,ry:2.6, color:11},
+  ];
+  const deadMonsterShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:12, rx:6.8,ry:3.0, color:12},
+    {type:SHAPE_ELLIPSE, cx:8,cy:12, rx:5.8,ry:2.2, color:14},
+  ];
 
   // Bigger than the original 32x20 (which fit entirely on one screen with
   // no camera, reported as feeling like "one flat map") — big enough that
@@ -528,12 +580,19 @@ function buildRoguelikeCart(){
     // (no retry), which read as "enemies don't move"; on_tick now retries
     // a few times with a fresh random direction before giving up for the
     // tick (see ROGUELIKE_HOOKS_SRC.on_tick's g_retry loop).
-    constants: [20, 6, 3, 2, 14, 70, gridW*8, gridH*8, 18],
+    // DEATH_HOLD_TICKS (24, 0.4s at 60Hz): how long a monster's death
+    // sprite stays visible before it's actually removed — long enough to
+    // read as a death, short enough not to leave a stale-looking corpse
+    // blocking a corridor for a real chase.
+    constants: [20, 6, 3, 2, 14, 70, gridW*8, gridH*8, 18, 24],
     entityTypes: [
       {renderKind:0, assetIndex:0, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // PLAYER
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // MONSTER (ext 8 = move_timer)
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:playerShapes}, {kind:1, w:16, h:16, shapes:monsterShapes} ],
+    sprites: [
+      {kind:1, w:16, h:16, shapes:playerShapes}, {kind:1, w:16, h:16, shapes:monsterShapes},
+      {kind:1, w:16, h:16, shapes:deadPlayerShapes}, {kind:1, w:16, h:16, shapes:deadMonsterShapes},
+    ],
     tiles: [
       {w:8,h:8,pixels:wallPixels}, {w:8,h:8,pixels:floorPixels},
       {w:8,h:8,pixels:stairsPixels}, {w:8,h:8,pixels:goldPixels},

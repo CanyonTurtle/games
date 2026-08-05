@@ -186,6 +186,12 @@ const PLATFORM_HOOKS_SRC = {
     JZ chk_win
     PUSHI 1
     STOREG g_dead
+    ; sprites[3] = deadPlayerShapes. Writes the player's own current
+    ; assetIndex (props[8], extFieldCount:0 so 8 + 0), not
+    ; entityTypes[0].assetIndex — only runs once, the frame HP first
+    ; reaches 0 (g_dead short-circuits every frame after).
+    PUSHI 3
+    STOREE g_player 8
     JMP done
     chk_win:
     LOADE g_player 0
@@ -392,6 +398,17 @@ function buildPlatformerCart(){
     {type:SHAPE_ELLIPSE, cx:8,cy:8, rx:2.3,ry:2.3, color:9},
     {type:SHAPE_ELLIPSE, cx:5.8,cy:5.8, rx:2.3,ry:2.3, color:10},
   ];
+  // Death pose (sprites[3]) — a flattened silhouette instead of the
+  // upright head+body+feet blob look, keeping the same two-tone
+  // outline+fill the alive sprite uses (a single-tone first version,
+  // screenshot-checked, read as a near-invisible dark smudge rather than
+  // a body — see DESIGN.md). Shown once HP reaches 0 (on_frame, alongside
+  // the existing g_dead state) via the same assetIndex-override write
+  // every death animation in this pass uses.
+  const deadPlayerShapes = [
+    {type:SHAPE_ELLIPSE, cx:8,cy:12, rx:6.8,ry:3.2, color:8},
+    {type:SHAPE_ELLIPSE, cx:8,cy:12, rx:5.8,ry:2.4, color:11},
+  ];
 
   // Roughly double the original length and with more step/gap/block
   // variety — at the old 256px-wide viewport the level already spanned
@@ -473,7 +490,10 @@ function buildPlatformerCart(){
       {renderKind:0, assetIndex:2, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:0}, // COIN
       {renderKind:0, assetIndex:1, rotateFlag:0, collisionW:6, collisionH:6, extFieldCount:1}, // ENEMY (ext 8 = facing)
     ],
-    sprites: [ {kind:1, w:16, h:16, shapes:playerShapes}, {kind:1, w:16, h:16, shapes:enemyShapes}, {kind:1, w:16, h:16, shapes:coinShapes} ],
+    sprites: [
+      {kind:1, w:16, h:16, shapes:playerShapes}, {kind:1, w:16, h:16, shapes:enemyShapes},
+      {kind:1, w:16, h:16, shapes:coinShapes}, {kind:1, w:16, h:16, shapes:deadPlayerShapes},
+    ],
     tiles: [
       {w:8,h:8,pixels:airPixels}, {w:8,h:8,pixels:groundPixels},
       {w:8,h:8,pixels:dirtPixels}, {w:8,h:8,pixels:brickPixels},
