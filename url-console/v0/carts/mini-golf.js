@@ -37,9 +37,15 @@ const GOLF_CONST_NAMES = {
 const GOLF_GLOBAL_NAMES = {
   g_ball:0, g_swing_state:1, g_angle:2, g_power:3, g_power_dir:4, g_strokes:5,
   g_won:6, g_hole_x:7, g_hole_y:8, g_scratch:9, g_prev_input:10, g_aim_x:11,
-  g_aim_y:12, g_active:13, g_friction:14,
+  g_aim_y:12, g_active:13, g_friction:14, g_best_strokes:15,
 };
 const GOLF_SYM = {constants:GOLF_CONST_NAMES, globals:GOLF_GLOBAL_NAMES};
+// Persist slot 0: this cart's own all-time best (lowest) stroke count —
+// see opcodes.md's Persistence section. Each cart's persist array is
+// keyed separately (a hash of the whole cart), so reusing slot 0 here
+// is exactly as safe as Flappy Bird's own PERSIST_HIGH_SCORE reusing it
+// for a completely different meaning.
+const PERSIST_BEST_STROKES = 0;
 
 const GOLF_HOOKS_SRC = {
   // Checkpoint 0 (from the walk's own START_FINISH token) is the tee —
@@ -117,6 +123,13 @@ const GOLF_HOOKS_SRC = {
     STOREG g_prev_input
     PUSHI 1
     STOREG g_active
+    ; 0 doubles as "no best recorded yet" — a hole-out in 0 strokes isn't
+    ; reachable (tee and hole are different checkpoints, so at least one
+    ; real swing is required), so there's no real value this sentinel
+    ; could collide with. hudSpec's own "Best" line (kind:2, below) stays
+    ; hidden until this is genuinely nonzero.
+    LOAD_PERSIST ${PERSIST_BEST_STROKES}
+    STOREG g_best_strokes
     HALT
   `,
   // Keeps the aim line's anchor glued to the ball every frame — aimLine
@@ -357,6 +370,23 @@ const GOLF_HOOKS_SRC = {
     JZ not_holed
     PUSHI 1
     STOREG g_won
+    ; New best (lower strokes is better, unlike Flappy's high score)?
+    ; g_best_strokes doubles as "no record yet" at 0 (see on_init), so
+    ; this fires either the first time this cart is ever holed out or
+    ; whenever the current run beats a real previous best.
+    LOADG g_best_strokes
+    PUSHI 0
+    CMPEQ
+    JNZ new_best
+    LOADG g_strokes
+    LOADG g_best_strokes
+    CMPLT
+    JZ tick_end
+    new_best:
+    LOADG g_strokes
+    STOREG g_best_strokes
+    LOADG g_strokes
+    STORE_PERSIST ${PERSIST_BEST_STROKES}
     JMP tick_end
     not_holed:
     PUSHI 0
@@ -447,6 +477,11 @@ function buildMiniGolfCart(){
     inputButtonLabels: {1: 'Aim', 2: 'Aim', 4: 'Swing'},
     hudSpec: [
       {kind:0, sourceKind:0, srcA:GOLF_GLOBAL_NAMES.g_strokes, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Strokes'},
+      // kind:2 (shown only while nonzero) rather than kind:0 — 0 doubles
+      // as "no best recorded yet" (see on_init/on_tick), so this line
+      // simply doesn't exist until the course has actually been holed
+      // out once, instead of misleadingly reading "Best: 0".
+      {kind:2, sourceKind:0, srcA:GOLF_GLOBAL_NAMES.g_best_strokes, srcB:0, delta:0, suffixConstIdx:255, clamp:0, label:'Best: '},
       {kind:1, sourceKind:0, srcA:GOLF_GLOBAL_NAMES.g_won, srcB:0, delta:0, suffixConstIdx:255, label:'Holed out! Refresh to play again'},
     ],
     // MAX_POWER=6px/tick, POWER_STEP=0.15/tick (a full 0->max->0 sweep is
