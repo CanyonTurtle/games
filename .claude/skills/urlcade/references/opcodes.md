@@ -172,6 +172,16 @@ must never be the only place a cart reads shared RNG.
 
 - `SPAWN typeId` (u8 operand) — creates an entity of that type (all
   props zeroed except the auto-set `[4]`/`[7]`), pushes its new id.
+  Capped: if `globals` (fixed 96 bytes) plus every active entity's
+  `props` (4 bytes/field) would cross 16KB, `SPAWN` is a graceful no-op
+  instead — id `0` (never a real entity's id) is pushed, and no entity
+  is actually created. Every `STOREE`/`LOADE` against an unmatched id
+  already resolves to nothing (`findEntity` returns none), so a hook
+  that spawns past the cap and then writes to the returned id just
+  silently does nothing further — no crash, no `cartFault`. Worst
+  observed peak across all 9 example carts under synthetic stress input
+  is ~2.65KB, so this ceiling is real headroom, not a practical limit on
+  ordinary play — see DESIGN.md §76.
 - `KILL_SELF` — no stack effect; deactivates `self` (removed from the
   world at the end of the current step).
 - `MOVE_SOLID` — no stack effect. Axis-separated collision: advances
@@ -183,7 +193,14 @@ must never be the only place a cart reads shared RNG.
   Requires `self` and a map generator.
 - `SETTILE` — stack in: x, y (pixels), tileId (top). Mutates the live
   map grid and repaints the pre-rendered map bitmap at that one tile —
-  the only way a hook can change the map after `on_init`.
+  the only way a hook can change the map after `on_init`. Capped
+  separately from `SPAWN`'s own budget (DESIGN.md §76): once a cart has
+  called `SETTILE` 1024 times total in one session, further calls are a
+  no-op — the live grid stops changing rather than drifting out of sync
+  with the runtime's own bookkeeping of what's been mutated. Real usage
+  across every shipped cart that calls `SETTILE` at all tops out at 16
+  calls a full playthrough, so this is deep headroom, not a practical
+  limit.
 
 ## Input
 

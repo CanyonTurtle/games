@@ -97,10 +97,38 @@ function setAudioEnabled(enabled){
   }
 }
 
+// Memory caps (DESIGN.md §76) — a real bug backstop independent of
+// anything network-related: spawnEntity() used to push onto
+// this.entities completely unbounded, so a cart whose on_tick
+// unconditionally SPAWNs would grow forever until the tab died. Sized
+// off profiling all 9 example carts for 3600 frames (60s) under
+// synthetic worst-case input (every button combo + a pointer drag),
+// not picked out of the air — real worst observed peak across all of
+// them was 2.65KB (race-car's collision particles). Two separate caps,
+// not one shared budget, because they bound different failure modes and
+// shouldn't compete with each other.
+//
+// 16KB for globals + every active entity's props (4 bytes/field,
+// matching the f32 width ByteWriter already uses for the binary
+// format) — ~6x that worst observed peak.
+const STATE_BYTE_CAP = 16384;
+// 1024 entries for the SETTILE tile-diff log — real usage across both
+// shipped carts that call SETTILE at all tops out at 16 calls a full
+// playthrough (cave-crawler's gold pickups); 1024 is >60x that, while
+// still stopping a runaway SETTILE loop well short of diverging the
+// full (worst-case 255x255) generated grid.
+const TILE_DIFF_CAP = 1024;
+
 class World {
   constructor(cart){
     this.cart = cart;
     this.entities = [];
+    // Tile-diff log for SETTILE (DESIGN.md §76) — {x,y,tileId} per call,
+    // in tile-grid coordinates, capped at TILE_DIFF_CAP. Not consulted
+    // by anything yet (the actual rollback/resync machinery is a later
+    // round) — exists now so the cap itself, and setTileAt's no-op past
+    // it, can be real and tested today rather than retrofitted later.
+    this.tileDiffLog = [];
     this.boxPool = []; // reused AABB scratch objects for collision detection, see getBoxInto()
     this.nextId = 1;
     this.globals = new Array(24).fill(0); // room to grow past the original 16 — LOADG/STOREG operands are already u8 (0-255), this was always just an array-size choice, not a format limit
@@ -292,6 +320,16 @@ class World {
     // every other instance of its type.
     const assetIndexProp = 8 + type.extFieldCount;
     const propCount = assetIndexProp + 1;
+    // 16KB state cap (DESIGN.md §76) — becomes a graceful no-op past the
+    // ceiling, not a cart fault, the same posture a lost network peer
+    // resimulating the same cap would need anyway. Returns exactly the
+    // phantom shape kernel.js's own runHook doc comment already
+    // documents as the minimum ctx.spawn() fallback ({id:0,props:[]}) —
+    // id 0 is never a real entity's id (nextId starts at 1), so every
+    // existing STOREE/findEntity call already treats a write through it
+    // as a silent no-op with no VM change needed to make this safe.
+    const currentBytes = this.globals.length*4 + this.entities.reduce((sum,e) => sum + e.props.length*4, 0);
+    if(currentBytes + propCount*4 > STATE_BYTE_CAP) return {id:0, props:[]};
     const e = { id:this.nextId++, active:true, typeId, props:new Array(propCount).fill(0) };
     e.props[4] = typeId;
     e.props[7] = e.id;
@@ -360,6 +398,12 @@ class World {
     if(!this.map) return;
     const tx = Math.floor(x/8), ty = Math.floor(y/8);
     if(ty<0||ty>=this.map.grid.length||tx<0||tx>=this.map.grid[0].length) return;
+    // Tile-diff log cap (DESIGN.md §76) — becomes a no-op past the
+    // ceiling rather than letting the live grid keep changing while the
+    // log (the thing a future rollback resync would actually ship)
+    // silently stops reflecting it.
+    if(this.tileDiffLog.length >= TILE_DIFF_CAP) return;
+    this.tileDiffLog.push({x:tx, y:ty, tileId});
     this.map.grid[ty][tx] = tileId;
     const mctx = this.mapCanvas.getContext('2d');
     mctx.drawImage(this.tileCanvases[tileId-1], tx*8, ty*8);

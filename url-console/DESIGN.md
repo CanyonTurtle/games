@@ -2945,7 +2945,23 @@ Scoped out, on purpose, same restraint as every prior editor phase: no drag-to-c
 
 Verified via `test/smoke.js`, against Mini Golf's own real `mapShapes` (its §74 hole fixup, not a synthetic fixture): select-by-click (including confirming a click inside two overlapping shapes correctly resolves to the topmost/last-stamped one, not just "a" shape), corner-handle resize, body move (snapped to whole tiles), "+ Shape", reorder, recolor via the tile picker, delete, and a cart with no map at all still showing the plain empty-state message. Screenshot-verified in both themes plus the 375px mobile viewport (0px horizontal overflow) from §61.
 
-## 76. Open questions
+## 76. Memory caps — a real bug backstop, and multiplayer's first prerequisite
+
+First round of Multiplayer, the last of the five features from the original design pass (§66's own opening). Rollback netcode needs a state snapshot small enough to send over P2P on every mispredict — but before any of that, `spawnEntity()` and `setTileAt()` had no cap at all: a cart whose `on_tick` unconditionally `SPAWN`s already grows `this.entities` forever until the tab dies, single-player, no networking involved. That's the framing this round shipped under: real, independent bug-backstop value first: rollback affordability is a consequence, not the only reason to have it.
+
+**Sized from measurement, not guessed.** The original design conversation profiled all 9 example carts for 3600 frames (60s) under synthetic worst-case input (every button combo cycled plus a pointer drag) in a headless-browser harness, sampling peak entity count and total prop-field count every frame. Worst observed: race-car's collision particles, 2.65KB. Every other cart peaked well under 1KB.
+
+**Two separate caps, not one shared budget, because they bound different failure modes:**
+- **16KB** for `globals` (a fixed 96 bytes) plus every active entity's `props` (4 bytes/field, matching the `f32` width `ByteWriter` already uses in the binary format) — roughly 6x the worst measured peak. `spawnEntity()` checks this *before* pushing; past it, `SPAWN` becomes a graceful no-op rather than a crash or a `cartFault` — the same posture a lost network peer resimulating the identical cap would need anyway, so building it as "no-op, not fault" now costs nothing later.
+- **1024 entries** for `setTileAt`'s new `tileDiffLog` (`{x,y,tileId}` per call, tile-grid coordinates) — a separate budget so a `SETTILE`-heavy cart and a `SPAWN`-heavy cart never compete for the same ceiling. Real usage across every shipped cart that calls `SETTILE` at all tops out at 16 calls a full playthrough (cave-crawler's gold pickups) — 1024 is >60x that, while still stopping a runaway loop well short of diverging the full generated grid.
+
+**The capped-`SPAWN` return value needed no new sentinel — it already existed as documentation.** `kernel.js`'s own `runHook` doc comment, written for the *minimum ctx shape* a caller can supply, already specifies `spawn:()=>({id:0,props:[]})` as what a host with no real spawn capability should return. Reusing that exact shape here means every existing `STOREE`/`LOADE`/`findEntity` call already treats a write through id `0` as a silent no-op (`nextId` starts at 1, so `0` is never a real entity's id) — no VM change was needed to make a capped `SPAWN` safe, only `runtime.js`'s own bounds check.
+
+**`tileDiffLog` isn't consulted by anything yet.** It exists now, capped and real, specifically so the cap itself is testable and shipped today rather than retrofitted once the actual rollback/resync machinery (a later round) needs to read it. `setTileAt` becomes a no-op past the cap for the same reason `SPAWN` does past its own — keeps the live grid and the log that's supposed to describe it from ever disagreeing about what's actually been mutated.
+
+Verified via `test/smoke.js`, calling `spawnEntity`/`setTileAt` directly against a real `World` (not through 450+ real hook-driven `SPAWN` calls, which would be slow to simulate and no more informative than exercising the same runtime methods the opcode itself routes through): confirms the exact call count where `SPAWN` starts returning id `0`, that `entities.length` stops growing at that point and stays stopped on every further call, that the tile-diff log stops at exactly 1024 entries, and that a capped `SETTILE` neither grows the log nor mutates the grid any further — none of it ever setting `cartFault`. `opcodes.md`'s `SPAWN`/`SETTILE` entries document both caps' behavior for a cart author reading them cold.
+
+## 77. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

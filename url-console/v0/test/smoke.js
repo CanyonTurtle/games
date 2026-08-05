@@ -1511,6 +1511,56 @@ async function main(){
   check('Race Car\'s AI cars navigate past both chicanes instead of looping a corner forever',
     racerAiProgress.reached === true, JSON.stringify(racerAiProgress));
 
+  // 5f. Memory caps (DESIGN.md §76) — a real bug backstop independent of
+  // anything network-related: spawnEntity()/setTileAt() used to grow
+  // this.entities/tileDiffLog completely unbounded. Both caps are
+  // exercised directly against a real World (spawnEntity/setTileAt
+  // aren't reachable any other way from a hook-authoring level test —
+  // hitting them via 1000+ real SPAWN/SETTILE hook calls would be both
+  // slow and no more informative than calling the same runtime methods
+  // the opcodes themselves route through), on carts already loaded from
+  // earlier checks.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
+  await page.waitForTimeout(200);
+  const spawnCapResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const countBefore = w.entities.length;
+    let cappedId = -1, spawnsUntilCapped = 0;
+    // Flappy's bird type (0) has no ext fields — 9 props/entity (36
+    // bytes) — well under 500 spawns to cross the 16KB ceiling.
+    for(let i=0;i<600;i++){
+      const e = w.spawnEntity(0);
+      spawnsUntilCapped++;
+      if(e.id === 0){ cappedId = e.id; break; }
+    }
+    const countAfterCap = w.entities.length;
+    // One more call past the cap should still return the same phantom,
+    // not start growing again or throw.
+    const stillCapped = w.spawnEntity(0);
+    return {countBefore, cappedId, spawnsUntilCapped, countAfterCap, countAfterSecondCall: w.entities.length, stillCappedId: stillCapped.id, stillCappedProps: stillCapped.props, fault: w.cartFault};
+  });
+  check('SPAWN becomes a graceful no-op (id 0) once the 16KB state cap would be crossed, not a crash or cartFault', spawnCapResult.cappedId === 0 && !spawnCapResult.fault, JSON.stringify(spawnCapResult));
+  check('a capped SPAWN does not grow entities[], and stays capped on every subsequent call', spawnCapResult.countAfterCap === spawnCapResult.countAfterSecondCall && spawnCapResult.stillCappedId === 0 && spawnCapResult.stillCappedProps.length === 0, JSON.stringify(spawnCapResult));
+
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'golf');
+  await page.waitForTimeout(200);
+  const tileDiffCapResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    const gridBefore = w.map.grid[0][0];
+    for(let i=0;i<1030;i++) w.setTileAt(0, 0, (i%2)+1); // alternate two tile ids, position irrelevant to the cap itself
+    const logLenAfter = w.tileDiffLog.length;
+    const gridAfterCap = w.map.grid[0][0]; // last write before the cap was hit — call 1024 (index 1023) wrote (1023%2)+1 = 2
+    // A further call past the cap must not grow the log or change the grid.
+    w.setTileAt(0, 0, 1);
+    return {logLenAfter, capIsExactly1024: logLenAfter === 1024, gridAfterCap, gridAfterOneMore: w.map.grid[0][0], logLenAfterOneMore: w.tileDiffLog.length, fault: w.cartFault};
+  });
+  check('SETTILE\'s tile-diff log stops growing at exactly 1024 entries', tileDiffCapResult.capIsExactly1024, JSON.stringify(tileDiffCapResult));
+  check('a capped SETTILE neither grows the log nor mutates the grid any further, and never faults the cart', tileDiffCapResult.logLenAfterOneMore === 1024 && tileDiffCapResult.gridAfterOneMore === tileDiffCapResult.gridAfterCap && !tileDiffCapResult.fault, JSON.stringify(tileDiffCapResult));
+
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of
   // silently doing nothing.
