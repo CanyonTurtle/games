@@ -779,7 +779,7 @@ function buildDoomCart() {
   const gridW = 22, gridH = 18;
 
   const cart = {
-    formatVersion: 4,
+    formatVersion: 5,
     name: 'Corridor', author: 'Urlcade',
     cartType: 3, // advisory label only — see DESIGN.md §14
     // Cold blue-gray stone terrain (indices 0-7); entity A's hue barely

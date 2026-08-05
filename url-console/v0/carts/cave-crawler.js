@@ -535,7 +535,7 @@ function buildRoguelikeCart(){
   const gridW = 48, gridH = 36;
 
   const cart = {
-    formatVersion: 4,
+    formatVersion: 5,
     name: 'Cave Crawler', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 3, // advisory label only — see DESIGN.md §14
     // Terrain hue 35 (warm brown/tan — the earthy walls/floor/stairs

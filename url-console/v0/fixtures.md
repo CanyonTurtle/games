@@ -16,7 +16,7 @@ format can describe, useful for checking the header fields alone.
 
 ```js
 {
-  formatVersion: 4, cartType: 0, rngSeed: 1, modeFlags: 0,
+  formatVersion: 5, cartType: 0, rngSeed: 1, modeFlags: 0, maxPlayers: 1,
   screenW: 64, screenH: 64,
   paletteParams: [0,0,0,0,0,0,0,0],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -30,28 +30,27 @@ format can describe, useful for checking the header fields alone.
 }
 ```
 
-**Encoded bytes (52):** one byte longer than formatVersion 3's 51 —
-tilemap authoring (DESIGN.md §74) always writes a `mapShapes` count byte
-now, even when empty (`00`, the second-to-last byte before `camera`
-below):
+**Encoded bytes (53):** one byte longer than formatVersion 4's 52 —
+`maxPlayers` (DESIGN.md §79) is a new required byte right after
+`modeFlags` (`01`, the fifth byte):
 ```
-04 00 01 00 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
-00 00 00 00
+05 00 01 00 01 40 00 40 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 ff 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00 00 00 00
 ```
 
-**Raw fragment** (`b64urlEncode`, no compression, 72 chars):
+**Raw fragment** (`b64urlEncode`, no compression, 73 chars):
 ```
-r.BAABAEAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA_wAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+r.BQABAAFAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAP8AAAAAAAAAAAAAAAAAAAAAAAAAAAA
 ```
 
 **Chosen fragment** (`encodePayload` picks whichever tag is shorter —
-even at just 52 raw bytes, DEFLATE still wins narrowly here, 22 chars
-against the raw form's 72):
+even at just 53 raw bytes, DEFLATE still wins narrowly here, 24 chars
+against the raw form's 73):
 ```
-z.Y2FgZHBgcGDADv5jFQUA
+z.Y2VgZGB0YHBgwA7-YxUFAA
 ```
-Decompressing this reproduces the exact 52 bytes above.
+Decompressing this reproduces the exact 53 bytes above.
 
 ## Fixture 2: one sprite, one HUD line, one hook
 
@@ -62,7 +61,7 @@ constant into global 0.
 
 ```js
 {
-  formatVersion: 4, cartType: 63, rngSeed: 7, modeFlags: 0,
+  formatVersion: 5, cartType: 63, rngSeed: 7, modeFlags: 0, maxPlayers: 1,
   screenW: 32, screenH: 32,
   paletteParams: [10,20,30,40,50,60,70,80],
   backdropFillIndex: 0, backdropGroundHeight: 0, backdropGroundIndex: 0,
@@ -97,24 +96,24 @@ operand `00`), `HALT` (opcode `32`). Cross-check against the opcode
 table in `kernel.js`'s `OPS` array (`PUSHC` is index 2 = `0x02`,
 `STOREG` is index 31 = `0x1f`, `HALT` is index 50 = `0x32`).
 
-**Encoded cart bytes (93):** one byte longer than formatVersion 3's
-92 — the same new `mapShapes` count byte Fixture 1 gets (`00`, right
-before `camera`'s own bytes begin):
+**Encoded cart bytes (94):** one byte longer than formatVersion 4's
+93 — `maxPlayers` (DESIGN.md §79), the same new required byte Fixture 1
+gets, right after `modeFlags` (`01`, the fifth byte):
 ```
-04 3f 07 00 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02 47
-6f 00 01 00 00 00 00 00 ff 00 05 53 63 6f 72 65 01 00 00 60 40 01 00 00
-00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 00 ff 00 00 00 00 00
-00 00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
-```
-
-**Raw fragment** (126 chars):
-```
-r.BD8HACAAIAAKFB4oMjxGUAAAAAABAQJHbwABAAAAAAD_AAVTY29yZQEAAGBAAQAAAAgIAAEBEBABAEBAMDAAAAAA_wAAAAAAAAAAAAUAAgAfADIAAAAAAAAAAAAA
+05 3f 07 00 01 20 00 20 00 0a 14 1e 28 32 3c 46 50 00 00 00 00 01 01 02
+47 6f 00 01 00 00 00 00 00 ff 00 05 53 63 6f 72 65 01 00 00 60 40 01 00
+00 00 08 08 00 01 01 10 10 01 00 40 40 30 30 00 00 00 00 ff 00 00 00 00
+00 00 00 00 00 05 00 02 00 1f 00 32 00 00 00 00 00 00 00 00 00 00
 ```
 
-**Chosen fragment** (`encodePayload`, compression wins here, 100 chars):
+**Raw fragment** (128 chars):
 ```
-z.Y7FnZ1BgUGDgEpHTMLJxC2BgYGBgZGRyz2dgBDEZ_jOwBifnF6UyMjAkOICEODgYGBkFBBgZHBwMDCAqYICVgYlBnsEIzmcAAA
+r.BT8HAAEgACAAChQeKDI8RlAAAAAAAQECR28AAQAAAAAA_wAFU2NvcmUBAABgQAEAAAAICAABARAQAQBAQDAwAAAAAP8AAAAAAAAAAAAFAAIAHwAyAAAAAAAAAAAAAA
+```
+
+**Chosen fragment** (`encodePayload`, compression wins here, 101 chars):
+```
+z.Y7VnZ2BUYFBg4BKR0zCycQtgYGBgYGRkcs9nYAQxGf4zsAYn5xelMjIwJDiAhDg4GBgZBQQYGRwcDAwgKmCAlYGJQZ7BCM5nAAA
 ```
 
 **Running `on_init` through `runHook`** (no browser, no World, just a
@@ -123,7 +122,7 @@ plain `ctx` object), starting from `globals=[0,0]`,
 
 ```js
 K.runHook(onInitBytecode, {
-  constants:[3.5], globals, self:null, a:null, b:null, input:0,
+  constants:[3.5], globals, self:null, a:null, b:null, inputs:[0,0,0,0],
   world:{cartFault:false}, findEntity:()=>null, spawn:()=>({id:0,props:[]}),
   getTile:()=>0, tileSurface:()=>0, getCheckpoint:()=>({x:0,y:0}),
   rng:Math.random, playSound:()=>{}, setTile:()=>{},

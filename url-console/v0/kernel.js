@@ -535,6 +535,19 @@ function encodeCart(cart){
   w.u8(cart.cartType); // advisory/display metadata only — never a runtime dispatch key, see DESIGN.md §14
   w.u8(cart.rngSeed);
   w.u8(cart.modeFlags);
+  // maxPlayers (DESIGN.md §79) — 1 (the default, and every cart before
+  // this round) means single-player; 2 opts into the multiplayer lobby.
+  // A real header field, not a modeFlags bit: modeFlags is documented
+  // (opcodes.md) as reserved entirely for cart-author use, an unrelated
+  // purpose to this runtime-dispatch-relevant field. A hard architectural
+  // ceiling for now, not a soft default — rollback (DESIGN.md §78) and
+  // the match UI (DESIGN.md §79) only support two peers in v1 — so an
+  // out-of-range value throws here rather than silently clamping, the
+  // same posture ByteWriter's own u8() already takes for a byte out of
+  // 0-255 range.
+  const maxPlayers = cart.maxPlayers === undefined ? 1 : cart.maxPlayers;
+  if(maxPlayers < 1 || maxPlayers > 2) throw new Error('encodeCart: maxPlayers must be 1 or 2 (got '+maxPlayers+') — multiplayer support is capped at 2 players in v1');
+  w.u8(maxPlayers);
   w.u16(cart.screenW);
   w.u16(cart.screenH);
   const pp = cart.paletteParams.slice(0,8); while(pp.length<8) pp.push(0);
@@ -659,15 +672,14 @@ function encodeCart(cart){
   return w.toUint8Array();
 }
 
-// Bumped from 3 to 4 for tilemap authoring's mapShapes[]/blankMap fields
-// (DESIGN.md §74) — new required bytes in the middle of the format (the
-// mapShapes count, read unconditionally right after the mapGenerator
-// block), not appendable without a version bump the way a genuinely
-// optional trailing field could be. Same no-compatibility-branch policy
-// every prior bump has used: this project is still pre-v1, and any cart
-// worth keeping can be decompiled under the old kernel and recompiled
-// fresh.
-const SUPPORTED_FORMAT_VERSIONS = [4];
+// Bumped from 4 to 5 for maxPlayers (DESIGN.md §79, Multiplayer round 4)
+// — one required byte inserted right after modeFlags, same "not
+// appendable without a version bump" reasoning as every field that's
+// bumped this before it (most recently mapShapes[]/blankMap, §74). Same
+// no-compatibility-branch policy every prior bump has used: this project
+// is still pre-v1, and any cart worth keeping can be decompiled under the
+// old kernel and recompiled fresh.
+const SUPPORTED_FORMAT_VERSIONS = [5];
 function decodeCart(bytes){
   const r = new ByteReader(bytes);
   const cart = {};
@@ -678,6 +690,7 @@ function decodeCart(bytes){
   cart.cartType = r.u8();
   cart.rngSeed = r.u8();
   cart.modeFlags = r.u8();
+  cart.maxPlayers = r.u8();
   cart.screenW = r.u16();
   cart.screenH = r.u16();
   cart.paletteParams = Array.from(r.bytesN(8));

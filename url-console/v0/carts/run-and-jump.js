@@ -442,7 +442,7 @@ function buildPlatformerCart(){
   const screenW = 160, screenH = 160; // square, matches every other cart — see DESIGN.md §18
 
   const cart = {
-    formatVersion: 4,
+    formatVersion: 5,
     name: 'Run & Jump', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 4, // advisory label only — see DESIGN.md §14
     // Terrain hue 205 (blue sky/platforms). Entity hue hints: ~32

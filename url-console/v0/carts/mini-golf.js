@@ -450,7 +450,7 @@ function buildMiniGolfCart(){
   ];
 
   const cart = {
-    formatVersion: 4,
+    formatVersion: 5,
     name: 'Mini Golf', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 2, // advisory label only — see DESIGN.md §14 (same "racer/golf" family label the actual racer uses)
     // Terrain hue 100 (green fairway). Entity hue hint ~357 (red) for

@@ -300,7 +300,7 @@ function buildFlappyCart(){
     'cddddddc','cddddddc','cddddddc','cccccccc',
   ]);
   const cart = {
-    formatVersion: 4,
+    formatVersion: 5,
     name: 'Flappy Bird', author: 'Urlcade', // URL envelope only, see DESIGN.md §34 — never reaches the binary format
     cartType: 63, // advisory label only — see DESIGN.md §14
     // Terrain hue 210 (blue) is the *sky* here, not pipes/ground the way
