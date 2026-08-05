@@ -60,6 +60,43 @@ function hashCartBytes(bytes){
   return h.toString(16).padStart(8,'0');
 }
 
+// Site-wide audio: one shared AudioContext for the whole page, not one
+// per World — every World's voices/one-shot sounds route through this
+// single context rather than each building its own, so there's one
+// thing for the mute toggle (index.html's speaker icon next to Tinker)
+// to suspend/resume regardless of how many carts or restarts happen
+// over a session. Defaults to *off*: `audioEnabled` only reads
+// `localStorage`'s prior opt-in, never assumes one, and nothing in this
+// file ever constructs an `AudioContext` while it's false — a
+// first-time visitor gets total silence, not muted-but-present audio
+// infrastructure, until they explicitly turn it on.
+let audioCtx = null;
+const AUDIO_ENABLED_KEY = 'urlcade_audio_enabled';
+let audioEnabled = false;
+try{ audioEnabled = localStorage.getItem(AUDIO_ENABLED_KEY) === '1'; }catch(e){}
+
+function isAudioEnabled(){ return audioEnabled; }
+// The one place `setAudioEnabled(true)` gets called is the mute toggle's
+// own click handler (main.js) — a guaranteed user gesture, satisfying
+// browser autoplay policy for the `AudioContext` this constructs on
+// first opt-in. Suspending/resuming the one shared context (rather than
+// zeroing every voice's gain individually) mutes/unmutes every
+// currently-playing sound on every cart at once, instantly, without
+// disturbing any of their actual gain/frequency/waveform state — a
+// toggle back on picks up exactly where a held note or an in-flight
+// TRIGGER_VOICE decay left off, not a state a cart's own logic ever
+// changed.
+function setAudioEnabled(enabled){
+  audioEnabled = enabled;
+  try{ localStorage.setItem(AUDIO_ENABLED_KEY, enabled ? '1' : '0'); }catch(e){}
+  if(enabled){
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    audioCtx.resume().catch(()=>{});
+  } else if(audioCtx){
+    audioCtx.suspend().catch(()=>{});
+  }
+}
+
 class World {
   constructor(cart){
     this.cart = cart;
@@ -76,13 +113,16 @@ class World {
     // persisted value on its very first tick.
     this.persist = new Array(24).fill(0);
     this.persistKey = null;
-    // Sound (DESIGN.md §72) — 4 persistent voices, index-addressed by the
-    // SET_VOICE_*/TRIGGER_VOICE opcodes. Each slot starts null and is
-    // lazily built (see _ensureVoice below) the first time a cart actually
-    // touches it, same "don't create an AudioContext until a cart makes a
-    // sound" discipline the old one-shot playSound() already used — a
-    // cart that's silent for its whole session never triggers an
-    // autoplay-policy prompt.
+    // Sound (DESIGN.md §72/§73) — 4 persistent voices, index-addressed by
+    // the SET_VOICE_*/TRIGGER_VOICE opcodes, one node graph per slot
+    // built lazily on first touch (see _ensureVoice below) against the
+    // one page-wide shared AudioContext (module-level `audioCtx`, not a
+    // per-World field) — voices themselves are still per-World so a
+    // fresh World's sounds don't fight over stale node state from a
+    // previous play, but the underlying audio output and the site-wide
+    // mute toggle only ever have one context to deal with. Nothing here
+    // constructs that context at all while the toggle is off — see
+    // `audioEnabled`/`setAudioEnabled` above the World class.
     this.voices = [null, null, null, null];
     try{
       this.persistKey = 'urlcade_persist_' + hashCartBytes(encodeCart(cart));
@@ -343,9 +383,10 @@ class World {
     return out;
   }
   playSound(id){
+    if(!audioEnabled) return;
     try{
-      if(!this._actx) this._actx = new (window.AudioContext||window.webkitAudioContext)();
-      const ctx = this._actx;
+      if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      const ctx = audioCtx;
       const o = ctx.createOscillator(), g = ctx.createGain();
       o.frequency.value = 220 + id*90;
       o.type = 'square';
@@ -366,9 +407,10 @@ class World {
   // needed, so "4 persistent voices" really does mean 4 nodes total per
   // voice, created once, not one per note.
   _ensureVoice(i){
+    if(!audioEnabled) return null; // let the caller's own try/catch (below) treat this the same as any other audio failure — see setVoiceFreq/etc.
     if(this.voices[i]) return this.voices[i];
-    if(!this._actx) this._actx = new (window.AudioContext||window.webkitAudioContext)();
-    const ctx = this._actx;
+    if(!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+    const ctx = audioCtx;
     if(!this._noiseBuffer){
       this._noiseBuffer = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const data = this._noiseBuffer.getChannelData(0);
@@ -424,7 +466,7 @@ class World {
       // audio thread next processes a render quantum, which a caller
       // reading `.value` back immediately (a test, or another opcode
       // this same tick) can't rely on.
-      v.mainGain.gain.cancelScheduledValues(this._actx.currentTime);
+      v.mainGain.gain.cancelScheduledValues(audioCtx.currentTime);
       v.mainGain.gain.value = gain;
     }catch(e){}
   }
@@ -441,7 +483,7 @@ class World {
   triggerVoice(voice){
     try{
       const v = this._ensureVoice(voice);
-      const ctx = this._actx;
+      const ctx = audioCtx;
       const now = ctx.currentTime;
       v.mainGain.gain.cancelScheduledValues(now);
       v.mainGain.gain.value = 0.05;
@@ -1322,4 +1364,5 @@ export {
   World, disposeGLTextures, renderMenu, startGame, stopGame, showMenu,
   pauseGame, resumeGame, getCurrentFragment,
   render, getWorld, isUsingGL, startLoop,
+  isAudioEnabled, setAudioEnabled,
 };

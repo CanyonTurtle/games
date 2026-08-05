@@ -586,9 +586,28 @@ async function main(){
   check('SET_VOICE_GAIN pops the stack value and routes (voice, gain) to ctx.setVoiceGain', JSON.stringify(voiceOpcodeDispatchResult.calls[2]) === JSON.stringify(['gain',1,1]), JSON.stringify(voiceOpcodeDispatchResult));
   check('TRIGGER_VOICE has no stack effect and routes voice to ctx.triggerVoice', JSON.stringify(voiceOpcodeDispatchResult.calls[3]) === JSON.stringify(['trigger',0]) && voiceOpcodeDispatchResult.ok, JSON.stringify(voiceOpcodeDispatchResult));
 
+  // Site-wide audio toggle (index.html's speaker icon next to Tinker) —
+  // defaults to off, and while off nothing here ever touches an
+  // AudioContext at all, not just "produces silence." Checked before
+  // anything below turns it on.
+  const audioOffByDefaultResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const enabledByDefault = K.isAudioEnabled();
+    w.setVoiceWave(0, 3);
+    w.setVoiceFreq(0, 523);
+    w.setVoiceGain(1, 0.4);
+    w.triggerVoice(2);
+    const stillNoVoices = w.voices.every(v => v === null);
+    return {enabledByDefault, stillNoVoices};
+  });
+  check('audio defaults to off (no prior localStorage opt-in)', audioOffByDefaultResult.enabledByDefault === false, JSON.stringify(audioOffByDefaultResult));
+  check('while off, voice opcodes are no-ops — no node graph gets built at all, not just silenced', audioOffByDefaultResult.stillNoVoices, JSON.stringify(audioOffByDefaultResult));
+
   const voiceWorldResult = await page.evaluate(() => {
     const K = window.__urlcadeDebug;
     const w = K.getWorld();
+    K.setAudioEnabled(true); // opt in — the rest of this block needs a real node graph to inspect
     const noVoicesYet = w.voices.every(v => v === null);
     w.setVoiceWave(0, 3); // sine
     w.setVoiceFreq(0, 523);
@@ -640,6 +659,33 @@ async function main(){
   check('Flappy: flapping triggers the flap voice (real on_input hook)', flappyVoiceResult.flapCalls === 1, JSON.stringify(flappyVoiceResult));
   check('Flappy: scoring triggers the score voice (real on_tick hook)', flappyVoiceResult.scoreCalls === 1, JSON.stringify(flappyVoiceResult));
   check('Flappy: crashing triggers the crash voice exactly once, not once per tick still overlapping (real on_collide hook)', flappyVoiceResult.crashCalls === 1 && !flappyVoiceResult.fault, JSON.stringify(flappyVoiceResult));
+
+  // The actual button, not just the programmatic API — clicking it flips
+  // state, persists to localStorage, and updates its own icon. Doesn't
+  // assume a particular starting state (earlier checks in this file
+  // already flipped the flag programmatically, which the button's own
+  // click handler is the only thing that resyncs its icon to) — instead
+  // reads whatever the button shows *before* each click and asserts each
+  // click flips it, consistently, in both directions.
+  const readAudioToggle = () => page.evaluate(() => ({
+    enabled: window.__urlcadeDebug.isAudioEnabled(),
+    icon: document.getElementById('audioToggleBtn').textContent,
+    pressed: document.getElementById('audioToggleBtn').getAttribute('aria-pressed'),
+    stored: localStorage.getItem('urlcade_audio_enabled'),
+  }));
+  const isConsistentlyOn = s => s.enabled === true && s.icon === '\u{1F50A}' && s.pressed === 'true' && s.stored === '1';
+  const isConsistentlyOff = s => s.enabled === false && s.icon === '\u{1F507}' && s.pressed === 'false' && s.stored === '0';
+  await page.click('#audioToggleBtn');
+  await page.waitForTimeout(50);
+  const afterFirstClick = await readAudioToggle();
+  check('clicking the audio toggle button flips it to a self-consistent state (icon, aria-pressed, isAudioEnabled, localStorage all agree)', isConsistentlyOn(afterFirstClick) || isConsistentlyOff(afterFirstClick), JSON.stringify(afterFirstClick));
+  await page.click('#audioToggleBtn');
+  await page.waitForTimeout(50);
+  const afterSecondClick = await readAudioToggle();
+  check('clicking it again flips back to the opposite state, still self-consistent', afterSecondClick.enabled === !afterFirstClick.enabled && (isConsistentlyOn(afterSecondClick) || isConsistentlyOff(afterSecondClick)), JSON.stringify({afterFirstClick, afterSecondClick}));
+  // Cleanup, not a check — leave audio off for the rest of the suite
+  // regardless of which parity the two clicks above landed on.
+  await page.evaluate(() => window.__urlcadeDebug.setAudioEnabled(false));
 
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts

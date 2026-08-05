@@ -98,6 +98,23 @@ async function boot(){
   goToMenu();
 }
 
+// Site-wide audio toggle (index.html's small speaker icon next to
+// Tinker) — one `localStorage`-backed on/off for every cart, defaulting
+// to off (see runtime.js's `audioEnabled`). Pure UI reflection here: the
+// actual mute/unmute and persistence both live in Runtime.setAudioEnabled.
+function updateAudioToggleUI(){
+  const btn = document.getElementById('audioToggleBtn');
+  const on = Runtime.isAudioEnabled();
+  btn.textContent = on ? '\u{1F50A}' : '\u{1F507}'; // 🔊 : 🔇
+  btn.title = on ? 'Sound is on — click to mute' : 'Sound is off by default — click to turn it on';
+  btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+document.getElementById('audioToggleBtn').addEventListener('click', () => {
+  Runtime.setAudioEnabled(!Runtime.isAudioEnabled());
+  updateAudioToggleUI();
+});
+updateAudioToggleUI();
+
 document.getElementById('backBtn').addEventListener('click', goToMenu);
 // startGame() re-decodes the current fragment from scratch and rebuilds
 // the World, re-running on_init — exactly what "start this game over"
@@ -176,4 +193,5 @@ window.__urlcadeDebug = {
   encodePayload: K.encodePayload, decodePayloadToBytes: K.decodePayloadToBytes,
   deflateRawCompress: K.deflateRawCompress, deflateRawDecompress: K.deflateRawDecompress,
   hasCompression: () => K.HAS_COMPRESSION,
+  isAudioEnabled: Runtime.isAudioEnabled, setAudioEnabled: Runtime.setAudioEnabled,
 };
