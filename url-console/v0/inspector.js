@@ -85,6 +85,17 @@ let selectedTileColor = {};
 // lastX, lastY} (last-painted pixel, so a slow drag doesn't re-write the
 // same pixel every pointermove) or null when nothing is being dragged.
 let tileDragState = null;
+// Tilemap shape editor state (DESIGN.md §75) — which cart.mapShapes[]
+// entry is selected, index or undefined. Only one map per cart (unlike
+// the sprite/tile editors, which are keyed by sprite/tile index), so
+// this is a plain value, not an object keyed by index.
+let selectedMapShapeIndex;
+// In-progress drag state for the map shape editor's canvas — same shape
+// as spriteDragState ({mode:'move'|'resize', shapeIndex, corner (resize
+// only), startPointer, startBox}), plus gridW/gridH (needed to clamp a
+// drag to the map's own bounds) since there's no single fixed sprite.w/h
+// to read them from at drag time the way the sprite editor does.
+let mapShapeDragState = null;
 
 // Accepts a full pasted URL, a bare fragment, or a raw payload string —
 // takes whatever comes after the last '#' if there is one, else the
@@ -736,11 +747,26 @@ function spriteHandleHitRadius(canvas, sprite){
   const rect = canvas.getBoundingClientRect();
   return 12 * sprite.w / rect.width;
 }
+// Picks the *closest* corner within radius, not the first one found in
+// array order — for a box much wider/taller than the hit radius on one
+// axis (a typical map shape, e.g. 5 tiles wide by 1 tall, radius ~1.5
+// tiles), two corners sharing that short axis are *both* within radius
+// of a click near either end, and returning the first match in
+// declaration order silently picks the wrong one (found via a map-shape
+// editor smoke test: dragging the "SE" handle of a 5×1 shape actually
+// grabbed the NE corner, since it's earlier in the array and the point
+// was within radius of both). Comparing squared distance resolves the
+// ambiguity correctly regardless of which axis is short.
 function hitTestHandle(box, x, y, radius){
+  let best = null, bestDistSq = Infinity;
   for(const [hx,hy] of [[box.x0,box.y0],[box.x1,box.y0],[box.x0,box.y1],[box.x1,box.y1]]){
-    if(Math.abs(x-hx) <= radius && Math.abs(y-hy) <= radius) return [hx===box.x0?'w':'e', hy===box.y0?'n':'s'].join('');
+    const dx = x-hx, dy = y-hy;
+    if(Math.abs(dx) <= radius && Math.abs(dy) <= radius){
+      const distSq = dx*dx + dy*dy;
+      if(distSq < bestDistSq){ bestDistSq = distSq; best = [hx===box.x0?'w':'e', hy===box.y0?'n':'s'].join(''); }
+    }
   }
-  return null;
+  return best;
 }
 function hitTestShapeBox(box, x, y){
   return x >= box.x0 && x <= box.x1 && y >= box.y0 && y <= box.y1;
@@ -994,7 +1020,11 @@ function renderInspectAssets(body, cart){
 }
 
 function renderInspectMap(cart){
-  if(cart.mapGenerator === 0 || !inspectWorld.map) return '<p class="inspect-empty">No map generator (mapGenerator = 0) — backdrop only.</p>';
+  // !inspectWorld.map (not cart.mapGenerator === 0) is the real "is there
+  // anything to show" test — mapGenerator:0 with mapShapes + blankMap
+  // declared (DESIGN.md §74) builds a real map same as any generator;
+  // mapGenerator:0 with no shapes is the only case that still has none.
+  if(!inspectWorld.map) return '<p class="inspect-empty">No map generator (mapGenerator = 0) — backdrop only.</p>';
   let html = '<div class="inspect-section-title">Generator params</div>';
   if(cart.mapGenerator === 1){
     const t = cart.track;
@@ -1008,17 +1038,339 @@ function renderInspectMap(cart){
     const p = cart.platform;
     html += table([['field','value'], ['grid height', p.gridH], ['start/min/max groundY', `${p.startGroundY} / ${p.minGroundY} / ${p.maxGroundY}`],
       ['tokens', p.tokens.length]]);
+  } else if(cart.mapGenerator === 0 && cart.blankMap){
+    const b = cart.blankMap;
+    html += table([['field','value'], ['grid', `${b.width} × ${b.height}`], ['fill tile', b.fillTileId]]);
   }
-  html += '<div class="inspect-section-title">Rendered map</div><div class="cfg-scroll"><div id="mapSlot"></div></div>';
-  setTimeout(() => {
-    const slot = document.getElementById('mapSlot');
-    if(!slot) return;
-    const mc = inspectWorld.mapCanvas;
-    mc.style.imageRendering = 'pixelated';
-    mc.style.maxWidth = 'none';
-    slot.appendChild(mc);
-  }, 0);
+  html += '<div class="inspect-section-title">Rendered map — drag a shape to move it, drag a corner to resize</div>';
+  html += '<div class="cfg-scroll">' + mapShapeEditorHtml() + '</div>';
   return html;
+}
+
+/* ============================================================
+   Tilemap shape editor (Logic tab, DESIGN.md §75) — the sprite shape
+   editor's exact select/move/resize/reorder/recolor interaction
+   (Sprite editor Stages 0-5, see the block comment above
+   clampShapeUnit), retargeted to tile-grid cells: coordinates are
+   whole tiles, not 1/8px sub-pixel units, and a shape's "color" is a
+   tile id (picked via a thumbnail popover, .map-tile-picker below)
+   instead of a palette swatch. Draws from inspectWorld.mapCanvas — the
+   real runtime rasterizer, already reflecting mapShapes composited in
+   (World's constructor runs applyMapShapes at load time) — so a drag
+   can never show a fill pattern the compiled cart wouldn't actually
+   produce.
+   ============================================================ */
+function getMapShapeBox(shape){
+  return {x0: shape.tileX0, y0: shape.tileY0, x1: shape.tileX1, y1: shape.tileY1};
+}
+// Normalizes min/max first (a resize dragged past its fixed opposite
+// corner flips naturally, same as the sprite editor's setShapeBox), then
+// rounds to whole tiles and clamps to the grid — every intermediate drag
+// position already snaps to a tile boundary, not just the final value.
+function setMapShapeBox(shape, box, gridW, gridH){
+  let x0 = Math.round(Math.min(box.x0,box.x1)), x1 = Math.round(Math.max(box.x0,box.x1));
+  let y0 = Math.round(Math.min(box.y0,box.y1)), y1 = Math.round(Math.max(box.y0,box.y1));
+  x0 = Math.max(0, Math.min(gridW-1, x0));
+  y0 = Math.max(0, Math.min(gridH-1, y0));
+  x1 = Math.max(x0+1, Math.min(gridW, x1));
+  y1 = Math.max(y0+1, Math.min(gridH, y1));
+  shape.tileX0 = x0; shape.tileY0 = y0; shape.tileX1 = x1; shape.tileY1 = y1;
+}
+
+function mapShapeEditorHtml(){
+  return `
+    <div class="map-shape-editor" id="mapShapeEditor">
+      <div class="map-shape-editor-canvas-wrap"><canvas id="mapShapeEditorCanvas"></canvas></div>
+      <div id="mapShapeListSlot"></div>
+      <div class="opcode-btns" style="margin-top:6px;"><button type="button" class="opcode-btn" id="mapShapeAddBtn">+ Shape</button></div>
+    </div>
+  `;
+}
+// Native tile-pixel size (8px/tile, no extra zoom multiplier the way the
+// sprite/tile editors need — a map grid is already much bigger than an
+// 8-16px sprite, shown inside a scrolling wrapper instead of shrunk to
+// fit, see index.html's own comment on .map-shape-editor-canvas-wrap).
+function redrawMapShapeEditor(){
+  const canvas = document.getElementById('mapShapeEditorCanvas');
+  if(!canvas || !inspectWorld.map) return;
+  const grid = inspectWorld.map.grid;
+  const gridH = grid.length, gridW = gridH ? grid[0].length : 0;
+  canvas.width = gridW * 8; canvas.height = gridH * 8;
+  const ctx = canvas.getContext('2d');
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(inspectWorld.mapCanvas, 0, 0);
+  ctx.strokeStyle = 'rgba(128,128,128,.25)'; ctx.lineWidth = 1;
+  for(let x=1;x<gridW;x++){ ctx.beginPath(); ctx.moveTo(x*8+0.5, 0); ctx.lineTo(x*8+0.5, canvas.height); ctx.stroke(); }
+  for(let y=1;y<gridH;y++){ ctx.beginPath(); ctx.moveTo(0, y*8+0.5); ctx.lineTo(canvas.width, y*8+0.5); ctx.stroke(); }
+
+  const shapes = lastParsedHeader.mapShapes || [];
+  const shape = (selectedMapShapeIndex !== undefined) ? shapes[selectedMapShapeIndex] : undefined;
+  if(shape){
+    const box = getMapShapeBox(shape);
+    const x0 = box.x0*8, y0 = box.y0*8, x1 = box.x1*8, y1 = box.y1*8;
+    ctx.strokeStyle = '#e0a030'; ctx.lineWidth = 2;
+    ctx.strokeRect(x0+1, y0+1, x1-x0-2, y1-y0-2);
+    const hs = 5;
+    ctx.fillStyle = '#e0a030';
+    for(const [hx,hy] of [[x0,y0],[x1,y0],[x0,y1],[x1,y1]]) ctx.fillRect(hx-hs, hy-hs, hs*2, hs*2);
+  }
+}
+
+// One row per shape — array order is stamp order (later shapes win on
+// overlap, see applyMapShapes in kernel.js), so up/down here is literally
+// "which shape wins" priority, the same "layer" framing the sprite
+// editor's own shape list already uses.
+function renderMapShapeListPanel(){
+  const slot = document.getElementById('mapShapeListSlot');
+  if(!slot) return;
+  const shapes = lastParsedHeader.mapShapes || [];
+  if(!shapes.length){
+    slot.innerHTML = '<p class="inspect-empty">No hand-authored shapes yet — add one below.</p>';
+    return;
+  }
+  slot.innerHTML = '<div class="shape-list">' + shapes.map((sh,j) => `
+    <div class="shape-row${j===selectedMapShapeIndex?' selected':''}" data-shape-index="${j}">
+      <span class="shape-row-label">Shape ${j} (${sh.tileX1-sh.tileX0}&times;${sh.tileY1-sh.tileY0} tiles)</span>
+      <div class="shape-row-color" id="mapShapeTileSlot${j}">${mapShapeTilePickerHtml(j)}</div>
+      <button type="button" class="shape-btn shape-move-up" data-dir="-1"${j===0?' disabled':''} title="Move up (stamped later = wins on overlap)">&#9650;</button>
+      <button type="button" class="shape-btn shape-move-down" data-dir="1"${j===shapes.length-1?' disabled':''} title="Move down">&#9660;</button>
+      <button type="button" class="shape-btn shape-delete" title="Delete">&#10005;</button>
+    </div>
+  `).join('') + '</div>';
+  wireMapShapeListPanel();
+}
+// Every handler re-fetches lastParsedHeader.mapShapes fresh at click/drag
+// time, never closing over a reference captured when this ran —
+// lastParsedHeader is wholesale-replaced on every successful recompile,
+// the same staleness hazard wireShapeListPanel's own comment documents
+// (and the exact bug §62 found the hard way in that editor).
+function wireMapShapeListPanel(){
+  const slot = document.getElementById('mapShapeListSlot');
+  if(!slot) return;
+  slot.querySelectorAll('.shape-row').forEach(row => {
+    const j = +row.dataset.shapeIndex;
+    row.addEventListener('click', (e) => {
+      if(e.target.closest('button') || e.target.closest('.map-tile-picker')) return;
+      selectedMapShapeIndex = j;
+      redrawMapShapeEditor();
+      renderMapShapeListPanel();
+    });
+    wireMapShapeTilePicker(j);
+    renderMapShapeTileThumb(j);
+  });
+  slot.querySelectorAll('.shape-move-up, .shape-move-down').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const shapes = lastParsedHeader.mapShapes;
+    const row = btn.closest('.shape-row');
+    const j = +row.dataset.shapeIndex;
+    const k = j + (+btn.dataset.dir);
+    if(k < 0 || k >= shapes.length) return;
+    const tmp = shapes[j]; shapes[j] = shapes[k]; shapes[k] = tmp;
+    if(selectedMapShapeIndex === j) selectedMapShapeIndex = k;
+    else if(selectedMapShapeIndex === k) selectedMapShapeIndex = j;
+    redrawMapShapeEditor();
+    renderMapShapeListPanel();
+    scheduleHeaderRecompile();
+  }));
+  slot.querySelectorAll('.shape-delete').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const shapes = lastParsedHeader.mapShapes;
+    const row = btn.closest('.shape-row');
+    const j = +row.dataset.shapeIndex;
+    shapes.splice(j, 1);
+    if(selectedMapShapeIndex === j) selectedMapShapeIndex = undefined;
+    else if(selectedMapShapeIndex > j) selectedMapShapeIndex--;
+    redrawMapShapeEditor();
+    renderMapShapeListPanel();
+    scheduleHeaderRecompile();
+  }));
+}
+
+// Trigger + popover tile picker — structurally identical to the entity
+// asset picker (entityAssetPickerHtml et al.) but its own class names
+// (.map-tile-*): the Entities section's own asset pickers and this one
+// can both be on screen on the Logic tab at once, and a page-global
+// selector would otherwise match one of each (the exact bug DESIGN.md
+// §65 found between the SPAWN operand picker and the first version of
+// the entity asset picker).
+function mapShapeTilePopoverGridHtml(){
+  const cart = inspectCartInfo.cart;
+  if(!cart.tiles.length) return '<p class="inspect-empty">No tiles in this cart yet.</p>';
+  // Tile id 0 is never a real grid value (ids are 1-based, tiles[id-1]) —
+  // popover items start at 1.
+  return `<div class="map-tile-grid">${cart.tiles.map((t,i) => `
+    <div class="map-tile-item" data-value="${i+1}" tabindex="0"><canvas id="mapTilePick${i+1}" width="1" height="1"></canvas><div>id ${i+1}</div></div>
+  `).join('')}</div>`;
+}
+function mapShapeTilePickerHtml(shapeIndex){
+  return `
+    <div class="map-tile-picker" id="mapShapeTilePicker${shapeIndex}">
+      <button type="button" class="map-tile-trigger" title="Change tile"><canvas id="mapShapeTileThumb${shapeIndex}" width="1" height="1"></canvas></button>
+      <div class="map-tile-popover" id="mapShapeTilePopover${shapeIndex}" hidden>${mapShapeTilePopoverGridHtml()}</div>
+    </div>
+  `;
+}
+function renderMapShapeTileThumb(shapeIndex){
+  const shape = lastParsedHeader.mapShapes[shapeIndex];
+  const c = document.getElementById('mapShapeTileThumb'+shapeIndex);
+  if(!c || !shape) return;
+  const src = (inspectWorld.tileCanvases||[])[shape.tileId-1];
+  if(!src){ c.width = 1; c.height = 1; return; }
+  c.width = src.width; c.height = src.height;
+  c.getContext('2d').drawImage(src, 0, 0);
+}
+function closeAllMapShapeTilePopovers(){
+  document.querySelectorAll('.map-tile-popover').forEach(p => { p.hidden = true; });
+}
+document.addEventListener('click', closeAllMapShapeTilePopovers);
+function wireMapShapeTilePicker(shapeIndex){
+  const picker = document.getElementById('mapShapeTilePicker'+shapeIndex);
+  if(!picker) return;
+  const trigger = picker.querySelector('.map-tile-trigger');
+  const popover = document.getElementById('mapShapeTilePopover'+shapeIndex);
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = !popover.hidden;
+    closeAllMapShapeTilePopovers();
+    popover.hidden = wasOpen;
+  });
+  (inspectWorld.tileCanvases||[]).forEach((s,i) => {
+    const c = document.getElementById('mapTilePick'+(i+1));
+    if(!c || !s) return;
+    c.width = s.width; c.height = s.height;
+    c.getContext('2d').drawImage(s, 0, 0);
+  });
+  popover.querySelectorAll('.map-tile-item').forEach(el => el.addEventListener('click', () => {
+    setHeaderPath(['mapShapes', shapeIndex, 'tileId'], +el.dataset.value);
+    popover.hidden = true;
+    renderMapShapeTileThumb(shapeIndex);
+    redrawMapShapeEditor();
+    scheduleHeaderRecompile();
+  }));
+}
+
+// Same coordinate-ratio technique as spriteEditorPointerCoords — no
+// letterboxing to account for (this canvas is never object-fit), so the
+// ratio of the canvas's actual pixel size to its displayed size is
+// enough to land a pointer event in tile-space, regardless of whether
+// the canvas is shown at native size (the common case here, unlike the
+// sprite editor's shrink-to-fit) or scrolled/zoomed by the browser.
+function mapShapeEditorPointerCoords(canvas, e){
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (e.clientX - rect.left) * canvas.width / rect.width / 8,
+    y: (e.clientY - rect.top) * canvas.height / rect.height / 8,
+  };
+}
+function mapShapeHandleHitRadius(canvas){
+  const rect = canvas.getBoundingClientRect();
+  return (12 * canvas.width / rect.width) / 8; // ~12 screen px, converted to tile units
+}
+// Reverse array order — topmost/last-stamped shape wins, matching
+// applyMapShapes's own stamping order.
+function pickMapShapeAt(shapes, x, y){
+  for(let j = shapes.length-1; j >= 0; j--){
+    if(hitTestShapeBox(getMapShapeBox(shapes[j]), x, y)) return j;
+  }
+  return -1;
+}
+
+function mapShapeEditorPointerDown(canvas, e){
+  const shapes = lastParsedHeader.mapShapes || [];
+  const grid = inspectWorld.map.grid;
+  const gridH = grid.length, gridW = gridH ? grid[0].length : 0;
+  const p = mapShapeEditorPointerCoords(canvas, e);
+  // A selected shape's own handles win over starting a new selection
+  // underneath them, same convention as the sprite editor.
+  if(selectedMapShapeIndex !== undefined && shapes[selectedMapShapeIndex]){
+    const box = getMapShapeBox(shapes[selectedMapShapeIndex]);
+    const corner = hitTestHandle(box, p.x, p.y, mapShapeHandleHitRadius(canvas));
+    if(corner){
+      canvas.setPointerCapture(e.pointerId);
+      mapShapeDragState = {mode:'resize', shapeIndex:selectedMapShapeIndex, corner, startBox:box, gridW, gridH};
+      return;
+    }
+  }
+  const hit = pickMapShapeAt(shapes, p.x, p.y);
+  if(hit === -1){
+    if(selectedMapShapeIndex !== undefined){
+      selectedMapShapeIndex = undefined;
+      redrawMapShapeEditor();
+      renderMapShapeListPanel();
+    }
+    return;
+  }
+  selectedMapShapeIndex = hit;
+  redrawMapShapeEditor();
+  renderMapShapeListPanel();
+  canvas.setPointerCapture(e.pointerId);
+  mapShapeDragState = {mode:'move', shapeIndex:hit, startPointer:p, startBox:getMapShapeBox(shapes[hit]), gridW, gridH};
+}
+function mapShapeEditorPointerMove(canvas, e){
+  if(!mapShapeDragState) return;
+  const shapes = lastParsedHeader.mapShapes || [];
+  const shape = shapes[mapShapeDragState.shapeIndex];
+  if(!shape){ mapShapeDragState = null; return; }
+  const {gridW, gridH} = mapShapeDragState;
+  const p = mapShapeEditorPointerCoords(canvas, e);
+  if(mapShapeDragState.mode === 'move'){
+    const dx = p.x - mapShapeDragState.startPointer.x, dy = p.y - mapShapeDragState.startPointer.y;
+    const b = mapShapeDragState.startBox;
+    setMapShapeBox(shape, {x0:b.x0+dx, y0:b.y0+dy, x1:b.x1+dx, y1:b.y1+dy}, gridW, gridH);
+  } else { // resize — recompute from the fixed opposite corner to the live pointer
+    const b = mapShapeDragState.startBox;
+    const fixedX = mapShapeDragState.corner[0] === 'w' ? b.x1 : b.x0;
+    const fixedY = mapShapeDragState.corner[1] === 'n' ? b.y1 : b.y0;
+    setMapShapeBox(shape, {x0:fixedX, y0:fixedY, x1:p.x, y1:p.y}, gridW, gridH);
+  }
+  redrawMapShapeEditor();
+  scheduleHeaderRecompile();
+}
+function mapShapeEditorPointerUp(){
+  if(mapShapeDragState){
+    renderMapShapeListPanel();
+    mapShapeDragState = null;
+  }
+}
+
+function addMapShape(){
+  if(!lastParsedHeader.mapShapes) lastParsedHeader.mapShapes = [];
+  const grid = inspectWorld.map.grid;
+  const gridH = grid.length, gridW = gridH ? grid[0].length : 0;
+  const w = Math.max(1, Math.min(3, gridW)), h = Math.max(1, Math.min(3, gridH));
+  const x0 = Math.max(0, Math.floor(gridW/2 - w/2)), y0 = Math.max(0, Math.floor(gridH/2 - h/2));
+  lastParsedHeader.mapShapes.push({tileX0:x0, tileY0:y0, tileX1:x0+w, tileY1:y0+h, tileId:1});
+  selectedMapShapeIndex = lastParsedHeader.mapShapes.length - 1;
+  redrawMapShapeEditor();
+  renderMapShapeListPanel();
+  scheduleHeaderRecompile();
+}
+
+function attachMapShapeEditor(){
+  if(!inspectWorld.map) return;
+  redrawMapShapeEditor();
+  renderMapShapeListPanel();
+  const canvas = document.getElementById('mapShapeEditorCanvas');
+  if(!canvas) return;
+  canvas.addEventListener('pointerdown', (e) => { e.preventDefault(); mapShapeEditorPointerDown(canvas, e); }, {passive:false});
+  canvas.addEventListener('pointermove', (e) => mapShapeEditorPointerMove(canvas, e));
+  canvas.addEventListener('pointerup', mapShapeEditorPointerUp);
+  canvas.addEventListener('pointercancel', mapShapeEditorPointerUp);
+  const addBtn = document.getElementById('mapShapeAddBtn');
+  if(addBtn) addBtn.addEventListener('click', addMapShape);
+}
+// Called from compileSourceText's success branch, alongside
+// refreshAssetCanvasesIfVisible — the same "recompile swaps inspectWorld
+// out from under an already-rendered tab" staleness §62 found for the
+// Assets tab applies here too: a debounced recompile lands well after
+// the drag that triggered it settles, and nothing else tells this
+// canvas to redraw with the fresh inspectWorld.mapCanvas.
+function refreshMapEditorIfVisible(){
+  if(inspectTab !== 'Logic' || !inspectCartInfo) return;
+  if(!document.getElementById('mapShapeEditorCanvas')) return;
+  redrawMapShapeEditor();
+  renderMapShapeListPanel();
 }
 
 /* ============================================================
@@ -1567,6 +1919,7 @@ function renderInspectLogic(body, cart){
   html += '<div class="inspect-section-title">Hooks</div><div id="hooksSlot"></div>';
   body.innerHTML = html;
   wireInspectOverview();
+  attachMapShapeEditor();
   renderEntityTypesPanel();
   renderInspectHooks(document.getElementById('hooksSlot'), cart);
 }
@@ -1683,6 +2036,7 @@ async function compileSourceText(){
       inspectCartInfo = {cart, payload: fragment, byteLen: bytes.length, charLen: fragment.length, name, author};
       updateTitle();
       refreshAssetCanvasesIfVisible();
+      refreshMapEditorIfVisible();
     } catch(err){
       // Rare — compileCartSource already round-trips through decodeCart
       // — but if the World itself still can't be built, say so and keep

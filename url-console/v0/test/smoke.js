@@ -1222,6 +1222,105 @@ async function main(){
   const entityTypeCountAfterDelete = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.entityTypes.length);
   check('deleting an entity type removes it and the recompiled cart reflects it', entityTypeCountAfterDelete === 3, entityTypeCountAfterDelete);
 
+  // 5a4. Tilemap shape editor (Logic tab, DESIGN.md §75) — Mini Golf
+  // already ships 2 real mapShapes entries (its own hole fixup, DESIGN.md
+  // §74): a 5-tile-wide fairway rect (index 0) and a 1-tile hole restamp
+  // (index 1). Exercises select/move/resize/reorder/recolor/add/delete
+  // against real cart data, not a synthetic fixture. Shape 0, not 1, is
+  // the drag target — a 1-tile shape's corner-handle hit radius (~12
+  // screen px, comfortably bigger than one 8px tile) covers its entire
+  // body, so clicking its center would register as a resize, not a move.
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.golf.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(200);
+  const golfShapesBefore = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes);
+  check('Mini Golf\'s Logic tab shows its 2 real mapShapes entries', golfShapesBefore.length === 2, JSON.stringify(golfShapesBefore));
+
+  await page.locator('#mapShapeEditorCanvas').scrollIntoViewIfNeeded();
+  const mapBox = await page.locator('#mapShapeEditorCanvas').boundingBox();
+  const shape0 = golfShapesBefore[0];
+  // Canvas is shown at native size (8px/tile), no CSS scaling — tile
+  // coords convert to screen coords with a flat *8 (see index.html's own
+  // comment on .map-shape-editor-canvas-wrap for why, unlike the sprite
+  // editor's shrink-to-fit canvas). Tile 21 (not the box center) — shape
+  // 1's own box sits centered inside shape 0's, so the true center hits
+  // shape 1 first (correctly — later/topmost shape wins on click, same
+  // as the stamping order itself); nothing is selected yet at this first
+  // click, so corner-handle proximity doesn't matter here.
+  await page.mouse.click(mapBox.x + 21*8, mapBox.y + 27.5*8);
+  await page.waitForTimeout(100);
+  const mapShapeSelectedAfterClick = await page.evaluate(() => document.querySelector('#mapShapeListSlot .shape-row.selected')?.dataset.shapeIndex);
+  check('clicking a map shape selects its row in the layer list', mapShapeSelectedAfterClick === '0', mapShapeSelectedAfterClick);
+
+  // Resize first, via the NW corner handle (not SE) — shape 0 sits near
+  // the bottom of Mini Golf's 30-row grid (rows 27-28), so growing
+  // downward/rightward from the SE corner runs straight into the grid's
+  // own bottom edge (setMapShapeBox clamps tileY1 to gridH) well before
+  // there's room for the move-drag right after to find a point clear of
+  // every corner handle. Growing up/left from NW instead has the whole
+  // rest of the grid to work with.
+  const nwX = mapBox.x + shape0.tileX0*8, nwY = mapBox.y + shape0.tileY0*8;
+  await page.mouse.move(nwX, nwY);
+  await page.mouse.down();
+  await page.mouse.move(nwX - 16, nwY - 40, {steps: 5}); // -2 tiles left, -5 tiles up
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const mapResizedShape = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes[0]);
+  check('dragging a corner handle resizes a map shape', mapResizedShape.tileX0 !== shape0.tileX0 || mapResizedShape.tileY0 !== shape0.tileY0, JSON.stringify(mapResizedShape));
+
+  // Move-drag from deep inside the now-larger shape — 3.5 tiles in from
+  // its left/top edges, comfortably clear (2+ tiles) of every corner
+  // handle in both directions, and well below shape 1's own single row
+  // so overlap with it is a non-issue here.
+  const moveFromX = mapBox.x + (mapResizedShape.tileX0+3.5)*8, moveFromY = mapBox.y + (mapResizedShape.tileY0+3.5)*8;
+  await page.mouse.move(moveFromX, moveFromY);
+  await page.mouse.down();
+  await page.mouse.move(moveFromX + 24, moveFromY, {steps: 5}); // 3 tiles right
+  await page.mouse.up();
+  await page.waitForTimeout(600);
+  const mapMovedShape = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes[0]);
+  check('dragging a map shape\'s body moves it, snapped to whole tiles, and the recompiled cart reflects it', mapMovedShape.tileX0 !== mapResizedShape.tileX0 && Number.isInteger(mapMovedShape.tileX0), JSON.stringify(mapMovedShape));
+
+  await page.click('#mapShapeAddBtn');
+  await page.waitForTimeout(600);
+  const afterMapAdd = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes);
+  check('"+ Shape" appends a new mapShapes entry', afterMapAdd.length === 3, JSON.stringify(afterMapAdd[2]));
+
+  await page.click('#mapShapeListSlot .shape-row[data-shape-index="2"] .shape-move-up');
+  await page.waitForTimeout(600);
+  const afterMapReorder = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes);
+  check('reordering a map shape flips array (stamp-)order', JSON.stringify(afterMapReorder[1]) === JSON.stringify(afterMapAdd[2]), JSON.stringify(afterMapReorder));
+
+  // The newly-added shape (now at index 1) — recolor it via the tile
+  // picker, a trigger+popover distinct from both the opcode palette's
+  // SPAWN picker and the entity-type asset picker (also both reachable
+  // on this same tab), each guarded against class-name collision the
+  // same way (DESIGN.md §65's own lesson, reused here on purpose).
+  await page.click('#mapShapeListSlot .shape-row[data-shape-index="1"] .map-tile-trigger');
+  await page.waitForTimeout(100);
+  const golfTileCount = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.tiles.length);
+  const tilePickerItemCount = await page.evaluate(() => document.querySelectorAll('#mapShapeListSlot .shape-row[data-shape-index="1"] .map-tile-item').length);
+  check('the map tile picker popover shows one thumbnail per tile in the cart', tilePickerItemCount === golfTileCount, JSON.stringify({tilePickerItemCount, golfTileCount}));
+  await page.click('#mapShapeListSlot .shape-row[data-shape-index="1"] .map-tile-item[data-value="3"]');
+  await page.waitForTimeout(600);
+  const recoloredMapShape = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes[1]);
+  check('picking a tile in the map tile picker sets the shape\'s tileId', recoloredMapShape.tileId === 3, JSON.stringify(recoloredMapShape));
+
+  await page.click('#mapShapeListSlot .shape-row[data-shape-index="1"] .shape-delete');
+  await page.waitForTimeout(600);
+  const afterMapDelete = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.mapShapes);
+  check('deleting a map shape removes it', afterMapDelete.length === 2, JSON.stringify(afterMapDelete));
+
+  // A cart with no map at all (Flappy: mapGenerator 0, no mapShapes)
+  // still shows the plain empty-state message, not a broken/empty editor.
+  await page.evaluate(() => { location.hash = 'debug:' + window.__urlcadeDebug.CARTS.flappy.fragment; });
+  await page.waitForTimeout(300);
+  await page.click('.inspect-tab[data-tab="Logic"]');
+  await page.waitForTimeout(200);
+  const noMapMsg = await page.evaluate(() => document.querySelector('.inspect-body .inspect-empty')?.textContent);
+  check('a cart with no map generator shows the empty-state message, not a broken editor', /No map generator/.test(noMapMsg || ''), noMapMsg);
+
   // 5b. Pointer input + on_draw immediate-mode drawing (DESIGN.md §36):
   // dragging across the canvas on the "Water the Plant" cart spawns real
   // water-drop entities via LOAD_POINTER_X/DOWN in on_input, which then
