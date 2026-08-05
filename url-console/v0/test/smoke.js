@@ -528,6 +528,36 @@ async function main(){
   check('Flappy: scoring past the previous best updates g_high_score and persists it (real on_tick hooks)', flappyPersistResult.highScoreAfterStep === 5 && !flappyPersistResult.fault, JSON.stringify(flappyPersistResult));
   check('Flappy: a fresh World for the same cart loads the persisted high score via on_init\'s own LOAD_PERSIST', flappyPersistResult.persistedHighScore === 5, JSON.stringify(flappyPersistResult));
 
+  // Mini Golf's own best-stroke-count persistence — lower is better,
+  // unlike Flappy's high score, and the "no record yet" sentinel (0) is
+  // itself part of what's being verified.
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'golf');
+  await page.waitForTimeout(250);
+  const golfPersistResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    const ball = w.entities.find(e => e.typeId === 0);
+    const swingStateG = 1, strokesG = 5, wonG = 6, holeXG = 7, holeYG = 8, bestG = 15; // GOLF_GLOBAL_NAMES
+    w.globals[bestG] = 0; // clean slate — "no record yet"
+    w.globals[wonG] = 0;
+    w.globals[swingStateG] = 2; // "in flight" — required for on_tick's physics/hole-check block to run at all
+    w.globals[strokesG] = 3;
+    // At rest, exactly on the hole — on_tick's own speed check (DIST(0,0,vx,vy) < STOP_EPS)
+    // and hole-distance check (DIST(ball, hole) < HOLE_RADIUS) both pass on this one step,
+    // the same real physics/win logic a slow final putt actually triggers in play.
+    ball.props[0] = w.globals[holeXG];
+    ball.props[1] = w.globals[holeYG];
+    ball.props[2] = 0; ball.props[3] = 0;
+    w.step();
+    const wonAfterStep = w.globals[wonG];
+    const bestAfterStep = w.globals[bestG];
+
+    const fresh = new K.World(w.cart); // simulates the next "play" of this same cart — on_init runs for real
+    return {wonAfterStep, bestAfterStep, persistedBest: fresh.globals[bestG], fault: w.cartFault};
+  });
+  check('Mini Golf: holing out sets g_won and records a new best-stroke count (real on_tick hooks)', golfPersistResult.wonAfterStep === 1 && golfPersistResult.bestAfterStep === 3 && !golfPersistResult.fault, JSON.stringify(golfPersistResult));
+  check('Mini Golf: a fresh World for the same cart loads the persisted best via on_init\'s own LOAD_PERSIST', golfPersistResult.persistedBest === 3, JSON.stringify(golfPersistResult));
+
   // 2. Debug on the currently-playing game: pauses (doesn't tear down) the
   // live world, shows all 3 tabs (Assets/Logic/Source), and Source starts
   // in a known-good compiled state matching the game's own fragment.

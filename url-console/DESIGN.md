@@ -2861,7 +2861,19 @@ Second feature out of the same multi-feature design pass §66 opened (sound, per
 
 Verified via `test/smoke.js`: the storage mechanism tested directly first, bypassing gameplay entirely — a written value round-trips through `localStorage` into a fresh `World` for the identical cart object; a different cart (Race Car) never sees Flappy's data, confirmed by both the value and the key itself differing; an edited clone of the same cart (one changed byte) also gets a fresh key rather than reading the old save. Then one end-to-end check through Flappy's own real hooks — a genuine spawned pipe entity (not a hand-set global) triggers `on_tick`'s scoring branch, confirms the new high score persists, and confirms a fresh `World` for that same cart loads it back via `on_init`'s own `LOAD_PERSIST`, not a test-only shortcut. The opcode-palette group-count check (added in §63) bumped 9 -> 10 for the new `Persistence` group, same mechanical update the entity-type-CRUD round's sprite-count check needed in §67.
 
-## 70. Open questions
+## 70. Mini Golf's own persisted best — a second cart, and the first "lower is better" record
+
+Short follow-up to §69: Flappy Bird's persisted high score was the only cart actually using `LOAD_PERSIST`/`STORE_PERSIST` — this round gives Mini Golf a persisted all-time best (fewest) stroke count, the same feature applied to a genuinely different shape of "record."
+
+**Reusing persist slot 0 is safe, and worth saying why rather than just doing it.** Each cart's `persist[]` is keyed by a hash of its own encoded bytes (§69), so Flappy's slot 0 (`PERSIST_HIGH_SCORE`) and Mini Golf's slot 0 (`PERSIST_BEST_STROKES`) never share a `localStorage` entry despite the same numeric index — there's no shared namespace to collide in, the same reason two carts' `globals[0]` have never meant the same thing either.
+
+**"Lower is better" needed a real sentinel for "no record yet," not just a zero-initialized value read as a score.** Flappy's high score starts at 0 and only ever goes up, so "0" and "no record" are the same state with no ambiguity. Golf's stroke count can't be 0 for a *real* completion (tee and hole are different checkpoints — reaching the hole always takes at least one real swing), which is exactly what makes 0 a safe, unambiguous "not set yet" sentinel here too, just for the opposite reason. The comparison in `on_tick`'s hole-out branch checks `g_best_strokes == 0 OR g_strokes < g_best_strokes` — the first clause only ever fires once, the very first hole-out this cart's `localStorage` entry has ever seen.
+
+**The HUD line uses `kind:2` (shown only while nonzero) specifically because of that sentinel** — `hudSpec`'s numeric-always (`kind:0`) would show a misleading "Best: 0" before the course has ever been finished once; `kind:2`'s existing "shown only while nonzero" behavior (already used elsewhere for flag-style lines) means the "Best: N" line simply doesn't exist yet on a first-ever play, matching what the sentinel actually means.
+
+Verified via `test/smoke.js`, same two-part shape as §69's Flappy checks but through Mini Golf's own real physics: a ball placed at rest exactly on the hole (velocity zeroed, position set to `g_hole_x`/`g_hole_y`) with `g_swing_state` forced to the in-flight state `on_tick`'s physics block requires, so a single `world.step()` exercises the actual speed-check and hole-distance-check branches rather than asserting against hand-set globals — confirms `g_won` sets and a new best (3 strokes) persists, then confirms a fresh `World` for that same cart loads it back via `on_init`'s own `LOAD_PERSIST`.
+
+## 71. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
