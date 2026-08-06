@@ -2027,14 +2027,47 @@ async function main(){
     restartHidden: getComputedStyle(document.getElementById('restartBtn')).display === 'none',
     worldAlive: !!window.__urlcadeDebug.getWorld(),
     fault: window.__urlcadeDebug.getWorld().cartFault,
+    multiplayerActive: window.__urlcadeDebug.getWorld().multiplayerActive,
   }));
   check('a peer joining restarts the game and hides the lobby modal (a real match is now playing, not just "connected")', !afterMatchStart.overlayActive, JSON.stringify({uiSyncResult, afterMatchStart}));
   check('the restart button hides during a synced match (no well-defined meaning yet, see multiplayer.js)', afterMatchStart.restartHidden, JSON.stringify(afterMatchStart));
   check('the synced match keeps running live (rAF-driven) without faulting', afterMatchStart.worldAlive && !afterMatchStart.fault, JSON.stringify(afterMatchStart));
+  check('a peer joining sets World.multiplayerActive (DESIGN.md §81, gates STORE_PERSIST)', afterMatchStart.multiplayerActive === true, JSON.stringify(afterMatchStart));
   await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
   await page.waitForTimeout(100);
-  const restartRestored = await page.evaluate(() => getComputedStyle(document.getElementById('restartBtn')).display !== 'none');
-  check('closing the lobby after a match restores the restart button', restartRestored);
+  const afterClose = await page.evaluate(() => ({
+    restartRestored: getComputedStyle(document.getElementById('restartBtn')).display !== 'none',
+    multiplayerActive: window.__urlcadeDebug.getWorld().multiplayerActive,
+  }));
+  check('closing the lobby after a match restores the restart button', afterClose.restartRestored, JSON.stringify(afterClose));
+  check('closing the lobby after a match clears World.multiplayerActive again (the World keeps playing, just no longer gated)', afterClose.multiplayerActive === false, JSON.stringify(afterClose));
+
+  // STORE_PERSIST gating itself (DESIGN.md §81), isolated from the match
+  // flow above — a tick that later gets rolled back by resimulateFrom()
+  // (DESIGN.md §78) can't take a localStorage write back the way it can
+  // in-memory state, so writes (not reads) are silently dropped for the
+  // duration of a match. Exercised directly via ctxBase.storePersist,
+  // the same callback STORE_PERSIST itself routes through — no need to
+  // assemble/run real bytecode to test the gate.
+  const persistGatingResult = await page.evaluate(() => {
+    const K = window.__urlcadeDebug;
+    const w = K.getWorld();
+    w.multiplayerActive = false;
+    w.persist[3] = 0;
+    w.ctxBase.storePersist(3, 111);
+    const wroteNormallyOutsideMatch = w.persist[3] === 111;
+
+    w.multiplayerActive = true;
+    w.ctxBase.storePersist(3, 222);
+    const writeSuppressedDuringMatch = w.persist[3] === 111; // unchanged — the 222 write never landed
+    const readStillWorksDuringMatch = w.ctxBase.loadPersist(3) === 111; // LOAD_PERSIST is unaffected, only writes are gated
+
+    w.multiplayerActive = false; // leave clean for whatever runs next
+    return { wroteNormallyOutsideMatch, writeSuppressedDuringMatch, readStillWorksDuringMatch };
+  });
+  check('STORE_PERSIST writes normally when a World is not in a multiplayer match', persistGatingResult.wroteNormallyOutsideMatch, JSON.stringify(persistGatingResult));
+  check('STORE_PERSIST silently no-ops while World.multiplayerActive is true', persistGatingResult.writeSuppressedDuringMatch, JSON.stringify(persistGatingResult));
+  check('LOAD_PERSIST is unaffected by multiplayerActive — only writes are gated, not reads', persistGatingResult.readStillWorksDuringMatch, JSON.stringify(persistGatingResult));
 
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of

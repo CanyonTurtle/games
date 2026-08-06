@@ -241,6 +241,12 @@ function stopSync(){
   matchGeneration++;
   setPerTickHook(null);
   activeSync = null;
+  // The World itself isn't torn down when a match ends (the player may
+  // keep playing solo on it afterward) — so its multiplayerActive flag
+  // (DESIGN.md §81, gates STORE_PERSIST) needs clearing explicitly here
+  // rather than going away with the rest of the match state.
+  const world = getWorld();
+  if(world) world.multiplayerActive = false;
   document.getElementById('restartBtn').style.display = '';
 }
 
@@ -271,6 +277,7 @@ async function beginSyncedMatch(session){
   if(generation !== matchGeneration) return; // superseded — the peer already left (or this side closed) while startGame() was in flight
   const world = getWorld();
   if(!world) return;
+  world.multiplayerActive = true; // gates STORE_PERSIST off for the match's duration, DESIGN.md §81
   activeSync = startMatchSync(session, world);
   setPerTickHook(activeSync.beforeTick);
   // Restarting mid-match has no well-defined meaning yet (both peers

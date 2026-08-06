@@ -115,7 +115,12 @@ value silently loading). No `PERSIST_NAMES` convention yet, the way
 same as `LOAD_SELF`/`STORE_SELF`'s raw prop indices. Reads `0` and
 discards writes silently if `localStorage` isn't available at all
 (private browsing, a sandboxed iframe) — never throws, never blocks a
-hook that touches it.
+hook that touches it. `STORE_PERSIST` is also a silent no-op for the
+whole duration of a multiplayer match (`World.multiplayerActive`) —
+a write from a tick that later turns out to have been mispredicted and
+gets rolled back has no way to be taken back once it's landed in
+`localStorage`, unlike in-memory state a snapshot can restore.
+`LOAD_PERSIST` is unaffected; only writes are gated.
 
 ## Sound
 
