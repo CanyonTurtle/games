@@ -118,6 +118,16 @@ Each entry: `{ kind, sourceKind, srcA, srcB, delta, suffixConstIdx, clamp, label
 - `sourceKind`: `0` reads `world.globals[srcA]` directly; `1` treats
   `globals[srcA]` as an entity handle (id) and reads that entity's
   `props[srcB]`.
+- During a multiplayer match (`maxPlayers: 2`, a connected peer), every
+  `sourceKind: 1` row reads `globals[srcA + world.localPlayerSlot]`
+  instead of `globals[srcA]` — each peer's own screen automatically shows
+  its own player's entity, not always slot 0's. `sourceKind: 0` rows are
+  never offset (they read a whole-world fact, the same on both screens).
+  This means a cart wanting a personalized HUD line must declare that
+  player's own state as two adjacent globals — slot 0's at `srcA`, slot
+  1's at `srcA + 1` — the same convention `camera.followGlobal` (below)
+  uses. `world.localPlayerSlot` is always `0` outside a match, so this is
+  a no-op for every single-player cart.
 - `kind`: `0` = numeric readout, always shown, as `"<label>: <value>"`
   (plus `" / <constants[suffixConstIdx]>"` if `suffixConstIdx !== 255`,
   and clamped to that constant first if `clamp` is truthy). `1` = flag
@@ -221,6 +231,10 @@ viewport on, or `255` for no camera (viewport stays pinned at world
 its own absolute screen-pixel coordinates rather than expecting to be
 scrolled). Center-on-entity math is
 `clamp(entity.x - screenW/2, clampMinX, clampMaxX)` per axis.
+During a multiplayer match, the entity id is actually read from
+`globals[followGlobal + world.localPlayerSlot]`, not `globals[followGlobal]`
+— see `hudSpec`'s `sourceKind: 1` note above for the same adjacent-globals
+convention this relies on, so each peer's camera centers on its own car.
 
 ## `aimLine` (optional, or `null`/omitted)
 

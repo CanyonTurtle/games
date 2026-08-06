@@ -446,7 +446,7 @@ async function main(){
   const lapFlashResult = await page.evaluate(() => {
     const w = window.__urlcadeDebug.getWorld();
     const player = w.entities.find(e => e.id === w.globals[0]);
-    w.globals[10] = 8; // g_lap_flash — one full strobe cycle (MOD 8) left
+    w.globals[11] = 8; // g_lap_flash — one full strobe cycle (MOD 8) left (index 11 since DESIGN.md §83 inserted g_car_player2 at index 1)
     const seenDuringFlash = new Set();
     for(let i = 0; i < 8; i++){ w.step(); seenDuringFlash.add(player.props[12]); }
     const afterFlash = player.props[12];
@@ -1015,16 +1015,20 @@ async function main(){
   }));
   check('unchecking drops the bit and its label from the recompiled cart, not just hides the input', (afterUncheckState.activeButtons & 8) === 0 && !afterUncheckState.hasLabel, JSON.stringify(afterUncheckState));
 
-  // Max players (DESIGN.md §79) — defaults to single-player, a select
-  // (not a free-number input) since 2 is a hard v1 ceiling, not a
-  // suggested default.
+  // Max players (DESIGN.md §79) — a select (not a free-number input)
+  // since 2 is a hard v1 ceiling, not a suggested default. Race Car is
+  // the cart loaded for this whole header-forms section (see the
+  // `debug:` hash switch above) and is itself a real maxPlayers:2 cart
+  // now (DESIGN.md §83), so the field should reflect that declared
+  // value rather than a single-player default that no longer applies
+  // to whatever cart happens to be loaded here.
   const maxPlayersBefore = await page.inputValue('#field-maxPlayers');
-  check('the max players field defaults to 1 (single-player)', maxPlayersBefore === '1', maxPlayersBefore);
-  await page.selectOption('#field-maxPlayers', '2');
+  check('the max players field reflects Race Car\'s own declared maxPlayers:2', maxPlayersBefore === '2', maxPlayersBefore);
+  await page.selectOption('#field-maxPlayers', '1');
   await page.waitForTimeout(600);
   const maxPlayersAfter = await page.evaluate(() => window.__urlcadeDebug.getInspectCartInfo().cart.maxPlayers);
-  check('picking "2 — multiplayer" reaches the recompiled cart', maxPlayersAfter === 2, maxPlayersAfter);
-  await page.selectOption('#field-maxPlayers', '1'); // leave state clean for whatever loads next
+  check('picking "1 — single-player" reaches the recompiled cart', maxPlayersAfter === 1, maxPlayersAfter);
+  await page.selectOption('#field-maxPlayers', '2'); // leave state matching Race Car's own real declared value
   await page.waitForTimeout(600);
 
   // Drift-proof round trip: hand-edit a field directly in the Source
@@ -1533,14 +1537,16 @@ async function main(){
   await page.waitForTimeout(200);
   const racerAiProgress = await page.waitForFunction(() => {
     const w = window.__urlcadeDebug.getWorld();
-    const ai1 = w.entities.find(e => e.id === w.globals[1] && e.active);
-    const ai2 = w.entities.find(e => e.id === w.globals[2] && e.active);
+    // globals[2]/[3] are g_car_ai1/g_car_ai2 (DESIGN.md §83 inserted
+    // g_car_player2 at index 1, shifting both AI handles down by one).
+    const ai1 = w.entities.find(e => e.id === w.globals[2] && e.active);
+    const ai2 = w.entities.find(e => e.id === w.globals[3] && e.active);
     return ai1 && ai2 && ai1.props[9] >= 8 && ai2.props[9] >= 8;
   }, {timeout: 30000}).then(() => ({reached: true, fault: false}))
     .catch(() => page.evaluate(() => {
       const w = window.__urlcadeDebug.getWorld();
-      const ai1 = w.entities.find(e => e.id === w.globals[1] && e.active);
-      const ai2 = w.entities.find(e => e.id === w.globals[2] && e.active);
+      const ai1 = w.entities.find(e => e.id === w.globals[2] && e.active);
+      const ai2 = w.entities.find(e => e.id === w.globals[3] && e.active);
       return {reached: false, fault: w.cartFault, cp1: ai1 && ai1.props[9], cp2: ai2 && ai2.props[9]};
     }));
   check('Race Car\'s AI cars navigate past both chicanes instead of looping a corner forever',
@@ -2068,6 +2074,79 @@ async function main(){
   check('STORE_PERSIST writes normally when a World is not in a multiplayer match', persistGatingResult.wroteNormallyOutsideMatch, JSON.stringify(persistGatingResult));
   check('STORE_PERSIST silently no-ops while World.multiplayerActive is true', persistGatingResult.writeSuppressedDuringMatch, JSON.stringify(persistGatingResult));
   check('LOAD_PERSIST is unaffected by multiplayerActive — only writes are gated, not reads', persistGatingResult.readStillWorksDuringMatch, JSON.stringify(persistGatingResult));
+
+  // Race Car as a real maxPlayers:2 cart (DESIGN.md §83). First: the
+  // cart itself opts in (no test-side patching needed), and both human
+  // cars actually respond to independent input slots — checked at the
+  // real spawn positions, before anything else moves either car off the
+  // track (grass is solid, DESIGN.md §45, so an off-track car parked
+  // mid-grid wouldn't be able to move at all regardless of input).
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'racer');
+  await page.waitForTimeout(250);
+  const racerMaxPlayersResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    return {
+      maxPlayers: D.getWorld().cart.maxPlayers,
+      btnVisible: getComputedStyle(document.getElementById('multiplayerBtn')).display !== 'none',
+    };
+  });
+  check('the shipped Race Car cart declares maxPlayers:2', racerMaxPlayersResult.maxPlayers === 2, JSON.stringify(racerMaxPlayersResult));
+  check('the Multiplayer button appears for the real Race Car cart, not just a test-patched one', racerMaxPlayersResult.btnVisible, JSON.stringify(racerMaxPlayersResult));
+
+  const twoPlayerDriveResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const w = D.getWorld();
+    const p1 = w.entities.find(e => e.id === w.globals[0]);
+    const p2 = w.entities.find(e => e.id === w.globals[1]);
+    const p1Start = {x: p1.props[0], y: p1.props[1]};
+    const p2Start = {x: p2.props[0], y: p2.props[1]};
+    w.inputs = [4, 4, 0, 0]; // both hold Gas (bit 2, value 4) — slot 0 and slot 1
+    for(let i = 0; i < 30; i++) w.step();
+    w.inputs = [0, 0, 0, 0];
+    return {
+      p1Moved: Math.hypot(p1.props[0]-p1Start.x, p1.props[1]-p1Start.y) > 5,
+      p2Moved: Math.hypot(p2.props[0]-p2Start.x, p2.props[1]-p2Start.y) > 5,
+      fault: w.cartFault,
+    };
+  });
+  check('Race Car: holding Gas on input slot 0 drives g_car_player (player 1)', twoPlayerDriveResult.p1Moved, JSON.stringify(twoPlayerDriveResult));
+  check('Race Car: holding Gas on input slot 1 independently drives g_car_player2 (player 2), not just player 1', twoPlayerDriveResult.p2Moved && !twoPlayerDriveResult.fault, JSON.stringify(twoPlayerDriveResult));
+
+  // Second: the generic camera/HUD localPlayerSlot offset (DESIGN.md
+  // §82) exercised against this real content — g_car_player (global 0)
+  // and g_car_player2 (global 1) are genuinely adjacent globals here,
+  // exactly the convention the engine change relies on. Repositions
+  // both cars off-track deliberately (this test only cares about camera
+  // math and HUD text, not driving) to clamp-safe, far-apart points so
+  // the camera's own clamp can't coincidentally land both slots on the
+  // same cameraX/Y and produce a false pass.
+  const localSlotOffsetResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const w = D.getWorld();
+    const p1 = w.entities.find(e => e.id === w.globals[0]);
+    const p2 = w.entities.find(e => e.id === w.globals[1]);
+    p1.props[0] = 300; p1.props[1] = 300;
+    p2.props[0] = 500; p2.props[1] = 500;
+    p1.props[10] = 1; // lap count (HUD's "Lap" line, srcB 10, delta:1 -> displays as 2)
+    p2.props[10] = 2; // displays as 3
+    w.localPlayerSlot = 0;
+    D.forceRender();
+    const slot0 = {cameraX: w.cameraX, cameraY: w.cameraY, hud: document.getElementById('hud').textContent};
+    w.localPlayerSlot = 1;
+    D.forceRender();
+    const slot1 = {cameraX: w.cameraX, cameraY: w.cameraY, hud: document.getElementById('hud').textContent};
+    w.localPlayerSlot = 0; // leave clean
+    D.forceRender();
+    return {slot0, slot1};
+  });
+  check('camera follows g_car_player at localPlayerSlot 0 and g_car_player2 at localPlayerSlot 1 (DESIGN.md §82)',
+    localSlotOffsetResult.slot0.cameraX !== localSlotOffsetResult.slot1.cameraX && localSlotOffsetResult.slot0.cameraY !== localSlotOffsetResult.slot1.cameraY,
+    JSON.stringify(localSlotOffsetResult));
+  check('the HUD\'s "Lap" line (sourceKind:1) shows each local player\'s own lap count, not always player 1\'s',
+    localSlotOffsetResult.slot0.hud.includes('Lap: 2') && localSlotOffsetResult.slot1.hud.includes('Lap: 3'),
+    JSON.stringify(localSlotOffsetResult));
 
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of

@@ -246,7 +246,7 @@ function stopSync(){
   // (DESIGN.md §81, gates STORE_PERSIST) needs clearing explicitly here
   // rather than going away with the rest of the match state.
   const world = getWorld();
-  if(world) world.multiplayerActive = false;
+  if(world){ world.multiplayerActive = false; world.localPlayerSlot = 0; }
   document.getElementById('restartBtn').style.display = '';
 }
 
@@ -278,6 +278,7 @@ async function beginSyncedMatch(session){
   const world = getWorld();
   if(!world) return;
   world.multiplayerActive = true; // gates STORE_PERSIST off for the match's duration, DESIGN.md §81
+  world.localPlayerSlot = session.playerSlot; // this peer's own camera/HUD offset, DESIGN.md §82
   activeSync = startMatchSync(session, world);
   setPerTickHook(activeSync.beforeTick);
   // Restarting mid-match has no well-defined meaning yet (both peers

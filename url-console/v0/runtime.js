@@ -174,6 +174,16 @@ class World {
     // long as this World's ticks can still be rolled back and
     // corrected.
     this.multiplayerActive = false;
+    // Which player slot (0 or 1) *this* peer's own screen is showing,
+    // set alongside multiplayerActive by beginSyncedMatch() — always 0
+    // for single-player (every followGlobal/HUD lookup below then reads
+    // exactly the slot the cart author wrote, unchanged from before this
+    // field existed). Presentation-only, deliberately never snapshotted/
+    // rolled back: the two peers' simulated globals must stay identical,
+    // but each peer's own *view* of them (which car the camera follows,
+    // whose lap count the HUD shows) is allowed, and meant, to differ —
+    // see updateCamera/renderHUD below (DESIGN.md §82).
+    this.localPlayerSlot = 0;
     // Sound (DESIGN.md §72/§73) — 4 persistent voices, index-addressed by
     // the SET_VOICE_*/TRIGGER_VOICE opcodes, one node graph per slot
     // built lazily on first touch (see _ensureVoice below) against the
@@ -1246,10 +1256,16 @@ function ilerpAngle(e, idx, alpha){
 // from the interpolated (not raw-tick) followed position, so panning is as
 // smooth as entity motion itself. Carts with no camera (followGlobal===255,
 // the default) get cameraX/Y stuck at 0 — identical to pre-camera behavior.
+// world.localPlayerSlot offsets followGlobal by 0 or 1 (single-player
+// carts always read slot 0, i.e. exactly cam.followGlobal itself) — a
+// maxPlayers:2 cart that wants each peer's camera centered on *their
+// own* car declares that car's globals adjacently (slot0's right after
+// followGlobal, slot1's the very next index), the same convention
+// renderHUD's sourceKind:1 rows below rely on (DESIGN.md §82).
 function updateCamera(alpha){
   const cart = world.cart, cam = cart.camera;
   if(!cam || cam.followGlobal === 255){ world.cameraX = 0; world.cameraY = 0; return; }
-  const id = world.globals[cam.followGlobal];
+  const id = world.globals[cam.followGlobal + world.localPlayerSlot];
   const e = world.entities.find(en => en.id === id);
   if(!e){ world.cameraX = 0; world.cameraY = 0; return; }
   const x = ilerp(e, 0, alpha) - canvas.width/2;
@@ -1469,7 +1485,14 @@ function renderHUD(){
   for(const line of cart.hudSpec){
     let raw;
     if(line.sourceKind === 0){ raw = world.globals[line.srcA] ?? 0; }
-    else { const e = world.entities.find(en => en.id === world.globals[line.srcA]); raw = e ? e.props[line.srcB] : 0; }
+    // sourceKind:1 rows are "about a specific entity" by construction —
+    // exactly the shape a maxPlayers:2 cart wants personalized per
+    // screen (each peer's own lap count, own finish placement), so these
+    // get the same localPlayerSlot offset as updateCamera's followGlobal
+    // above, using the identical adjacent-globals convention. sourceKind:0
+    // rows (race-over, a shared flash) are whole-world facts and are
+    // deliberately left unoffset — see DESIGN.md §82.
+    else { const e = world.entities.find(en => en.id === world.globals[line.srcA + world.localPlayerSlot]); raw = e ? e.props[line.srcB] : 0; }
     if(line.kind === 0){ // numeric readout, always shown
       let val = raw + (line.delta || 0);
       if(line.clamp && line.suffixConstIdx !== 255) val = Math.min(val, Math.round(cart.constants[line.suffixConstIdx]));

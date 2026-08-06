@@ -20,9 +20,14 @@ const RACER_CONST_NAMES = {
   CHECKPOINT_RADIUS:5, TOTAL_LAPS:6, AI_TURN_GAIN:7, PARTICLE_TTL:8, NUM_CHECKPOINTS:9,
   START_X:10, START_Y:11, BUMP_MIX:12, LAP_FLASH_DURATION:13,
 };
+// g_car_player2 sits immediately after g_car_player (DESIGN.md §82) —
+// runtime.js's camera/HUD local-player offset during a multiplayer match
+// reads globals[followGlobal + localPlayerSlot], so player 2's own car
+// handle has to be the very next global index, not just anywhere.
 const RACER_GLOBAL_NAMES = {
-  g_car_player:0, g_car_ai1:1, g_car_ai2:2, g_scratch:3, g_finish_counter:4,
-  g_race_over:5, g_cpx:6, g_cpy:7, g_friction:8, g_scratch2:9, g_lap_flash:10,
+  g_car_player:0, g_car_player2:1, g_car_ai1:2, g_car_ai2:3, g_scratch:4,
+  g_finish_counter:5, g_race_over:6, g_cpx:7, g_cpy:8, g_friction:9,
+  g_scratch2:10, g_lap_flash:11,
 };
 const RACER_SYM = {constants:RACER_CONST_NAMES, globals:RACER_GLOBAL_NAMES};
 
@@ -56,10 +61,17 @@ function racerInitCarBlock(handleName, typeId, xExpr, yExpr){
   `;
 }
 
+// Both human cars spawn as typeId 0 (the player color ramp) — the two
+// AI cars keep typeId 2 (DESIGN.md §48's second ramp) so color still
+// tells "human" from "AI" apart at a glance; telling the two humans'
+// own cars apart doesn't need a third color, since each peer's camera
+// (DESIGN.md §82) is always centered on its own car, never the other
+// player's (DESIGN.md §83).
 const RACER_HOOKS_SRC = {
   on_init: `
     ${racerInitCarBlock('g_car_player', 0, 'PUSHC START_X', 'PUSHC START_Y')}
-    ${racerInitCarBlock('g_car_ai1', 2, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -10\nADD')}
+    ${racerInitCarBlock('g_car_player2', 0, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -10\nADD')}
+    ${racerInitCarBlock('g_car_ai1', 2, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI -20\nADD')}
     ${racerInitCarBlock('g_car_ai2', 2, 'PUSHC START_X', 'PUSHC START_Y\nPUSHI 10\nADD')}
     PUSHI 0
     STOREG g_finish_counter
@@ -69,28 +81,35 @@ const RACER_HOOKS_SRC = {
     STOREG g_lap_flash
     HALT
   `,
+  // Two near-identical blocks, one per human player (LOAD_INPUT 0 / 1 —
+  // slot 0 is always this browser's own keys/touch, slot 1 is the synced
+  // remote peer's during a match and simply stays all-zero otherwise, so
+  // g_car_player2 just sits idle in solo play, DESIGN.md §83). Not
+  // factored into a shared subroutine — this VM has no CALL/RET, only
+  // JMP, so a shared block would need its own dispatch-by-handle
+  // plumbing for no real win at this size.
   on_input: `
     LOADG g_race_over
     JNZ done
     LOAD_INPUT 0
     TESTBIT 0
-    JZ chkright
+    JZ p1chkright
     LOADE g_car_player 8
     PUSHC TURN_RATE
     SUB
     STOREE g_car_player 8
-    chkright:
+    p1chkright:
     LOAD_INPUT 0
     TESTBIT 1
-    JZ chkaccel
+    JZ p1chkaccel
     LOADE g_car_player 8
     PUSHC TURN_RATE
     ADD
     STOREE g_car_player 8
-    chkaccel:
+    p1chkaccel:
     LOAD_INPUT 0
     TESTBIT 2
-    JZ done
+    JZ p2block
     LOADE g_car_player 8
     COS
     PUSHC ACCEL
@@ -105,6 +124,40 @@ const RACER_HOOKS_SRC = {
     LOADE g_car_player 3
     ADD
     STOREE g_car_player 3
+    p2block:
+    LOAD_INPUT 1
+    TESTBIT 0
+    JZ p2chkright
+    LOADE g_car_player2 8
+    PUSHC TURN_RATE
+    SUB
+    STOREE g_car_player2 8
+    p2chkright:
+    LOAD_INPUT 1
+    TESTBIT 1
+    JZ p2chkaccel
+    LOADE g_car_player2 8
+    PUSHC TURN_RATE
+    ADD
+    STOREE g_car_player2 8
+    p2chkaccel:
+    LOAD_INPUT 1
+    TESTBIT 2
+    JZ done
+    LOADE g_car_player2 8
+    COS
+    PUSHC ACCEL
+    MUL
+    LOADE g_car_player2 2
+    ADD
+    STOREE g_car_player2 2
+    LOADE g_car_player2 8
+    SIN
+    PUSHC ACCEL
+    MUL
+    LOADE g_car_player2 3
+    ADD
+    STOREE g_car_player2 3
     done:
     HALT
   `,
@@ -122,14 +175,19 @@ const RACER_HOOKS_SRC = {
     DUP
     STOREG g_lap_flash
     JNZ still_flashing
-    ; Countdown just reached 0 this frame — force the sprite back to
-    ; normal (sprites[0]) and stop, rather than leaving it at whatever
-    ; the strobe below last landed on.
+    ; Countdown just reached 0 this frame — force both human cars' sprites
+    ; back to normal (sprites[0]) and stop, rather than leaving either at
+    ; whatever the strobe below last landed on. Both, not just
+    ; g_car_player, since g_lap_flash is a shared whole-race event now
+    ; (either player crossing triggers it, see on_tick's skip_flash gate)
+    ; and there's no per-crosser record here to strobe selectively.
     PUSHI 0
     STOREE g_car_player 12
+    PUSHI 0
+    STOREE g_car_player2 12
     JMP chk_race_over
     still_flashing:
-    ; Strobe the player's own current assetIndex (props[12], 8 +
+    ; Strobe both human cars' current assetIndex (props[12], 8 +
     ; extFieldCount(4)) between normal (0) and carFlashShapes (3) every 4
     ; ticks — ~7.5Hz at 60Hz, fast enough to read as a flash rather than a
     ; slow color fade, for the whole LAP_FLASH_DURATION countdown.
@@ -141,12 +199,18 @@ const RACER_HOOKS_SRC = {
     JZ flash_frame
     PUSHI 0
     STOREE g_car_player 12
+    PUSHI 0
+    STOREE g_car_player2 12
     JMP chk_race_over
     flash_frame:
     PUSHI 3
     STOREE g_car_player 12
+    PUSHI 3
+    STOREE g_car_player2 12
     chk_race_over:
     LOADE g_car_player 11
+    JZ done
+    LOADE g_car_player2 11
     JZ done
     LOADE g_car_ai1 11
     JZ done
@@ -177,6 +241,10 @@ const RACER_HOOKS_SRC = {
     LOAD_SELF 7
     LOADG g_car_player
     CMPEQ
+    LOAD_SELF 7
+    LOADG g_car_player2
+    CMPEQ
+    OR
     JNZ skip_ai
     LOAD_SELF 9
     GET_CHECKPOINT
@@ -312,13 +380,20 @@ const RACER_HOOKS_SRC = {
     STORE_SELF 10
     ; This lap-complete branch runs for every car, AI included (this
     ; crossing isn't player-specific) — the "Lap complete!" HUD flash
-    ; should only ever be about the player's own crossing, so it's gated
-    ; separately here on prop 7 (self's own id) matching g_car_player,
-    ; same identity check on_tick already uses to decide whose input
-    ; drives this car at all.
+    ; should only ever fire for a human player's own crossing, so it's
+    ; gated separately here on prop 7 (self's own id) matching either
+    ; g_car_player or g_car_player2, same identity check the top of
+    ; on_tick already uses to decide whose input drives this car at all.
+    ; g_lap_flash is a single shared global (sourceKind:0, never offset
+    ; by localPlayerSlot — DESIGN.md §82), so this flash is a whole-race
+    ; event both peers see together, not "your own lap" specifically.
     LOAD_SELF 7
     LOADG g_car_player
     CMPEQ
+    LOAD_SELF 7
+    LOADG g_car_player2
+    CMPEQ
+    OR
     JZ skip_flash
     PUSHC LAP_FLASH_DURATION
     STOREG g_lap_flash
@@ -564,6 +639,12 @@ function buildRacerCart(){
     paletteParams: [220, 0, 8, 20, 12, 65, 178, 36],
     rngSeed: 17,
     modeFlags: 0,
+    // 2 humans + 2 AI cars, DESIGN.md §83 — a friend can join over the
+    // "Multiplayer" button (LOAD_INPUT 1 drives g_car_player2, on_input
+    // above); with nobody connected, slot 1 just reads all-zero and
+    // g_car_player2 sits idle at the line, same as any solo maxPlayers:2
+    // cart before a match starts.
+    maxPlayers: 2,
     screenW, screenH, // square viewport, see DESIGN.md §18 — the track
                       // itself (gridW*8 x gridH*8) is much bigger; the
                       // camera below is what makes that work instead of
