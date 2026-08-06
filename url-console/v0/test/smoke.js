@@ -1838,6 +1838,11 @@ async function main(){
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
       room.leave = () => { room.leaveCalled = true; };
+      // A 'connected' transition now (DESIGN.md §80) triggers a real
+      // match start, which calls session._room.makeAction('input') —
+      // needs a stand-in here even though this test doesn't inspect
+      // what's sent, or beginSyncedMatch() throws.
+      room.makeAction = () => ({ onMessage(){}, send(){} });
       return room;
     }
     const rooms = [];
@@ -1850,7 +1855,12 @@ async function main(){
     const roomIdMatches = rooms[0] && rooms[0].roomId === roomCodeShown;
 
     rooms[0].room.onPeerJoin('mockPeerId');
-    const connectedHtml = document.getElementById('mpBody').innerHTML;
+    // 'connected' now hides the modal and restarts into a real synced
+    // match almost immediately (DESIGN.md §80) rather than sitting on a
+    // static "Connected!" message — the overlay itself being hidden is
+    // the observable proof this happened; player-number/full-flow
+    // coverage lives in the gameplay-sync tests below instead.
+    const overlayHiddenOnConnect = !document.getElementById('mpOverlay').classList.contains('active');
 
     rooms[0].room.onPeerLeave('mockPeerId');
     const peerLeftHtml = document.getElementById('mpBody').innerHTML;
@@ -1862,7 +1872,7 @@ async function main(){
       hadHostJoinButtons: choiceHtml.includes('mpHostBtn') && choiceHtml.includes('mpJoinBtn'),
       roomCodeLen: (roomCodeShown || '').length,
       roomIdMatches,
-      connectedShowsPlayerNumber: /Player 1 of 2/.test(connectedHtml),
+      overlayHiddenOnConnect,
       peerLeftShowsDisconnect: /disconnected/i.test(peerLeftHtml),
       roomLeaveWasCalled: rooms[0].room.leaveCalled,
       overlayActiveAfterClose,
@@ -1870,7 +1880,7 @@ async function main(){
   });
   check('the lobby opens on a Host/Join choice screen', lobbyResult.hadHostJoinButtons, JSON.stringify(lobbyResult));
   check('hosting shows a room code that matches what was passed to joinRoomFn', lobbyResult.roomCodeLen > 0 && lobbyResult.roomIdMatches, JSON.stringify(lobbyResult));
-  check('a mock peer joining shows the connected state with the assigned player number', lobbyResult.connectedShowsPlayerNumber, JSON.stringify(lobbyResult));
+  check('a mock peer joining hides the lobby modal (a real match starts immediately, not a static "connected" message)', lobbyResult.overlayHiddenOnConnect, JSON.stringify(lobbyResult));
   check('that peer leaving shows the disconnected state (room stays open, not silently frozen)', lobbyResult.peerLeftShowsDisconnect, JSON.stringify(lobbyResult));
   check('closing the lobby actually leaves the underlying room, not just hides the modal', lobbyResult.roomLeaveWasCalled && !lobbyResult.overlayActiveAfterClose, JSON.stringify(lobbyResult));
 
@@ -1907,6 +1917,124 @@ async function main(){
     return { showsError: errorHtml.includes('mock signaling failure') };
   });
   check('a joinRoomFn that throws surfaces a visible error state instead of a silent no-op', mpErrorResult.showsError, JSON.stringify(mpErrorResult));
+
+  // 5j. Multiplayer gameplay sync (DESIGN.md §80) — startMatchSync wires
+  // a connected room's input messages into World.inputs[] and, on a
+  // misprediction, DESIGN.md §78's resimulateFrom(). Tested with two
+  // real, independent World instances "networked" via a pair of linked
+  // in-process mock rooms (send() on one side calls the other side's
+  // onMessage, optionally after an artificial delay) — deliberately not
+  // an attempt to route around this sandbox's lack of real network
+  // access, but the *better* test regardless: it's deterministic, and
+  // lets a misprediction be induced on purpose (an artificial delay
+  // guarantees at least one tick simulates on a guess before the real
+  // value arrives) rather than hoping a real, jittery connection
+  // happens to produce one during a test run.
+  const syncResult = await page.evaluate(async () => {
+    const D = window.__urlcadeDebug;
+    const { payload } = D.decodeCartUrl(D.CARTS['flappy'].fragment);
+    const cart = D.decodeCart(await D.decodePayloadToBytes(payload));
+    cart.maxPlayers = 2;
+
+    function makeLinkedPair(delayMs){
+      let onMessageA = null, onMessageB = null;
+      function makeRoom(isA){
+        return {
+          onPeerJoin: null, onPeerLeave: null, leave(){},
+          makeAction(name){
+            return {
+              onMessage(fn){ if(isA) onMessageA = fn; else onMessageB = fn; },
+              send(data){
+                const other = isA ? onMessageB : onMessageA;
+                if(other) setTimeout(() => other(data), delayMs);
+              },
+            };
+          },
+        };
+      }
+      return { roomA: makeRoom(true), roomB: makeRoom(false) };
+    }
+
+    async function runMatch(delayMs, scriptA, scriptB){
+      const w1 = new D.World(cart), w2 = new D.World(cart);
+      const { roomA, roomB } = makeLinkedPair(delayMs);
+      const syncA = D.startMatchSync({ playerSlot: 0, _room: roomA }, w1);
+      const syncB = D.startMatchSync({ playerSlot: 1, _room: roomB }, w2);
+      for(let i=0;i<scriptA.length;i++){
+        w1.inputs[0] = scriptA[i]; w2.inputs[1] = scriptB[i];
+        syncA.beforeTick(w1); syncB.beforeTick(w2);
+        w1.step(); w2.step();
+        await new Promise(r => setTimeout(r, Math.max(delayMs, 5) + 1));
+      }
+      await new Promise(r => setTimeout(r, 100)); // drain anything still in flight
+      return { w1, w2 };
+    }
+    function statesMatch(w1, w2){
+      return JSON.stringify(w1.globals) === JSON.stringify(w2.globals)
+        && JSON.stringify(w1.entities.map(e=>({id:e.id,typeId:e.typeId,props:e.props}))) === JSON.stringify(w2.entities.map(e=>({id:e.id,typeId:e.typeId,props:e.props})))
+        && w1.rngState === w2.rngState && w1.tick === w2.tick;
+    }
+
+    const scriptA = [0,0,16,0,0,16,0,0,0,16]; // player 0's (near-zero-latency) input each tick
+    const scriptB = [0,16,0,0,16,0,0,16,0,0]; // player 1's input each tick
+
+    const fast = await runMatch(0, scriptA, scriptB);
+    const fastConverged = statesMatch(fast.w1, fast.w2);
+
+    // 30ms of one-way delay at a 16.6ms tick guarantees at least one
+    // tick simulates on a repeat-last-input guess before the real value
+    // lands — this run only proves anything if a misprediction actually
+    // happened, not just that nothing crashed.
+    const delayed = await runMatch(30, scriptA, scriptB);
+    const delayedConverged = statesMatch(delayed.w1, delayed.w2);
+
+    return {
+      fastConverged, delayedConverged,
+      fastTick: fast.w1.tick, delayedTick: delayed.w1.tick,
+      fastFault: fast.w1.cartFault || fast.w2.cartFault,
+      delayedFault: delayed.w1.cartFault || delayed.w2.cartFault,
+    };
+  });
+  check('two independently-simulated Worlds converge to identical state with near-zero latency', syncResult.fastConverged && syncResult.fastTick === 10, JSON.stringify(syncResult));
+  check('two independently-simulated Worlds still converge after a real misprediction + resimulateFrom correction (30ms one-way delay)', syncResult.delayedConverged && syncResult.delayedTick === 10, JSON.stringify(syncResult));
+  check('neither the fast nor the delayed sync run ever faults either World', !syncResult.fastFault && !syncResult.delayedFault, JSON.stringify(syncResult));
+
+  // Full UI-driven path: hosting a match and a peer joining actually
+  // restarts the game (fresh, tick-0 World) and attaches live sync —
+  // not just the pure startMatchSync logic tested above in isolation.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const uiSyncResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => ({ onMessage(){}, send(){} });
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby(D.getWorld().cart, {joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    return {
+      overlayActiveRightAfterJoin: document.getElementById('mpOverlay').classList.contains('active'),
+    };
+  });
+  await page.waitForTimeout(400); // beginSyncedMatch() awaits Runtime.startGame()
+  const afterMatchStart = await page.evaluate(() => ({
+    overlayActive: document.getElementById('mpOverlay').classList.contains('active'),
+    restartHidden: getComputedStyle(document.getElementById('restartBtn')).display === 'none',
+    worldAlive: !!window.__urlcadeDebug.getWorld(),
+    fault: window.__urlcadeDebug.getWorld().cartFault,
+  }));
+  check('a peer joining restarts the game and hides the lobby modal (a real match is now playing, not just "connected")', !afterMatchStart.overlayActive, JSON.stringify({uiSyncResult, afterMatchStart}));
+  check('the restart button hides during a synced match (no well-defined meaning yet, see multiplayer.js)', afterMatchStart.restartHidden, JSON.stringify(afterMatchStart));
+  check('the synced match keeps running live (rAF-driven) without faulting', afterMatchStart.worldAlive && !afterMatchStart.fault, JSON.stringify(afterMatchStart));
+  await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
+  await page.waitForTimeout(100);
+  const restartRestored = await page.evaluate(() => getComputedStyle(document.getElementById('restartBtn')).display !== 'none');
+  check('closing the lobby after a match restores the restart button', restartRestored);
 
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of

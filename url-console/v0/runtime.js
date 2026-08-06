@@ -1497,6 +1497,18 @@ const STEP_MS = 1000/60;
 const MAX_ACCUMULATED_MS = STEP_MS * 2;
 let lastTime = null;
 let accumulator = 0;
+// Multiplayer's per-tick hook (DESIGN.md §80) — null in ordinary
+// single-player play. When set, called immediately before *each*
+// individual world.step() inside the while-loop below, not once per
+// rAF frame — the while-loop can run world.step() more than once in a
+// single frame (catching up after a slow frame), and each of those
+// ticks needs its own tag/prediction/send, not one shared snapshot of
+// "this frame's input" reused across all of them. Kept as a plain
+// settable hook rather than importing multiplayer.js here, the same
+// decoupling every other cross-module reach in this codebase uses
+// (runtime.js knows nothing about Inspector either).
+let perTickHook = null;
+function setPerTickHook(fn){ perTickHook = fn; }
 function loop(ts){
   if(running && world){
     if(lastTime === null) lastTime = ts;
@@ -1512,6 +1524,7 @@ function loop(ts){
     world.pointerX = pointerX; world.pointerY = pointerY; world.pointerDown = pointerDown;
     world.pointerXs[0] = pointerX; world.pointerYs[0] = pointerY;
     while(accumulator >= STEP_MS){
+      if(perTickHook) perTickHook(world);
       world.step();
       accumulator -= STEP_MS;
     }
@@ -1535,5 +1548,5 @@ export {
   pauseGame, resumeGame, getCurrentFragment,
   render, getWorld, isUsingGL, startLoop,
   isAudioEnabled, setAudioEnabled,
-  hashCartBytes,
+  hashCartBytes, setPerTickHook,
 };
