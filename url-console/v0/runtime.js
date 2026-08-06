@@ -167,6 +167,13 @@ class World {
     // persisted value on its very first tick.
     this.persist = new Array(24).fill(0);
     this.persistKey = null;
+    // Multiplayer (DESIGN.md §81) — false for every ordinary
+    // single-player game; set true by multiplayer.js's own
+    // beginSyncedMatch() for the duration of a synced match, gating
+    // STORE_PERSIST (ctxBase.storePersist above) off for exactly as
+    // long as this World's ticks can still be rolled back and
+    // corrected.
+    this.multiplayerActive = false;
     // Sound (DESIGN.md §72/§73) — 4 persistent voices, index-addressed by
     // the SET_VOICE_*/TRIGGER_VOICE opcodes, one node graph per slot
     // built lazily on first touch (see _ensureVoice below) against the
@@ -313,7 +320,16 @@ class World {
         cmd.x1 = x1; cmd.y1 = y1; cmd.x2 = x2; cmd.y2 = y2; cmd.color = color;
       },
       loadPersist: idx => self_.persist[idx] ?? 0,
-      storePersist: (idx, v) => { self_.persist[idx] = v; self_.savePersist(); },
+      // A silent no-op for the duration of a multiplayer match
+      // (DESIGN.md §81) — reads are unaffected, only writes. A
+      // STORE_PERSIST inside a tick that later turns out to have been
+      // mispredicted gets rolled back and replayed by
+      // resimulateFrom() (DESIGN.md §78), but localStorage isn't part
+      // of what snapshotState()/restoreState() cover — a write that
+      // already landed from a tick that, once corrected, never really
+      // happened that way would otherwise persist silently-wrong data
+      // with no way to take it back.
+      storePersist: (idx, v) => { if(self_.multiplayerActive) return; self_.persist[idx] = v; self_.savePersist(); },
     };
     // Reused across every hook call this session (self/a/b/inputs mutated in
     // place instead of Object.assign-ing a fresh object + copying the ~10
