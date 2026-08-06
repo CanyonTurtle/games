@@ -209,4 +209,5 @@ window.__urlcadeDebug = {
   // network this sandbox/CI can't reach (see multiplayer.js's own note).
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch,
+  startMatchSync: Multiplayer.startMatchSync,
 };

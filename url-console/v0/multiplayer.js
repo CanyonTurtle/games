@@ -1,22 +1,22 @@
 /* ============================================================
-   The Urlcade — multiplayer match signaling (DESIGN.md §79)
+   The Urlcade — multiplayer signaling, lobby, and gameplay sync
+   (DESIGN.md §79, §80)
 
-   Wraps the vendored Trystero (vendor/trystero/, torrent strategy — see
-   that directory's own README for why this one strategy/why vendored)
-   into the small surface this project's match UI actually needs: join
-   a room keyed by a short human-shareable code, get told when a peer
-   connects or disconnects, and know which of the (up to 2 — v1's hard
-   architectural cap, matching maxPlayers' own ceiling in kernel.js and
-   the rollback ring buffer's 2-player assumption, DESIGN.md §78) player
-   slots is "you."
-
-   Deliberately stops there. No gameplay/input syncing lives in this
-   file yet — wiring a connected room's makeAction() into World.inputs[]
-   and DESIGN.md §78's resimulateFrom() is real, separate work for a
-   later round, once there's an actual connected room to drive it with.
+   Two layers. First: wraps the vendored Trystero (vendor/trystero/,
+   torrent strategy — see that directory's own README for why this one
+   strategy/why vendored) into the small surface this project's match
+   UI needs — join a room keyed by a short human-shareable code, get
+   told when a peer connects or disconnects, and know which of the (up
+   to 2 — v1's hard architectural cap, matching maxPlayers' own ceiling
+   in kernel.js and the rollback ring buffer's 2-player assumption,
+   DESIGN.md §78) player slots is "you" (connectToRoom/hostMatch/
+   joinMatch, plus the lobby UI at the bottom of this file). Second:
+   startMatchSync wires a *connected* room's makeAction() into
+   World.inputs[] and DESIGN.md §78's resimulateFrom() — the actual
+   gameplay sync, once there's a connected room to drive it with.
    ============================================================ */
 import { joinRoom as trysteroJoinRoom, selfId } from './vendor/trystero/torrent.mjs';
-import { hashCartBytes } from './runtime.js';
+import { hashCartBytes, startGame, getCurrentFragment, getWorld, setPerTickHook } from './runtime.js';
 
 // kernel.js loads as a plain (non-module) <script> before this file —
 // see index.html's own script-tag comment — so its exports land on
@@ -102,6 +102,7 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     session.leave = () => {};
     return session;
   }
+  session._room = room; // startMatchSync (below) needs makeAction() once the match actually starts syncing
   room.onPeerJoin = peerId => {
     if(session.peerId) return; // a 3rd peer is outside v1's 2-player cap — see this file's own header comment; never becomes "the" opponent
     session.peerId = peerId;
@@ -131,6 +132,90 @@ function joinMatch(cart, roomCode, opts){
   return connectToRoom(cart, String(roomCode).trim().toUpperCase(), opts);
 }
 
+// How many ticks of input history to keep around — must match (or
+// exceed) World's own ROLLBACK_WINDOW (runtime.js, currently 8): a
+// correction for a tick older than that fails at the World level
+// regardless of whether this controller remembers it, so there's no
+// benefit to keeping more, and keeping less would make a correction
+// fail here even when the World could still have handled it.
+const SYNC_HISTORY_TICKS = 8;
+function pruneOld(map, currentTick){
+  for(const t of map.keys()) if(t <= currentTick - SYNC_HISTORY_TICKS) map.delete(t);
+}
+
+// Wires a connected session's room to an actual live World, syncing
+// gameplay input between the two peers (DESIGN.md §80) — everything
+// before this point (§79) only got two peers *finding* each other.
+//
+// Approach: every tick, each peer sends its own player-slot's input
+// mask, tagged with the tick number it's for, over a Trystero action.
+// The *local* player's input for a not-yet-confirmed remote tick is
+// never in question (it's this peer's own, recorded the instant it's
+// sent) — only the *remote* player's input for a tick that hasn't
+// arrived yet needs a guess, and the simplest predictor that works
+// here is "repeat the last confirmed value" (a held button usually
+// stays held/released from one 16ms tick to the next; standard for
+// small-scale rollback netcode, not a shortcut specific to this
+// project). When the real value for an already-simulated tick turns
+// out to differ from the guess, World.resimulateFrom() (DESIGN.md §78)
+// rewinds and replays with the corrected history — the entire reason
+// that machinery was built two rounds before there was a network to
+// drive it with.
+//
+// Returns a {stop} handle; runtime.js's setPerTickHook is what actually
+// invokes this every tick (wired by the caller, see main.js).
+function startMatchSync(session, world){
+  const localSlot = session.playerSlot;
+  const remoteSlot = localSlot === 0 ? 1 : 0;
+  const inputAction = session._room.makeAction('input');
+
+  const localInputHistory = new Map();   // tick -> this peer's own mask (always exact, it's our own input)
+  const remoteConfirmed = new Map();     // tick -> the real mask the remote peer actually sent for it
+  const remoteUsed = new Map();          // tick -> whatever mask was actually fed into world.inputs[remoteSlot] when that tick ran (confirmed if it had arrived in time, predicted otherwise)
+  let lastConfirmedRemoteTick = -1;      // guards against an out-of-order message overwriting a newer prediction basis with a stale one
+  let lastConfirmedRemoteMask = 0;
+
+  function inputsForTick(t){
+    const inputs = [0, 0, 0, 0];
+    inputs[localSlot] = localInputHistory.get(t) ?? 0;
+    const remote = remoteConfirmed.has(t) ? remoteConfirmed.get(t) : lastConfirmedRemoteMask;
+    remoteUsed.set(t, remote);
+    inputs[remoteSlot] = remote;
+    return inputs;
+  }
+
+  inputAction.onMessage(data => {
+    const { tick, mask } = data;
+    remoteConfirmed.set(tick, mask);
+    pruneOld(remoteConfirmed, world.tick);
+    if(tick >= lastConfirmedRemoteTick){ lastConfirmedRemoteTick = tick; lastConfirmedRemoteMask = mask; }
+    if(tick <= world.tick){
+      // Already simulated this tick, possibly on a guess — check.
+      const used = remoteUsed.get(tick);
+      if(used !== undefined && used !== mask){
+        world.resimulateFrom(tick, inputsForTick);
+        // A {ok:false} result (the tick has already fallen out of
+        // World's own rollback window) is a known, accepted gap this
+        // round doesn't close — see this file's own module comment and
+        // DESIGN.md §80. Nothing further to do locally either way: the
+        // world is now either corrected, or has silently drifted from
+        // the peer's, with no full-resync fallback yet to recover it.
+      }
+    }
+  });
+
+  function beforeTick(w){
+    const tick = w.tick + 1;
+    const localMask = w.inputs[localSlot];
+    localInputHistory.set(tick, localMask);
+    pruneOld(localInputHistory, tick);
+    inputAction.send({ tick, mask: localMask });
+    w.inputs = inputsForTick(tick);
+  }
+
+  return { beforeTick };
+}
+
 /* ============================================================
    Lobby UI — renders into index.html's #mpOverlay/#mpBody, wired once
    from main.js's boot (initMultiplayerUI). Kept in this file rather
@@ -142,14 +227,59 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 let activeSession = null; // the connectToRoom() session currently shown, or null before Host/Join is chosen
 let lobbyMode = 'choice'; // 'choice' | 'join-form' — only meaningful while activeSession is null
 let unsubscribeSession = null;
+let activeSync = null; // the startMatchSync() handle for the current 'connected' session, if any
+// Bumped every time beginSyncedMatch starts, and checked after its one
+// await — guards against a peer leaving (or this side closing the
+// lobby) while that restart is still in flight, which would otherwise
+// let a since-superseded call attach a sync/hook after the match it
+// belonged to has already ended. A plain counter rather than an
+// AbortController: nothing here needs to actually cancel startGame()
+// mid-flight, just to notice it's stale once it resolves.
+let matchGeneration = 0;
+
+function stopSync(){
+  matchGeneration++;
+  setPerTickHook(null);
+  activeSync = null;
+  document.getElementById('restartBtn').style.display = '';
+}
 
 function closeLobby(){
+  stopSync();
   if(activeSession) activeSession.leave();
   if(unsubscribeSession) unsubscribeSession();
   activeSession = null;
   unsubscribeSession = null;
   lobbyMode = 'choice';
   document.getElementById('mpOverlay').classList.remove('active');
+}
+
+// Fires once per 'connected' transition (including a reconnect after
+// 'peer-left' — see handleSessionStateChange below): restarts the game
+// fresh so both peers begin ticking from the exact same on_init state
+// (the World that was already running single-player has no reason to
+// agree with the peer's — different play sessions, different RNG
+// progress, different entity state), then wires the fresh World's
+// per-tick hook to this session's sync controller. Hides the modal
+// rather than closing it — closeLobby() would also leave the room.
+async function beginSyncedMatch(session){
+  document.getElementById('mpOverlay').classList.remove('active');
+  const fragment = getCurrentFragment();
+  if(!fragment) return;
+  const generation = ++matchGeneration;
+  await startGame(fragment);
+  if(generation !== matchGeneration) return; // superseded — the peer already left (or this side closed) while startGame() was in flight
+  const world = getWorld();
+  if(!world) return;
+  activeSync = startMatchSync(session, world);
+  setPerTickHook(activeSync.beforeTick);
+  // Restarting mid-match has no well-defined meaning yet (both peers
+  // would need to agree and re-sync, out of scope this round) — hidden
+  // rather than left to silently desync the match if clicked, the same
+  // "prevent the broken path outright" posture as the stray-3rd-peer
+  // guard in connectToRoom above. Restored by stopSync() once the match
+  // ends (peer-left or closeLobby()).
+  document.getElementById('restartBtn').style.display = 'none';
 }
 
 function statusDot(kind){ return `<span class="mp-status-dot mp-${kind}"></span>`; }
@@ -162,19 +292,19 @@ function renderSessionBody(session){
       <h3>${hosting ? 'Hosting a match' : 'Joining a match'}</h3>
       ${hosting ? `<p>Share this code with a friend:</p><div class="mp-room-code">${esc(session.roomCode)}</div>` : ''}
       <div class="mp-status">${statusDot('pending')} ${hosting ? 'Waiting for your friend to join…' : `Connecting to ${esc(session.roomCode)}…`}</div>
-      <p>Connection only, for now — synchronized gameplay is coming in a
-      future update. This proves two browsers can find and reach each
-      other with no server in between.</p>
+      <p>The match starts the moment they join — no account, no server,
+      just this browser talking directly to theirs.</p>
       <div class="mp-actions"><button id="mpCancelBtn">Cancel</button></div>
     `;
   }
   if(s === 'connected'){
+    // Normally never seen — beginSyncedMatch() hides the modal for
+    // this state almost immediately. Still rendered defensively in
+    // case that async transition (it awaits startGame()) hasn't
+    // finished by the time this runs.
     return `
       <h3>Connected!</h3>
-      <div class="mp-status">${statusDot('good')} You're Player ${session.playerSlot + 1} of 2.</div>
-      <p>Connection only, for now — synchronized gameplay is coming in a
-      future update.</p>
-      <div class="mp-actions"><button id="mpCancelBtn">Close</button></div>
+      <div class="mp-status">${statusDot('good')} You're Player ${session.playerSlot + 1} of 2 — starting the match…</div>
     `;
   }
   if(s === 'peer-left'){
@@ -242,12 +372,31 @@ function renderLobby(){
   document.getElementById('mpJoinBtn').addEventListener('click', () => { lobbyMode = 'join-form'; renderLobby(); });
 }
 
+// The single listener driving both the modal's contents and the actual
+// match lifecycle for as long as a session is active — including while
+// the modal itself is hidden (mid-match, see beginSyncedMatch), which
+// is exactly why this is a dedicated subscription rather than a
+// render-only one: 'peer-left' needs to stop the sync hook and bring
+// the (currently hidden) modal back, not just re-render whatever's
+// already showing.
+function handleSessionStateChange(state, session){
+  if(state === 'connected'){
+    beginSyncedMatch(session);
+    return;
+  }
+  if(state === 'peer-left'){
+    stopSync();
+    document.getElementById('mpOverlay').classList.add('active');
+  }
+  renderLobby();
+}
+
 let lobbyCart = null;
 let lobbyOpts = undefined;
 function startSession(role, code){
   activeSession = role === 'host' ? hostMatch(lobbyCart, lobbyOpts) : joinMatch(lobbyCart, code, lobbyOpts);
   activeSession._role = role;
-  unsubscribeSession = activeSession.onStateChange(renderLobby);
+  unsubscribeSession = activeSession.onStateChange(handleSessionStateChange);
   renderLobby();
 }
 
@@ -285,4 +434,5 @@ function initMultiplayerUI(){
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, appIdForCart, selfId,
   openLobby, closeLobby, updateMultiplayerButton, initMultiplayerUI,
+  startMatchSync,
 };
