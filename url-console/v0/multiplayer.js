@@ -132,6 +132,66 @@ function joinMatch(cart, roomCode, opts){
   return connectToRoom(cart, String(roomCode).trim().toUpperCase(), opts);
 }
 
+// A join link bundles this exact game with a room code, so opening it is
+// the recipient's whole "join" step — no separately-communicated code to
+// read off another screen and type in by hand. `&mp=<code>` is appended
+// directly to the fragment rather than carried as a real query string
+// (there's nowhere else to put it: everything after `#` is the fragment,
+// and a second `#` isn't legal in a URL) — safe to just concatenate,
+// since a cart fragment's own alphabet (base64url payload, URI-encoded
+// name/author, see kernel.js's encodeCartUrl) never contains `&`, so this
+// suffix can't be confused with anything the fragment itself produced.
+// parseJoinLinkHash is the exact inverse, used by main.js's boot() (and
+// exercised directly by test/smoke.js, without needing a live match to
+// verify the split itself).
+function parseJoinLinkHash(hash){
+  const m = hash.match(/&mp=([^&]+)$/);
+  return m ? { gameHash: hash.slice(0, m.index), code: m[1] } : { gameHash: hash, code: null };
+}
+function buildJoinLink(roomCode){
+  const fragment = getCurrentFragment();
+  if(!fragment) return null;
+  return location.origin + location.pathname + location.search + '#' + fragment + '&mp=' + roomCode;
+}
+
+// navigator.clipboard.writeText needs a secure context (https, or
+// localhost for local dev — both satisfied for every real deployment of
+// this site) but not always a user gesture depending on the browser;
+// either way this only ever runs from a real click. Falls back to the
+// old execCommand('copy') path — deprecated but still universally
+// supported — only when the modern API is missing entirely or itself
+// rejects (e.g. a permissions-policy blocking it in some embed contexts).
+async function copyToClipboard(text){
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    try{ await navigator.clipboard.writeText(text); return true; } catch(err){ /* fall through */ }
+  }
+  try{
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    return true;
+  } catch(err){
+    return false;
+  }
+}
+
+let copyFeedbackTimer = null;
+async function copyJoinLink(roomCode, btn){
+  const link = buildJoinLink(roomCode);
+  if(!link) return;
+  const original = btn.textContent;
+  const ok = await copyToClipboard(link);
+  if(!btn.isConnected) return; // the lobby re-rendered or closed while the (async) copy was in flight
+  clearTimeout(copyFeedbackTimer);
+  btn.textContent = ok ? 'Copied!' : 'Copy failed';
+  copyFeedbackTimer = setTimeout(() => { if(btn.isConnected) btn.textContent = original; }, 1500);
+}
+
 // How many ticks of input history to keep around — must match (or
 // exceed) World's own ROLLBACK_WINDOW (runtime.js, currently 8): a
 // correction for a tick older than that fails at the World level
@@ -298,11 +358,11 @@ function renderSessionBody(session){
     const hosting = session._role === 'host';
     return `
       <h3>${hosting ? 'Hosting a match' : 'Joining a match'}</h3>
-      ${hosting ? `<p>Share this code with a friend:</p><div class="mp-room-code">${esc(session.roomCode)}</div>` : ''}
+      ${hosting ? `<p>Send this link to a friend, or share the code below:</p><div class="mp-room-code">${esc(session.roomCode)}</div>` : ''}
       <div class="mp-status">${statusDot('pending')} ${hosting ? 'Waiting for your friend to join…' : `Connecting to ${esc(session.roomCode)}…`}</div>
       <p>The match starts the moment they join — no account, no server,
       just this browser talking directly to theirs.</p>
-      <div class="mp-actions"><button id="mpCancelBtn">Cancel</button></div>
+      <div class="mp-actions">${hosting ? '<button id="mpCopyLinkBtn" class="mp-primary">Copy Link</button>' : ''}<button id="mpCancelBtn">Cancel</button></div>
     `;
   }
   if(s === 'connected'){
@@ -338,6 +398,8 @@ function renderLobby(){
     body.innerHTML = renderSessionBody(activeSession);
     const cancelBtn = document.getElementById('mpCancelBtn');
     if(cancelBtn) cancelBtn.addEventListener('click', closeLobby);
+    const copyLinkBtn = document.getElementById('mpCopyLinkBtn');
+    if(copyLinkBtn) copyLinkBtn.addEventListener('click', () => copyJoinLink(activeSession.roomCode, copyLinkBtn));
     const backBtn = document.getElementById('mpBackBtn');
     if(backBtn) backBtn.addEventListener('click', () => {
       if(activeSession) activeSession.leave();
@@ -425,6 +487,20 @@ function openLobby(cart, opts){
   renderLobby();
 }
 
+// Auto-join counterpart to openLobby() — used when a join link (Copy
+// Link, above) already carries a room code, so the person who opened it
+// never sees the Host/Join choice screen at all: straight to
+// startSession('join', code), same as if they'd typed that exact code
+// into the join form themselves. main.js's boot() is the only real
+// caller (via parseJoinLinkHash on the incoming hash); test/smoke.js
+// reaches it directly with a mock joinRoomFn, same pattern as openLobby.
+function openLobbyAndJoin(cart, code, opts){
+  lobbyCart = cart;
+  lobbyOpts = opts;
+  document.getElementById('mpOverlay').classList.add('active');
+  startSession('join', code);
+}
+
 // Shows/hides index.html's "Multiplayer" topbar button based on whether
 // the currently-loaded cart opted into it — called from main.js right
 // after every successful Runtime.startGame().
@@ -441,6 +517,6 @@ function initMultiplayerUI(){
 
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, appIdForCart, selfId,
-  openLobby, closeLobby, updateMultiplayerButton, initMultiplayerUI,
-  startMatchSync,
+  openLobby, openLobbyAndJoin, closeLobby, updateMultiplayerButton, initMultiplayerUI,
+  startMatchSync, parseJoinLinkHash,
 };

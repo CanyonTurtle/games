@@ -1924,6 +1924,81 @@ async function main(){
   });
   check('a joinRoomFn that throws surfaces a visible error state instead of a silent no-op', mpErrorResult.showsError, JSON.stringify(mpErrorResult));
 
+  // Join links (DESIGN.md §84) — "Copy Link" bundles the current game's
+  // fragment with the hosting session's room code into one URL, so a
+  // friend's whole "join" step is opening it. First, the pure hash split
+  // parseJoinLinkHash does (no room/network involved at all).
+  const parseJoinLinkResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    return {
+      withCode: D.parseJoinLinkHash('Race%20Car,Urlcade,z.abc123&mp=WXYZ2'),
+      withoutCode: D.parseJoinLinkHash('Race%20Car,Urlcade,z.abc123'),
+      lowercaseIsPreserved: D.parseJoinLinkHash('somehash&mp=lowercase').code, // normalization is joinMatch's job, not the parser's
+    };
+  });
+  check('parseJoinLinkHash splits a game hash and its &mp= code apart', parseJoinLinkResult.withCode.gameHash === 'Race%20Car,Urlcade,z.abc123' && parseJoinLinkResult.withCode.code === 'WXYZ2', JSON.stringify(parseJoinLinkResult));
+  check('parseJoinLinkHash returns a null code and the hash unchanged when there is no &mp= suffix', parseJoinLinkResult.withoutCode.gameHash === 'Race%20Car,Urlcade,z.abc123' && parseJoinLinkResult.withoutCode.code === null, JSON.stringify(parseJoinLinkResult));
+  check('parseJoinLinkHash does not itself normalize case (joinMatch/connectToRoom already does)', parseJoinLinkResult.lowercaseIsPreserved === 'lowercase', JSON.stringify(parseJoinLinkResult));
+
+  // Second: clicking "Copy Link" while hosting actually copies a link
+  // that carries both the current game and the room code — spies on
+  // navigator.clipboard.writeText rather than reading the real clipboard
+  // back (real clipboard access needs OS-level permissions Playwright's
+  // headless Chromium doesn't reliably grant; spying on the call is both
+  // simpler and more direct: it tests exactly what this feature promises
+  // to do, not whether Chromium's clipboard plumbing itself works).
+  const copyLinkResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const fragment = D.getCurrentFragment();
+    const mockJoinRoomFn = () => ({ onPeerJoin: null, onPeerLeave: null, leave(){} });
+    let copiedText = null;
+    if(!navigator.clipboard) navigator.clipboard = {};
+    const originalWriteText = navigator.clipboard.writeText;
+    navigator.clipboard.writeText = (text) => { copiedText = text; return Promise.resolve(); };
+    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    document.getElementById('mpHostBtn').click();
+    const roomCode = document.querySelector('.mp-room-code').textContent;
+    const copyBtn = document.getElementById('mpCopyLinkBtn');
+    const hadCopyBtn = !!copyBtn;
+    copyBtn.click();
+    return new Promise(resolve => setTimeout(() => {
+      const feedbackText = copyBtn.textContent;
+      navigator.clipboard.writeText = originalWriteText;
+      D.closeMultiplayerLobby();
+      resolve({ hadCopyBtn, copiedText, fragment, roomCode, feedbackText });
+    }, 50)); // copyJoinLink awaits the (mocked, already-resolved) clipboard write before touching btn.textContent
+  });
+  check('the "Copy Link" button is shown while hosting', copyLinkResult.hadCopyBtn, JSON.stringify(copyLinkResult));
+  check('clicking "Copy Link" copies a URL containing the current game\'s own fragment', copyLinkResult.copiedText && copyLinkResult.copiedText.includes(copyLinkResult.fragment), JSON.stringify(copyLinkResult));
+  check('the copied link carries the hosting session\'s own room code as &mp=', copyLinkResult.copiedText && copyLinkResult.copiedText.endsWith('&mp=' + copyLinkResult.roomCode), JSON.stringify(copyLinkResult));
+  check('the button shows "Copied!" feedback after a successful copy', copyLinkResult.feedbackText === 'Copied!', JSON.stringify(copyLinkResult));
+
+  // Third: opening a join link (openLobbyAndJoin, main.js's boot() calls
+  // this when parseJoinLinkHash finds a code) skips the Host/Join choice
+  // screen entirely and joins the given room directly — the whole point
+  // of the link being "click it and you're in," not "click it, then
+  // still have to choose Join and retype a code."
+  const autoJoinResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const rooms = [];
+    const mockJoinRoomFn = (config, roomId) => { const room = {onPeerJoin:null, onPeerLeave:null, leave(){}}; rooms.push({roomId, room}); return room; };
+    D.openLobbyAndJoin(cart, 'QRSTU', {joinRoomFn: mockJoinRoomFn});
+    const bodyHtml = document.getElementById('mpBody').innerHTML;
+    const overlayActive = document.getElementById('mpOverlay').classList.contains('active');
+    D.closeMultiplayerLobby();
+    return {
+      neverShowedChoiceScreen: !bodyHtml.includes('mpHostBtn') && !bodyHtml.includes('mpJoinBtn'),
+      joinedRightRoom: rooms.length === 1 && rooms[0].roomId === 'QRSTU',
+      showsJoiningState: /Joining a match/i.test(bodyHtml),
+      overlayActive,
+    };
+  });
+  check('openLobbyAndJoin never shows the Host/Join choice screen', autoJoinResult.neverShowedChoiceScreen, JSON.stringify(autoJoinResult));
+  check('openLobbyAndJoin joins the exact room code the link carried', autoJoinResult.joinedRightRoom, JSON.stringify(autoJoinResult));
+  check('openLobbyAndJoin shows the same "joining" state a manual join would', autoJoinResult.showsJoiningState && autoJoinResult.overlayActive, JSON.stringify(autoJoinResult));
+
   // 5j. Multiplayer gameplay sync (DESIGN.md §80) — startMatchSync wires
   // a connected room's input messages into World.inputs[] and, on a
   // misprediction, DESIGN.md §78's resimulateFrom(). Tested with two
