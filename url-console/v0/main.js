@@ -86,14 +86,27 @@ async function boot(){
   }
   Inspector.closeInspector();
   if(hash){
+    // A join link (Multiplayer's own "Copy Link") tacks `&mp=<code>`
+    // onto an ordinary game fragment so opening it is the whole "join a
+    // match" step — see multiplayer.js's parseJoinLinkHash for why that
+    // split is unambiguous. gameHash is what startGame()/startInspect()
+    // below actually decode; code (if present) is handled after a
+    // successful load, not before — a malformed or stale code shouldn't
+    // stop the game itself from loading.
+    const { gameHash, code } = Multiplayer.parseJoinLinkHash(hash);
     try{
       // startGame() decodes the fragment directly — it doesn't need to be
       // one of the five shelf carts, just a validly-encoded one (anything
       // Debug's Source/Compile tabs produce, or a link a friend shared,
       // works exactly the same way). If it doesn't decode, fall into
       // Debug's own decode-error UI instead of duplicating that messaging.
-      if(await Runtime.startGame(hash)){ Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart); return; }
-      if(await Inspector.startInspect(hash)) return;
+      if(await Runtime.startGame(gameHash)){
+        const cart = Runtime.getWorld().cart;
+        Multiplayer.updateMultiplayerButton(cart);
+        if(code) Multiplayer.openLobbyAndJoin(cart, code);
+        return;
+      }
+      if(await Inspector.startInspect(gameHash)) return;
     } catch(err){
       console.error('boot failed:', err);
     }
@@ -210,4 +223,5 @@ window.__urlcadeDebug = {
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch,
   startMatchSync: Multiplayer.startMatchSync,
+  openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
 };
