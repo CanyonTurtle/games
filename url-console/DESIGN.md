@@ -3150,7 +3150,19 @@ Docs: none — an in-app debugging aid, not a change to any documented field, op
 
 Verified via `test/smoke.js`, using the same mock-`joinRoomFn` pattern as every other lobby test (mock rooms only ever implement `onPeerJoin`/`onPeerLeave`/`leave` — no `getPeers`, so the peer-state polling has to treat that as optional, not assumed present, which is exactly the kind of thing this round would have silently thrown on without a smoke test catching it first): the log is hidden on the initial choice screen; hosting reveals it and records the room code and `waiting-for-peer`; a peer joining records `connected`; the Copy button copies the log's exact text; closing the lobby hides and clears it; and a synchronously-throwing `joinRoomFn` (§ existing error-state test's own scenario) still reaches the log even though it lands on `'error'` before `onStateChange` has a listener attached to relay it normally — `startSession` logs the session's starting state directly for exactly this reason. Not verified against a real stalled connection from this environment (the sandbox can't reach the public trackers either, same limitation as ever) — next real-device retest is what this round exists to make legible.
 
-## 89. Open questions
+## 89. §88's diagnostics found relays reaching OPEN and then nothing — closing the one real gap left, tracker-level failures that only ever reached `console.warn`
+
+First real-device use of §88's connection log: both a hosting and a joining device showed all three signaling relays reaching `OPEN` within under a second, and then — nothing. No peer found, no state change, ever, on either side. That's a genuinely useful result even though it doesn't yet pin the root cause: it rules out a network-level block outright (both devices' WSS traffic to the trackers works fine), which narrows the problem to the rendezvous step itself — the two sides never finding each other's announce even though both are demonstrably talking to the same relay infrastructure.
+
+Re-reading `vendor/trystero/torrent.mjs`'s own tracker layer while investigating turned up a real, previously-invisible gap: its `warn()` helper already detects and reports exactly this class of failure — a relay responding to an announce with a `"failure reason"` or `"warning message"` — but only ever routes it to `console.warn`. That's silently discarded on a phone with no devtools attached, which is exactly the scenario §88 exists for. If the trackers are rejecting or malforming this app's announces for any reason, §88's diagnostics as shipped couldn't have shown it.
+
+**The fix**: capture `console.warn` calls while a diagnostic session is active, filtered to this library's own `${libName}: ...` prefix (so an unrelated page warning doesn't get misattributed as a multiplayer problem), and push matches into the same diag log every other line goes through. Calls through to the real `console.warn` too — additive, not a replacement, so anyone with devtools open still sees it there as well. Installed in `startDiag()`, uninstalled in `stopDiag()` — a permanent monkey-patch left behind after the lobby closes would be a real problem for every other unrelated warning on the page, not just this one.
+
+Docs: none — an in-app debugging aid, not a change to any documented field, opcode, or format.
+
+Verified via `test/smoke.js`: a Trystero-prefixed `console.warn` call reaches the log while a session is active; an unrelated warning (no `Trystero` prefix) does not, confirming the filter isn't just capturing everything; and `console.warn` is restored to the native function after `closeLobby()`, confirming no permanent patch is left behind to interfere with later test output or later real usage. Whether this actually explains the real stall is still open — next real-device retest is what tells us that, same as §88 itself.
+
+## 90. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
