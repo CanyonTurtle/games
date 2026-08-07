@@ -15,7 +15,7 @@
    World.inputs[] and DESIGN.md §78's resimulateFrom() — the actual
    gameplay sync, once there's a connected room to drive it with.
    ============================================================ */
-import { joinRoom as trysteroJoinRoom, selfId } from './vendor/trystero/torrent.mjs';
+import { joinRoom as trysteroJoinRoom, selfId, getRelaySockets } from './vendor/trystero/torrent.mjs';
 import { hashCartBytes, startGame, getCurrentFragment, getWorld, setPerTickHook } from './runtime.js';
 
 // kernel.js loads as a plain (non-module) <script> before this file —
@@ -358,6 +358,108 @@ let activeSync = null; // the startMatchSync() handle for the current 'connected
 // mid-flight, just to notice it's stale once it resolves.
 let matchGeneration = 0;
 
+// Diagnostics (DESIGN.md §88) — a "the connection just stalls" report
+// looks identical from this file's own state machine whether the cause
+// is a same-origin JS bug or a network that's silently blocking WSS to
+// the signaling relays: 'waiting-for-peer' either way, no error, no
+// visible difference. The only way to tell those apart from inside the
+// browser itself (no computer, no network-proxy app, just the phone
+// that's actually failing) is to surface what the two layers underneath
+// the lobby's own state are actually doing: whether any of the
+// vendored Trystero relay WebSockets (vendor/trystero/torrent.mjs's
+// getRelaySockets, module-level and shared across every joinRoom call,
+// exactly the sockets DESIGN.md §85 confirmed really attempt to open)
+// ever reach OPEN, and once a peer is found through them, whether the
+// peer-to-peer WebRTC connection progresses past ICE negotiation.
+//
+// Polls rather than hooking events directly: relay sockets are
+// recreated wholesale on reconnect (vendor/trystero/utils.mjs's
+// makeSocket does `new WebSocket(url)` again on close), so there's no
+// single long-lived socket object to hang a one-time listener off of —
+// polling readyState every tick and diffing against the last-seen value
+// per URL sidesteps needing to notice "a new socket replaced the old
+// one" at all.
+const DIAG_POLL_MS = 800;
+const DIAG_LOG_CAP = 60;
+const RELAY_READY_STATE_NAMES = ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'];
+let diagStartTime = 0;
+let diagLog = [];
+let diagPollTimer = null;
+let lastRelayStates = {};
+let lastPeerStates = {};
+
+function diagElapsed(){ return ((Date.now() - diagStartTime) / 1000).toFixed(1) + 's'; }
+function pushDiag(msg){
+  diagLog.push(`[+${diagElapsed()}] ${msg}`);
+  if(diagLog.length > DIAG_LOG_CAP) diagLog.shift();
+  renderDiag();
+}
+function pollDiag(){
+  const sockets = getRelaySockets();
+  for(const [url, socket] of Object.entries(sockets)){
+    const stateName = RELAY_READY_STATE_NAMES[socket.readyState] ?? String(socket.readyState);
+    if(lastRelayStates[url] !== stateName){
+      pushDiag(`relay ${url.replace('wss://', '')}: ${stateName}`);
+      lastRelayStates[url] = stateName;
+    }
+  }
+  const room = activeSession && activeSession._room;
+  // test/smoke.js's mock rooms (see this file's own openLobby/openLobbyAndJoin
+  // comment) only ever implement onPeerJoin/onPeerLeave/leave — no
+  // getPeers, no real RTCPeerConnection to inspect — so this has to be
+  // optional, not just "room exists."
+  if(room && typeof room.getPeers === 'function'){
+    for(const [peerId, conn] of Object.entries(room.getPeers())){
+      const shortId = peerId.slice(0, 6);
+      if(lastPeerStates[peerId + ':connection'] !== conn.connectionState){
+        pushDiag(`peer ${shortId}: connectionState ${conn.connectionState}`);
+        lastPeerStates[peerId + ':connection'] = conn.connectionState;
+      }
+      if(lastPeerStates[peerId + ':ice'] !== conn.iceConnectionState){
+        pushDiag(`peer ${shortId}: iceConnectionState ${conn.iceConnectionState}`);
+        lastPeerStates[peerId + ':ice'] = conn.iceConnectionState;
+      }
+    }
+  }
+}
+function startDiag(role, roomCode){
+  diagStartTime = Date.now();
+  diagLog = [];
+  lastRelayStates = {};
+  lastPeerStates = {};
+  pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)}`);
+  pollDiag();
+  clearInterval(diagPollTimer);
+  diagPollTimer = setInterval(pollDiag, DIAG_POLL_MS);
+}
+// Clears the log too (not just the timer) — closeLobby's the only
+// caller, and the next time the modal opens it should show the choice
+// screen with no stale diagnostics from whatever session just ended,
+// not leftover text sitting there until a new session happens to start.
+function stopDiag(){
+  clearInterval(diagPollTimer);
+  diagPollTimer = null;
+  diagLog = [];
+  renderDiag();
+}
+function renderDiag(){
+  const panel = document.getElementById('mpDiag');
+  const logEl = document.getElementById('mpDiagLog');
+  if(!logEl || !panel) return;
+  // '' (not 'block') would just clear the inline override and fall back
+  // to .mp-diag's own CSS default, which is display:none — so this has
+  // to set an explicit visible value, not merely "not none".
+  panel.style.display = diagLog.length ? 'block' : 'none';
+  logEl.textContent = diagLog.join('\n');
+  logEl.scrollTop = logEl.scrollHeight;
+}
+async function copyDiagLog(btn){
+  const ok = await copyToClipboard(diagLog.join('\n'));
+  const original = btn.textContent;
+  btn.textContent = ok ? 'Copied!' : 'Copy failed';
+  setTimeout(() => { if(btn.isConnected) btn.textContent = original; }, 1500);
+}
+
 function stopSync(){
   matchGeneration++;
   setPerTickHook(null);
@@ -373,8 +475,14 @@ function stopSync(){
 
 function closeLobby(){
   stopSync();
+  // activeSession.leave() below triggers its own 'left' state transition
+  // (session.leave -> setState('left') -> handleSessionStateChange ->
+  // pushDiag), so stopDiag() has to run *after* that settles, not
+  // before — otherwise that final transition would repopulate the log
+  // and un-hide the panel right after this function just cleared it.
   if(activeSession) activeSession.leave();
   if(unsubscribeSession) unsubscribeSession();
+  stopDiag();
   activeSession = null;
   unsubscribeSession = null;
   lobbyMode = 'choice';
@@ -511,6 +619,7 @@ function renderLobby(){
 // the (currently hidden) modal back, not just re-render whatever's
 // already showing.
 function handleSessionStateChange(state, session){
+  pushDiag(`session state: ${state}` + (session.error ? ` (${session.error})` : ''));
   if(state === 'connected'){
     beginSyncedMatch(session);
     return;
@@ -527,6 +636,14 @@ let lobbyOpts = undefined;
 function startSession(role, code){
   activeSession = role === 'host' ? hostMatch(lobbyCart, lobbyOpts) : joinMatch(lobbyCart, code, lobbyOpts);
   activeSession._role = role;
+  startDiag(role, activeSession.roomCode);
+  // connectToRoom sets the session's initial state (normally
+  // 'waiting-for-peer', or 'error' for a synchronously-throwing
+  // joinRoomFn) directly on the object rather than through setState() —
+  // onStateChange only fires on *future* transitions, so this starting
+  // state wouldn't otherwise ever reach the diag log the way every later
+  // transition does.
+  pushDiag(`session state: ${activeSession.state}` + (activeSession.error ? ` (${activeSession.error})` : ''));
   unsubscribeSession = activeSession.onStateChange(handleSessionStateChange);
   renderLobby();
 }
@@ -574,6 +691,8 @@ function initMultiplayerUI(){
   document.getElementById('mpOverlay').addEventListener('click', e => {
     if(e.target.id === 'mpOverlay') closeLobby(); // click on the scrim itself, not the card
   });
+  const copyDiagBtn = document.getElementById('mpDiagCopyBtn');
+  if(copyDiagBtn) copyDiagBtn.addEventListener('click', () => copyDiagLog(copyDiagBtn));
 }
 
 export {

@@ -1924,6 +1924,68 @@ async function main(){
   });
   check('a joinRoomFn that throws surfaces a visible error state instead of a silent no-op', mpErrorResult.showsError, JSON.stringify(mpErrorResult));
 
+  // Connection diagnostics (DESIGN.md §88) — a small always-present log
+  // surfacing relay/peer connection state directly in the lobby UI, for
+  // reading off a phone screen with no computer or network-proxy app.
+  // Exercises the same mock-room lifecycle as the state-machine test
+  // above, but reads #mpDiag/#mpDiagLog directly rather than going
+  // through window.__urlcadeDebug (this is plain DOM, no new debug
+  // surface needed).
+  const diagResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
+      room.leave = () => { room.leaveCalled = true; };
+      room.makeAction = () => ({ onMessage(){}, send(){} });
+      return room;
+    }
+    const rooms = [];
+    const mockJoinRoomFn = (config, roomId) => { const room = makeMockRoom(); rooms.push({roomId, room}); return room; };
+    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    const hiddenOnChoiceScreen = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
+    document.getElementById('mpHostBtn').click();
+    const logAfterHost = document.getElementById('mpDiagLog').textContent;
+    const visibleAfterHost = getComputedStyle(document.getElementById('mpDiag')).display !== 'none';
+    rooms[0].room.onPeerJoin('mockPeerId');
+    const logAfterConnect = document.getElementById('mpDiagLog').textContent;
+    // Spy on the clipboard the same way the Copy Link test does — real
+    // clipboard access needs OS permissions headless Chromium won't
+    // reliably grant.
+    let copiedText = null;
+    if(!navigator.clipboard) navigator.clipboard = {};
+    navigator.clipboard.writeText = (text) => { copiedText = text; return Promise.resolve(); };
+    document.getElementById('mpDiagCopyBtn').click();
+    D.closeMultiplayerLobby();
+    const hiddenAfterClose = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
+    const emptyAfterClose = document.getElementById('mpDiagLog').textContent === '';
+    return {
+      hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterConnect,
+      copiedText, hiddenAfterClose, emptyAfterClose,
+      roomCode: rooms[0] && rooms[0].roomId,
+    };
+  });
+  check('the connection log is hidden on the initial Host/Join choice screen (nothing attempted yet)', diagResult.hiddenOnChoiceScreen, JSON.stringify(diagResult));
+  check('hosting reveals the connection log and records the room code + waiting state', diagResult.visibleAfterHost && diagResult.logAfterHost.includes(diagResult.roomCode) && /waiting-for-peer/.test(diagResult.logAfterHost), JSON.stringify(diagResult));
+  check('a peer joining is recorded as a "connected" session-state line', /session state: connected/.test(diagResult.logAfterConnect), JSON.stringify(diagResult));
+  check('the Copy button on the connection log copies its exact text', diagResult.copiedText === diagResult.logAfterConnect, JSON.stringify(diagResult));
+  check('closing the lobby hides the connection log and clears it for next time', diagResult.hiddenAfterClose && diagResult.emptyAfterClose, JSON.stringify(diagResult));
+
+  // A synchronously-throwing joinRoomFn's error also has to reach the
+  // log, even though it lands on 'error' before onStateChange has a
+  // listener attached to relay it (see startSession's own comment).
+  const diagErrorResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const throwingJoinRoomFn = () => { throw new Error('mock signaling failure'); };
+    D.openMultiplayerLobby(cart, {joinRoomFn: throwingJoinRoomFn});
+    document.getElementById('mpHostBtn').click();
+    const log = document.getElementById('mpDiagLog').textContent;
+    D.closeMultiplayerLobby();
+    return { log };
+  });
+  check('a joinRoomFn that throws synchronously still reaches the connection log, not just the lobby UI', /error.*mock signaling failure/.test(diagErrorResult.log), JSON.stringify(diagErrorResult));
+
   // Join links (DESIGN.md §84) — "Copy Link" bundles the current game's
   // fragment with the hosting session's room code into one URL, so a
   // friend's whole "join" step is opening it. First, the pure hash split
