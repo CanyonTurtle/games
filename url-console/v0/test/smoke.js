@@ -1891,10 +1891,21 @@ async function main(){
       peerLeftShowsDisconnect: /disconnected/i.test(peerLeftHtml),
       roomLeaveWasCalled: rooms[0].room.leaveCalled,
       overlayActiveAfterClose,
+      turnConfig: rooms[0].config.turnConfig,
     };
   });
   check('the lobby opens on a Host/Join choice screen', lobbyResult.hadHostJoinButtons, JSON.stringify(lobbyResult));
   check('hosting shows a room code that matches what was passed to joinRoomFn', lobbyResult.roomCodeLen > 0 && lobbyResult.roomIdMatches, JSON.stringify(lobbyResult));
+  // TURN servers (DESIGN.md §95) — confirmed via a real two-device
+  // attempt that signaling succeeds but the WebRTC connection itself
+  // fails without one ("could not connect to peer X after exchanging
+  // SDP"). Regression guard: a config with at least one turn: URL and
+  // credentials actually reaches joinRoomFn, not just a documented
+  // intention that silently bit-rots.
+  check('connectToRoom passes at least one TURN server with credentials to joinRoomFn',
+    Array.isArray(lobbyResult.turnConfig) && lobbyResult.turnConfig.length > 0 &&
+    lobbyResult.turnConfig.every(s => /^turns?:/i.test(s.urls) && s.username && s.credential),
+    JSON.stringify(lobbyResult));
   check('a mock peer joining hides the lobby modal (a real match starts immediately, not a static "connected" message)', lobbyResult.overlayHiddenOnConnect, JSON.stringify(lobbyResult));
   check('that peer leaving shows the disconnected state (room stays open, not silently frozen)', lobbyResult.peerLeftShowsDisconnect, JSON.stringify(lobbyResult));
   check('closing the lobby actually leaves the underlying room, not just hides the modal', lobbyResult.roomLeaveWasCalled && !lobbyResult.overlayActiveAfterClose, JSON.stringify(lobbyResult));

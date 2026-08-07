@@ -3230,7 +3230,19 @@ Docs: none — an internal engine bug fix, not a change to any documented field/
 
 Verified via `test/smoke.js`: a new check drives this through the real capture path (`page.keyboard.down`, not a test directly assigning `world.inputs` the way the existing two-player-drive checks do) with `world.localPlayerSlot` set to 1, asserting the real keypress lands at `inputs[1]` and *not* `inputs[0]` — the exact regression, reproduced and now guarded against. Full suite otherwise unaffected (default `localPlayerSlot` keeps every prior single-player and host-perspective check passing unchanged).
 
-## 95. Open questions
+## 95. Confirmed: signaling succeeds, WebRTC/ICE itself fails — a TURN server via `turnConfig`, no player action required
+
+With §93 and §94's real bugs fixed, real cross-device testing resumed on the actual open question from §85-92: why do two independent devices' relay connections reach `OPEN`, with matching `appId`s, and still never find each other? §92's `onJoinError` wiring finally answered it directly: a real attempt logged `join error: could not connect to peer DSOsAvyw0yNfH84lxOSK after exchanging SDP; configure TURN servers with turnConfig or rtcConfig.iceServers`. Confirmed, not guessed: the two peers' *signaling* — the tracker-brokered offer/answer exchange this whole arc has been diagnosing — genuinely succeeds. Only the actual peer-to-peer WebRTC/ICE connection fails afterward, the standard signature of a NAT (cellular CGNAT, a restrictive network, possibly iCloud Private Relay, never definitively pinned to one specific cause and no longer needing to be) that STUN alone can't punch through.
+
+That's exactly the case a TURN relay exists to fix, and exactly why so much of this arc's earlier effort (tracker redundancy, `appId` verification, the diagnostics panel itself) was worth doing anyway: it systematically ruled out every *other* explanation (topic mismatch, tracker infra flakiness, this app's own code) before landing on the one a config change actually fixes, with the maintainer's own hard constraint in mind — no player should ever need to change a device setting to use Multiplayer.
+
+**The fix**: `connectToRoom` now passes `turnConfig` (a new module-level `TURN_CONFIG` constant) to `joinRoomFn` — Trystero's own first-class extension point for exactly this (`vendor/trystero/peer.mjs`: `iceServers: defaultIceServers.concat(turnConfig ?? [])`), no vendored-library changes needed. Uses Open Relay Project's (openrelayproject.org, served from metered.ca) publicly-documented static TURN credentials specifically because they're meant for open embedding — no account for this project, no account or setting for a player, the same constraint every fix in this arc has had to respect. Accepted tradeoff, deliberate for now: it's free, shared public infrastructure — not capacity reserved for this app — so its reliability under load is outside this project's control. If that becomes the actual bottleneck later, only the credentials filling `TURN_CONFIG` would need to change, not the wiring itself.
+
+Docs: none — a config addition to an already-vendored, already-documented library integration; no field/opcode/format changed.
+
+Verified via `test/smoke.js`: a new regression check asserts `connectToRoom` actually hands `joinRoomFn` a `turnConfig` array with at least one `turn:`-prefixed URL and real username/credential fields, so this can't silently rot back to STUN-only. Not yet re-verified against the exact real-device scenario that produced the original `onJoinError` — that retest is what finally closes this whole arc out, one way or the other.
+
+## 96. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
