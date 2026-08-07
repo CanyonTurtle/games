@@ -141,34 +141,50 @@ function joinMatch(cart, roomCode, opts){
 // separator, seen in essentially every real-world URL) so it's safe to
 // just concatenate.
 //
-// The fragment itself is a different story: kernel.js's encodeCartUrl
-// joins `encodeURIComponent(name) + ',' + encodeURIComponent(author) +
-// ',' + payload` with two literal, unescaped commas — completely fine
-// for this app's own `location.hash` routing (never parsed as a "real"
-// URL, just read back as an opaque string), but a bare comma sitting
-// inside what looks like a URL reads as ordinary sentence punctuation
-// to link-detection heuristics that aren't purely spec-following (iOS
-// iMessage's, observed directly: pasting a raw join link split it into
-// two separate tappable links right at the comma between the author and
-// the payload). The fix is to run the *whole* fragment through
-// `encodeURIComponent` once more before it goes in the link — turns
-// every comma, and the already-`%`-escaped name/author bytes, into a
-// single opaque run of letters/digits/%/-/_/./~ with no punctuation a
-// detector could mistake for a sentence boundary. `decodeURIComponent`
-// is the exact, lossless inverse (encodeURIComponent/decodeURIComponent
-// round-trip perfectly regardless of what's inside), so parseJoinLinkHash
-// just reverses it — the resulting gameHash is byte-identical to the
-// original fragment, ready for Runtime.startGame unchanged. A hash with
-// no `&mp=` suffix was never wrapped this way (it's an ordinary shelf/
-// debug/restart link) and is returned completely untouched.
+// The fragment itself needs real work: kernel.js's encodeCartUrl joins
+// `encodeURIComponent(name) + ',' + encodeURIComponent(author) + ',' +
+// payload` — completely fine for this app's own `location.hash` routing
+// (never parsed as a "real" URL, just read back as an opaque string),
+// but not safe to hand a third-party link detector unmodified. A first
+// attempt here just ran the whole fragment through one more
+// `encodeURIComponent`, reasoning that the two literal, unescaped commas
+// (name|author, author|payload) were the problem — that was real (iOS
+// iMessage's detector did split a raw link at exactly that comma) but
+// incomplete: it left `%`-escapes behind (encodeURIComponent leaves `%`
+// itself unescaped when re-run on an already-escaped string's own `%XX`
+// sequences... no — it escapes the `%` too, turning one `%20` into
+// `%2520` — MORE percent-signs, not fewer), and a cart whose name needs
+// no escaping at all (no spaces, no commas — "Corridor" vs "Race Car")
+// was observed to link fine even at nearly double the length, while
+// Race Car's kept splitting even after that fix landed. The common
+// factor isn't length or specifically commas — it's the `%` character
+// itself surviving into the link at all.
+//
+// The actual fix: encode the whole fragment as base64url (kernel.js's
+// own b64urlEncode/b64urlDecode, already used for the cart payload
+// itself — same alphabet, one encoding scheme for "safe to put in a
+// link," not two) instead of percent-encoding it. The fragment is
+// guaranteed pure ASCII by construction (encodeCartUrl already
+// URI-encodes name/author, and the payload is base64url), so treating
+// each character as one byte is lossless — no UTF-8 machinery needed.
+// The result is a run of nothing but letters, digits, `-`, and `_`: the
+// same character class the payload itself already uses, which has never
+// had a reported link-splitting issue. Longer than the percent-encoded
+// attempt (base64 costs ~33% over the original), but length demonstrably
+// isn't what iMessage's detector was reacting to here.
 function parseJoinLinkHash(hash){
   const m = hash.match(/&mp=([^&]+)$/);
-  return m ? { gameHash: decodeURIComponent(hash.slice(0, m.index)), code: m[1] } : { gameHash: hash, code: null };
+  if(!m) return { gameHash: hash, code: null };
+  const bytes = K.b64urlDecode(hash.slice(0, m.index));
+  let gameHash = '';
+  for(let i = 0; i < bytes.length; i++) gameHash += String.fromCharCode(bytes[i]);
+  return { gameHash, code: m[1] };
 }
 function buildJoinLink(roomCode){
   const fragment = getCurrentFragment();
   if(!fragment) return null;
-  return location.origin + location.pathname + location.search + '#' + encodeURIComponent(fragment) + '&mp=' + roomCode;
+  const bytes = Uint8Array.from(fragment, c => c.charCodeAt(0));
+  return location.origin + location.pathname + location.search + '#' + K.b64urlEncode(bytes) + '&mp=' + roomCode;
 }
 
 // navigator.clipboard.writeText needs a secure context (https, or
