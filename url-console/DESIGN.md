@@ -3190,7 +3190,21 @@ Docs: none — a config-only tweak to an already-documented library integration,
 
 Verified via `test/smoke.js`: full suite still passes unchanged (mock `joinRoomFn`s in every test only ever inspect the room code argument, never the config object, so widening `relayConfig` couldn't have broken anything there by construction) — this round has no automated way to verify the actual real-world effect, same limitation as every round in this arc. Next real-device retest tells us whether this alone was enough, or whether the Nostr-migration question needs to be raised.
 
-## 92. Open questions
+## 92. Widened redundancy retested, still stuck — this round instead wires up a diagnostic Trystero already had, `onJoinError`, that pins down exactly which side of the SDP exchange is failing
+
+§91's widened-redundancy retest showed 4 of its 5 relays reaching `OPEN` cleanly — the redundancy bump is doing what it was meant to — and still no peer, no tracker-level warning, nothing. At this point the maintainer raised the real product constraint this whole line of inquiry needed: whatever the fix turns out to be, it can't ask a player to change a device setting (e.g. iCloud Private Relay, floated as one hypothesis) just to use Multiplayer. Fair, and it reframes what's worth chasing: if the eventual fix is a TURN relay (the standard, transparent-to-the-user answer to "STUN alone can't find a path," regardless of *why* STUN failed — Private Relay, CGNAT, a restrictive network, doesn't matter), then confirming *whether* that's actually the failure mode is worth doing before committing to standing up TURN infrastructure, which is a real new dependency this project hasn't had before.
+
+Reading the vendored library directly (rather than continuing to guess from external symptoms) turned up exactly the tool needed: `joinRoom(config, roomId, callbacks)` accepts a third argument, and `callbacks.onJoinError` — already implemented inside `vendor/trystero/signal-handler.mjs`, never wired by this app — fires with a specific, pre-worded message: `"could not connect to peer X after exchanging SDP"`, precisely when two peers' *signaling* (the offer/answer SDP exchange, brokered through the tracker relays this whole arc has been diagnosing) succeeds but the actual WebRTC/ICE connection never completes. That is the exact distinction needed: confirms whether a real attempt is reaching the peer-to-peer layer at all (in which case TURN is the right, user-transparent fix) or failing even earlier, before signaling completes (in which case TURN wouldn't help and the tracker-infra angle from §89-91 would still be the live lead).
+
+Also found, as a direct byproduct of reading the same file: Trystero already configures default STUN servers (Google's public ones plus Cloudflare's) that this project never had to set up, and has a first-class `turnConfig` option on `joinRoom`'s config object for exactly this scenario — meaning adding TURN later, if confirmed necessary, needs no fork of the vendored library, just a config addition once a TURN provider is chosen.
+
+**This round**: `connectToRoom` now passes `{onJoinError: ({error, peerId}) => pushDiag(...)}` as `joinRoomFn`'s third argument, so that message reaches the same phone-readable diagnostics log every prior round in this arc has built on. No other behavior change.
+
+Docs: none — a diagnostic wiring addition, not a fix, and not a change to any documented field/opcode/format.
+
+Verified via `test/smoke.js`: the mock `joinRoomFn` now captures its third `callbacks` argument and the test invokes `onJoinError` directly (the same "call the callback directly rather than reproduce a real network failure" pattern `onPeerJoin` etc. already use throughout this file) with a message matching Trystero's actual wording, asserting it reaches the connection log. Whether a real device ever fires it — and thus whether TURN is actually the fix worth building — is what the next real-device retest settles.
+
+## 93. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
