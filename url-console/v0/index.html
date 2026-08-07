@@ -442,6 +442,26 @@
   .mp-status-dot.mp-pending{background:var(--accent);animation:mp-pulse 1.2s ease-in-out infinite;}
   @keyframes mp-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
+  /* Connection diagnostics (DESIGN.md §88) — a small always-present log
+     of what the signaling relays and (once found) the peer's WebRTC
+     connection are actually doing underneath the lobby's own
+     waiting/connected/error states, for reading straight off a phone
+     screen with no computer or network-proxy app needed. display:none
+     by default and toggled by multiplayer.js's renderDiag() — empty
+     until a session actually starts attempting a connection, so the
+     first Host/Join choice screen doesn't show a blank box. */
+  .mp-diag{display:none;margin-top:4px;border-top:1px solid var(--rule);padding-top:12px;}
+  .mp-diag-head{display:flex;align-items:center;justify-content:space-between;
+    margin-bottom:6px;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-dim);}
+  .mp-diag-head button{font-family:var(--mono);font-size:11px;padding:3px 9px;
+    border-radius:3px;border:1px solid var(--rule);background:var(--bg-elevated);
+    color:var(--ink);cursor:pointer;}
+  .mp-diag-head button:hover{border-color:var(--accent);color:var(--accent);}
+  .mp-diag-log{background:var(--bg);border:1px solid var(--rule);border-radius:3px;
+    padding:8px;font-size:10.5px;line-height:1.5;color:var(--ink-dim);
+    max-height:150px;overflow-y:auto;overflow-x:auto;white-space:pre-wrap;
+    word-break:break-word;margin:0;}
+
   #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
     z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
     text-shadow:0 1px 3px rgba(0,0,0,.7);}
@@ -519,6 +539,13 @@
   <div class="mp-card">
     <button id="mpCloseBtn" class="mp-close" title="Close">&times;</button>
     <div id="mpBody"></div>
+    <div id="mpDiag" class="mp-diag">
+      <div class="mp-diag-head">
+        <span>Connection log</span>
+        <button id="mpDiagCopyBtn" type="button">Copy</button>
+      </div>
+      <pre id="mpDiagLog" class="mp-diag-log"></pre>
+    </div>
   </div>
 </div>
 
