@@ -2413,6 +2413,28 @@ async function main(){
     localSlotOffsetResult.slot0.hud.includes('Lap: 2') && localSlotOffsetResult.slot1.hud.includes('Lap: 3'),
     JSON.stringify(localSlotOffsetResult));
 
+  // Third: real keyboard capture (runtime.js's loop(), not a test directly
+  // poking world.inputs like the two checks above) has to land at
+  // localPlayerSlot, not always index 0 — a real bug found via an actual
+  // two-tab multiplayer match (DESIGN.md §94): a peer occupying slot 1
+  // had every real keypress silently discarded, because loop() wrote
+  // them to inputs[0] regardless of which slot this device was playing.
+  // Holds a real key down (exercising the actual capture path, not a
+  // simulation of its result) with localPlayerSlot set to 1 first.
+  await page.evaluate(() => { window.__urlcadeDebug.getWorld().localPlayerSlot = 1; });
+  await page.keyboard.down('ArrowUp'); // Gas, bit 2 (value 4) — same key twoPlayerDriveResult's manual [4,4,0,0] mimics
+  await page.waitForTimeout(150); // a few real rAF frames through loop()
+  const slot1CaptureResult = await page.evaluate(() => {
+    const w = window.__urlcadeDebug.getWorld();
+    return { inputs0: w.inputs[0], inputs1: w.inputs[1] };
+  });
+  await page.keyboard.up('ArrowUp');
+  await page.evaluate(() => { window.__urlcadeDebug.getWorld().localPlayerSlot = 0; }); // leave clean for whatever runs next
+  check('real keyboard input lands at world.inputs[localPlayerSlot] (1 here), not always inputs[0]',
+    (slot1CaptureResult.inputs1 & 4) === 4, JSON.stringify(slot1CaptureResult));
+  check('with localPlayerSlot 1, inputs[0] is left alone rather than also catching the same keypress',
+    (slot1CaptureResult.inputs0 & 4) === 0, JSON.stringify(slot1CaptureResult));
+
   // 6. Pasting a malformed fragment into the shelf's box falls back to
   // Debug's decode-error UI (surfaced back on the shelf) instead of
   // silently doing nothing.
