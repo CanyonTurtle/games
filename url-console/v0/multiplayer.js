@@ -331,7 +331,19 @@ function startMatchSync(session, world){
     return inputs;
   }
 
-  inputAction.onMessage(data => {
+  // Trystero's public makeAction()'s onMessage is a getter/setter
+  // *property* (vendor/trystero/actions.mjs's makeActionImpl — `get
+  // onMessage(){...}, set onMessage(handler){...}`), assigned to, not
+  // called — the callable-method shape only exists on the *internal*
+  // actions room.mjs makes for its own ping/pong/signal/leave/handshake
+  // messages, which multiplayer.js never touches. Calling this as a
+  // function threw `inputAction.onMessage is not a function` the
+  // instant a real match actually reached 'connected' — invisible to
+  // every prior round of network diagnostics in this arc (which never
+  // got a real connection this far), and invisible to test/smoke.js's
+  // own mock rooms too, since their `onMessage(){}` stubs encoded the
+  // exact same wrong assumption.
+  inputAction.onMessage = data => {
     const { tick, mask } = data;
     remoteConfirmed.set(tick, mask);
     pruneOld(remoteConfirmed, world.tick);
@@ -349,7 +361,7 @@ function startMatchSync(session, world){
         // the peer's, with no full-resync fallback yet to recover it.
       }
     }
-  });
+  };
 
   function beforeTick(w){
     const tick = w.tick + 1;

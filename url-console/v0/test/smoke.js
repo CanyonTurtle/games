@@ -1848,7 +1848,16 @@ async function main(){
       // match start, which calls session._room.makeAction('input') —
       // needs a stand-in here even though this test doesn't inspect
       // what's sent, or beginSyncedMatch() throws.
-      room.makeAction = () => ({ onMessage(){}, send(){} });
+      // onMessage is a real getter/setter *property* on Trystero's
+      // public makeAction() (vendor/trystero/actions.mjs), assigned to
+      // rather than called — this mock has to match that shape, not the
+      // callable-method shape internal-only actions use, or it can't
+      // catch the exact regression that shape mismatch caused for real
+      // (DESIGN.md §93): startMatchSync calling `inputAction.onMessage(fn)`
+      // instead of `inputAction.onMessage = fn` threw the instant a real
+      // connection ever reached 'connected', invisible to every mock in
+      // this file until they were all fixed to match reality.
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
       return room;
     }
     const rooms = [];
@@ -1937,7 +1946,16 @@ async function main(){
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
       room.leave = () => { room.leaveCalled = true; };
-      room.makeAction = () => ({ onMessage(){}, send(){} });
+      // onMessage is a real getter/setter *property* on Trystero's
+      // public makeAction() (vendor/trystero/actions.mjs), assigned to
+      // rather than called — this mock has to match that shape, not the
+      // callable-method shape internal-only actions use, or it can't
+      // catch the exact regression that shape mismatch caused for real
+      // (DESIGN.md §93): startMatchSync calling `inputAction.onMessage(fn)`
+      // instead of `inputAction.onMessage = fn` threw the instant a real
+      // connection ever reached 'connected', invisible to every mock in
+      // this file until they were all fixed to match reality.
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
       return room;
     }
     const rooms = [];
@@ -2180,8 +2198,14 @@ async function main(){
         return {
           onPeerJoin: null, onPeerLeave: null, leave(){},
           makeAction(name){
+            // A real getter/setter property, matching Trystero's actual
+            // public makeAction() shape — not the callable-method shape
+            // this mock originally used, which is exactly what let
+            // startMatchSync's real `onMessage(fn)`-as-a-call bug pass
+            // this deep, real-World-pair test undetected (DESIGN.md §93).
             return {
-              onMessage(fn){ if(isA) onMessageA = fn; else onMessageB = fn; },
+              set onMessage(fn){ if(isA) onMessageA = fn; else onMessageB = fn; },
+              get onMessage(){ return isA ? onMessageA : onMessageB; },
               send(data){
                 const other = isA ? onMessageB : onMessageA;
                 if(other) setTimeout(() => other(data), delayMs);
@@ -2248,7 +2272,16 @@ async function main(){
     const D = window.__urlcadeDebug;
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
-      room.makeAction = () => ({ onMessage(){}, send(){} });
+      // onMessage is a real getter/setter *property* on Trystero's
+      // public makeAction() (vendor/trystero/actions.mjs), assigned to
+      // rather than called — this mock has to match that shape, not the
+      // callable-method shape internal-only actions use, or it can't
+      // catch the exact regression that shape mismatch caused for real
+      // (DESIGN.md §93): startMatchSync calling `inputAction.onMessage(fn)`
+      // instead of `inputAction.onMessage = fn` threw the instant a real
+      // connection ever reached 'connected', invisible to every mock in
+      // this file until they were all fixed to match reality.
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
       return room;
     }
     const rooms = [];
