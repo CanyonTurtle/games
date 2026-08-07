@@ -1963,10 +1963,17 @@ async function main(){
       hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterConnect,
       copiedText, hiddenAfterClose, emptyAfterClose,
       roomCode: rooms[0] && rooms[0].roomId,
+      expectedAppId: D.appIdForCart(cart),
     };
   });
   check('the connection log is hidden on the initial Host/Join choice screen (nothing attempted yet)', diagResult.hiddenOnChoiceScreen, JSON.stringify(diagResult));
   check('hosting reveals the connection log and records the room code + waiting state', diagResult.visibleAfterHost && diagResult.logAfterHost.includes(diagResult.roomCode) && /waiting-for-peer/.test(diagResult.logAfterHost), JSON.stringify(diagResult));
+  // The appId is the room-topic half a host and joiner have to agree on
+  // to ever find each other — logging it lets that be compared directly
+  // between two devices' diag logs, no separate network inspector
+  // needed (found to be genuinely necessary investigating a real
+  // "relays connect, no peer ever found" report, DESIGN.md §90).
+  check('the connection log records the same appId appIdForCart() itself computes for this cart', diagResult.logAfterHost.includes(diagResult.expectedAppId), JSON.stringify(diagResult));
   check('a peer joining is recorded as a "connected" session-state line', /session state: connected/.test(diagResult.logAfterConnect), JSON.stringify(diagResult));
   check('the Copy button on the connection log copies its exact text', diagResult.copiedText === diagResult.logAfterConnect, JSON.stringify(diagResult));
   check('closing the lobby hides the connection log and clears it for next time', diagResult.hiddenAfterClose && diagResult.emptyAfterClose, JSON.stringify(diagResult));
