@@ -1930,14 +1930,16 @@ async function main(){
   // parseJoinLinkHash does (no room/network involved at all).
   const parseJoinLinkResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
+    const originalFragment = 'Race%20Car,Urlcade,z.abc123'; // literal separator commas, as encodeCartUrl produces
     return {
-      withCode: D.parseJoinLinkHash('Race%20Car,Urlcade,z.abc123&mp=WXYZ2'),
-      withoutCode: D.parseJoinLinkHash('Race%20Car,Urlcade,z.abc123'),
+      withCode: D.parseJoinLinkHash(encodeURIComponent(originalFragment) + '&mp=WXYZ2'),
+      withoutCode: D.parseJoinLinkHash(originalFragment), // never wrapped (no &mp=) -> not a join link, returned raw
       lowercaseIsPreserved: D.parseJoinLinkHash('somehash&mp=lowercase').code, // normalization is joinMatch's job, not the parser's
+      originalFragment,
     };
   });
-  check('parseJoinLinkHash splits a game hash and its &mp= code apart', parseJoinLinkResult.withCode.gameHash === 'Race%20Car,Urlcade,z.abc123' && parseJoinLinkResult.withCode.code === 'WXYZ2', JSON.stringify(parseJoinLinkResult));
-  check('parseJoinLinkHash returns a null code and the hash unchanged when there is no &mp= suffix', parseJoinLinkResult.withoutCode.gameHash === 'Race%20Car,Urlcade,z.abc123' && parseJoinLinkResult.withoutCode.code === null, JSON.stringify(parseJoinLinkResult));
+  check('parseJoinLinkHash decodes the wrapped gameHash back to the exact original fragment (byte-identical, commas restored)', parseJoinLinkResult.withCode.gameHash === parseJoinLinkResult.originalFragment && parseJoinLinkResult.withCode.code === 'WXYZ2', JSON.stringify(parseJoinLinkResult));
+  check('parseJoinLinkHash returns a null code and the hash completely unwrapped when there is no &mp= suffix', parseJoinLinkResult.withoutCode.gameHash === parseJoinLinkResult.originalFragment && parseJoinLinkResult.withoutCode.code === null, JSON.stringify(parseJoinLinkResult));
   check('parseJoinLinkHash does not itself normalize case (joinMatch/connectToRoom already does)', parseJoinLinkResult.lowercaseIsPreserved === 'lowercase', JSON.stringify(parseJoinLinkResult));
 
   // Second: clicking "Copy Link" while hosting actually copies a link
@@ -1947,6 +1949,16 @@ async function main(){
   // headless Chromium doesn't reliably grant; spying on the call is both
   // simpler and more direct: it tests exactly what this feature promises
   // to do, not whether Chromium's clipboard plumbing itself works).
+  // Reloads the real Race Car cart specifically (rather than reusing the
+  // synthetic bare-payload flappy variant above) — its fragment carries
+  // a genuine `name,author,` envelope with real commas, the exact shape
+  // that triggered the iMessage link-splitting bug this test guards
+  // against; a bare-payload fragment (no commas at all) would let that
+  // regression check pass trivially even if the fix were reverted.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'racer');
+  await page.waitForTimeout(250);
   const copyLinkResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
     const cart = D.getWorld().cart;
@@ -1970,8 +1982,17 @@ async function main(){
     }, 50)); // copyJoinLink awaits the (mocked, already-resolved) clipboard write before touching btn.textContent
   });
   check('the "Copy Link" button is shown while hosting', copyLinkResult.hadCopyBtn, JSON.stringify(copyLinkResult));
-  check('clicking "Copy Link" copies a URL containing the current game\'s own fragment', copyLinkResult.copiedText && copyLinkResult.copiedText.includes(copyLinkResult.fragment), JSON.stringify(copyLinkResult));
+  check('clicking "Copy Link" copies a URL containing the current game\'s own fragment (URI-component-wrapped)', copyLinkResult.copiedText && copyLinkResult.copiedText.includes(encodeURIComponent(copyLinkResult.fragment)), JSON.stringify(copyLinkResult));
   check('the copied link carries the hosting session\'s own room code as &mp=', copyLinkResult.copiedText && copyLinkResult.copiedText.endsWith('&mp=' + copyLinkResult.roomCode), JSON.stringify(copyLinkResult));
+  // Regression check for a real bug found via manual two-device testing
+  // (DESIGN.md §85): a bare comma in the link (Race Car's fragment has
+  // one between name and author) reads as ordinary punctuation to iOS
+  // iMessage's link detector, which split the pasted link into two
+  // separate tappable pieces right at the comma. The whole fragment is
+  // now run through encodeURIComponent before going in the link, so no
+  // literal comma (or any other raw punctuation) should survive into
+  // the copied URL at all.
+  check('the copied link contains no literal comma (encodeURIComponent escaped the fragment\'s name/author separators)', copyLinkResult.copiedText && !copyLinkResult.copiedText.includes(','), JSON.stringify(copyLinkResult));
   check('the button shows "Copied!" feedback after a successful copy', copyLinkResult.feedbackText === 'Copied!', JSON.stringify(copyLinkResult));
 
   // Third: opening a join link (openLobbyAndJoin, main.js's boot() calls
