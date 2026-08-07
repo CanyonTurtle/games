@@ -455,7 +455,14 @@ function startDiag(role, roomCode){
   lastRelayStates = {};
   lastPeerStates = {};
   installConsoleWarnCapture();
-  pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)}`);
+  // appId (module-scoped `lobbyCart`, set by openLobby/openLobbyAndJoin
+  // just before this runs) is exactly the second half of the room's
+  // topic — a host and a joiner only ever find each other if this
+  // string matches on both sides for the same room code. Logging it
+  // here makes that comparison a straight side-by-side read of two
+  // diag logs, rather than needing a separate network inspector and a
+  // raw sha1'd info_hash to eyeball.
+  pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)} — appId ${appIdForCart(lobbyCart)}`);
   pollDiag();
   clearInterval(diagPollTimer);
   diagPollTimer = setInterval(pollDiag, DIAG_POLL_MS);

@@ -3162,7 +3162,21 @@ Docs: none — an in-app debugging aid, not a change to any documented field, op
 
 Verified via `test/smoke.js`: a Trystero-prefixed `console.warn` call reaches the log while a session is active; an unrelated warning (no `Trystero` prefix) does not, confirming the filter isn't just capturing everything; and `console.warn` is restored to the native function after `closeLobby()`, confirming no permanent patch is left behind to interfere with later test output or later real usage. Whether this actually explains the real stall is still open — next real-device retest is what tells us that, same as §88 itself.
 
-## 90. Open questions
+## 90. The appId itself, logged directly — the one comparison a phone-only bug report couldn't make until now
+
+Following up on §89's own real-device result: the maintainer separately captured raw WebSocket tracker frames on the host device (via an on-device network inspector — a genuinely new debugging capability for this thread) and found two different `info_hash` values in the stream. Turned out to be a non-finding: those were two separate "Host a match" attempts, each generating its own random room code, and a different room code always produces a different topic/hash by design — expected, not a bug. But it pointed at the one comparison that actually would be diagnostic and that nothing so far could make: do a host and a joiner, for the *same* attempt, ever compute the *same* room topic?
+
+`appId` (`urlcade-mp-<hash>`, from this file's own `appIdForCart`, namespacing a room to the cart's exact encoded bytes — DESIGN.md §79's own reasoning) is exactly that topic's other half, alongside the room code. It was computable but never actually *shown* anywhere — confirming a match required either trusting the code or, as just demonstrated, pulling raw sha1'd `info_hash` values out of a WebSocket frame inspector and eyeballing them against each other, on a phone, mid-investigation.
+
+**The fix**: log it. `startDiag()`'s opening line now reads `hosting room ABCDE — selfId a1b2c3 — appId urlcade-mp-0929e711` (or `joining`), computed the exact same way `connectToRoom` itself derives the room's real `appId` for `joinRoomFn`, using the already-set `lobbyCart` at the moment diagnostics start. Comparing two devices' diag logs for a single attempt now directly answers "do these two agree on the room" without any external tool — continuing this round's whole premise (§88) of putting the debugging surface where the person having the problem actually is.
+
+`appIdForCart` was already exported from `multiplayer.js` (used internally by `connectToRoom`) but not wired into `window.__urlcadeDebug` — added there too, both because the diag panel's own smoke test needed an independent way to compute the expected value to assert against, and because it's a small, genuinely useful addition to the debug surface on its own.
+
+Docs: none — an in-app debugging aid, not a change to any documented field, opcode, or format.
+
+Verified via `test/smoke.js`: the connection log's opening line now includes the exact string `D.appIdForCart(cart)` independently computes for the same cart, alongside the room code and `waiting-for-peer` already covered by §88's tests. Whether a real host/join pair's `appId` values actually match is still the open question this was built to answer — next real-device retest, this time capturing both devices' logs for one single attempt, is what settles it.
+
+## 91. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

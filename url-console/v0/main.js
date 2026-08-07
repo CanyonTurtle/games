@@ -224,4 +224,5 @@ window.__urlcadeDebug = {
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch,
   startMatchSync: Multiplayer.startMatchSync,
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
+  appIdForCart: Multiplayer.appIdForCart,
 };
