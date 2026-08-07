@@ -54,6 +54,34 @@ function appIdForCart(cart){
   return 'urlcade-mp-' + hashCartBytes(K.encodeCart(cart));
 }
 
+// Confirmed via a real two-device attempt (DESIGN.md §95): Trystero's own
+// onJoinError fired with "could not connect to peer X after exchanging
+// SDP" — signaling (the tracker-brokered offer/answer exchange, DESIGN.md
+// §85-92's whole arc) genuinely succeeds; only the actual WebRTC/ICE
+// connection between the two peers fails, the standard signature of a
+// NAT (or NAT-like network interference — cellular CGNAT, a restrictive
+// network, possibly iCloud Private Relay) that STUN alone can't punch
+// through. TURN is the standard, user-transparent answer: a relay
+// server WebRTC falls back to automatically, no player action needed.
+//
+// Open Relay Project (openrelayproject.org, served from metered.ca) is
+// used here specifically because its TURN credentials are meant to be
+// publicly embedded — no account for this project, no account or config
+// for a player, satisfying the same constraint every fix in this arc has
+// had to respect. The tradeoff, accepted deliberately for now (this
+// project is still rapid-prototyping, not yet needing production-grade
+// guarantees): it's free, shared public infrastructure, not capacity
+// reserved for this app, so its own reliability under load is out of
+// this project's control. If that ever becomes the bottleneck, revisit
+// with a dedicated/paid TURN provider — nothing else about this wiring
+// (`turnConfig`, Trystero's own first-class extension point) would need
+// to change, only which credentials fill it.
+const TURN_CONFIG = [
+  {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
+  {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
+  {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'},
+];
+
 // A session wraps one joined Trystero room end to end: the room code,
 // current connection state, this peer's assigned slot (0 or 1) once a
 // second peer is present, and a subscribe/unsubscribe pair for state
@@ -118,7 +146,7 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     // iCloud Private Relay interfering with STUN, would look like) or
     // somewhere upstream of it.
     room = joinRoomFn(
-      {appId: appIdForCart(cart), relayConfig: {redundancy: 5}},
+      {appId: appIdForCart(cart), relayConfig: {redundancy: 5}, turnConfig: TURN_CONFIG},
       roomCode,
       {onJoinError: ({error, peerId}) => pushDiag(`join error: ${error}` + (peerId ? ` (peer ${String(peerId).slice(0, 6)})` : ''))}
     );
