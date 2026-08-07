@@ -95,7 +95,17 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   }
   let room;
   try{
-    room = joinRoomFn({appId: appIdForCart(cart)}, roomCode);
+    // Trystero's own default is 3 of its 5 hardcoded public trackers
+    // (vendor/trystero/torrent.mjs's defaultRedundancy) — bumped to all
+    // 5 here. Public BitTorrent trackers are built for file-sharing
+    // swarms, not real-time WebRTC signaling; unlike this app's own
+    // relay *sockets* (confirmed reaching OPEN and exchanging announce
+    // acks via DESIGN.md §88's diagnostics), a specific tracker can
+    // still be too flaky to reliably broker an actual offer/answer
+    // exchange between two independent peers. Connecting to all 5
+    // widens the chance at least one pair is mutually healthy for that,
+    // at the cost of a few more open sockets per session.
+    room = joinRoomFn({appId: appIdForCart(cart), relayConfig: {redundancy: 5}}, roomCode);
   } catch(err){
     session.error = err.message;
     setState('error');

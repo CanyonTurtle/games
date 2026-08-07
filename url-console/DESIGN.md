@@ -3176,7 +3176,21 @@ Docs: none — an in-app debugging aid, not a change to any documented field, op
 
 Verified via `test/smoke.js`: the connection log's opening line now includes the exact string `D.appIdForCart(cart)` independently computes for the same cart, alongside the room code and `waiting-for-peer` already covered by §88's tests. Whether a real host/join pair's `appId` values actually match is still the open question this was built to answer — next real-device retest, this time capturing both devices' logs for one single attempt, is what settles it.
 
-## 91. Open questions
+## 91. Same-network retest, still stuck — widened tracker redundancy from 3 to all 5 default relays
+
+§90's `appId` check came back matching on both devices for a single attempt — ruling out a topic mismatch definitively. A same-network retest (both devices on one Wi-Fi, to isolate NAT/TURN as the cause) showed the identical symptom anyway: relays reach `OPEN`, `appId` matches, and still no peer ever found. Same-network working would have pointed squarely at NAT traversal (no TURN server configured, a real and expected limitation of this vendored library — see its own README's "Why torrent" section); same-network *also* failing rules that out as the sole explanation, since two devices on one LAN don't need to traverse any NAT to reach each other directly.
+
+With signaling (relay connectivity, topic match) and NAT both now ruled out, the remaining plausible layer is the tracker infrastructure itself. Web research (`vendor/trystero/torrent.mjs` upstream's own project) surfaced a real, relevant distinction: Trystero's maintainers now default new users to their Nostr strategy specifically because the BitTorrent/MQTT/IPFS strategies have "far less relay redundancy" — public BitTorrent trackers are built and optimized for real file-sharing swarms, not the repurposed real-time WebRTC offer/answer brokering Trystero asks of them, and a given tracker can be too flaky for that specific job even while still accepting connections and acking announces normally (exactly what this app's own diagnostics have shown on every attempt so far: `OPEN` sockets, generic acks flowing, no actual peer ever surfaces).
+
+**The fix, as a first low-risk experiment before considering a bigger strategy migration**: `connectToRoom` now passes `{relayConfig: {redundancy: 5}}` to `joinRoomFn`, widening from Trystero's own default (3 of its 5 hardcoded public trackers) to all 5. Doesn't touch which trackers are used, doesn't add any dependency, doesn't change the vendored library at all — purely widens the odds that at least one pair of trackers between two devices happens to be mutually healthy enough to actually broker an offer/answer, at the cost of a few more open sockets per session.
+
+If this doesn't resolve it, the next real lever is a genuine strategy question rather than a config tweak: migrate from the `torrent` strategy to Trystero's `nostr` strategy (their own now-recommended default, with meaningfully better relay redundancy) — a bigger change than this round, since it needs a new vendored package and a signing dependency (`@noble/secp256k1`) this codebase has avoided everywhere else on purpose (this file's own vendoring README specifically named that dependency as the reason torrent was picked over Nostr in the first place). That decision is deliberately not made in this round.
+
+Docs: none — a config-only tweak to an already-documented library integration, no field/opcode/format change.
+
+Verified via `test/smoke.js`: full suite still passes unchanged (mock `joinRoomFn`s in every test only ever inspect the room code argument, never the config object, so widening `relayConfig` couldn't have broken anything there by construction) — this round has no automated way to verify the actual real-world effect, same limitation as every round in this arc. Next real-device retest tells us whether this alone was enough, or whether the Nostr-migration question needs to be raised.
+
+## 92. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
