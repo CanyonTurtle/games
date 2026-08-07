@@ -220,10 +220,11 @@ class World {
       this.rngState = state;
       return value;
     };
-    // this.inputs[4] — one bitmask per player slot (DESIGN.md §77). Slot 0
-    // is the local player, populated every frame by loop() below from
-    // buttonMaskFromKeys() plus the pointer-down bit; slots 1-3 stay 0
-    // until multiplayer wires remote input into them.
+    // this.inputs[4] — one bitmask per player slot (DESIGN.md §77).
+    // localPlayerSlot (below, default 0) is *this device's own* seat and
+    // is what loop() below populates every frame from buttonMaskFromKeys()
+    // plus the pointer-down bit; every other slot stays 0 until
+    // multiplayer wires remote input into it.
     this.inputs = [0, 0, 0, 0];
     this.pointerX = 0; this.pointerY = 0; this.pointerDown = 0; // set once/frame by loop(), see LOAD_POINTER_* below
     this.pointerXs = [0, 0, 0, 0]; this.pointerYs = [0, 0, 0, 0]; // per-player, see LOAD_POINTER_P
@@ -1553,15 +1554,22 @@ function loop(ts){
     if(lastTime === null) lastTime = ts;
     accumulator = Math.min(accumulator + (ts - lastTime), MAX_ACCUMULATED_MS);
     lastTime = ts;
-    // inputs[0] is the local player's slot — buttonMaskFromKeys() (bits
+    // world.localPlayerSlot (DESIGN.md §82, default 0 — single-player and
+    // "host" both land here unchanged) is *this device's own* seat at the
+    // table — capture has to land there, not always at index 0, or a
+    // peer occupying slot 1 (the guest side of a match) never gets their
+    // own real input recorded anywhere startMatchSync's beforeTick (DESIGN.md
+    // §80) looks for it: it reads inputs[localSlot] as "this peer's real
+    // input for the tick," and a slot-1 peer's presses landing at index 0
+    // instead just look like nothing happened. buttonMaskFromKeys() (bits
     // 0-4, BUTTON_BITS) plus bit 5 (value 32) folded in for pointer-held,
     // a convention kept deliberately separate from BUTTON_BITS itself (see
     // kernel.js's LOAD_POINTER_P comment): it's always-on infrastructure,
     // not an authored/labeled button. The old scalar pointerX/Y/Down stay
     // set too, unchanged, since LOAD_POINTER_X/Y/DOWN still read them.
-    world.inputs[0] = buttonMaskFromKeys() | (pointerDown ? 32 : 0);
+    world.inputs[world.localPlayerSlot] = buttonMaskFromKeys() | (pointerDown ? 32 : 0);
     world.pointerX = pointerX; world.pointerY = pointerY; world.pointerDown = pointerDown;
-    world.pointerXs[0] = pointerX; world.pointerYs[0] = pointerY;
+    world.pointerXs[world.localPlayerSlot] = pointerX; world.pointerYs[world.localPlayerSlot] = pointerY;
     while(accumulator >= STEP_MS){
       if(perTickHook) perTickHook(world);
       world.step();

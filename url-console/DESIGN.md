@@ -3218,7 +3218,19 @@ Docs: none — an internal bug fix against an already-vendored, already-document
 
 Verified via `test/smoke.js`: full suite, 3 clean runs, including the two-World convergence tests (still passing, now against a mock that actually matches reality) and every multiplayer state-machine test touching `makeAction`. Not yet confirmed against the maintainer's own original real-device report — that stall may have had this exact crash as part of its story too (a connection that got this far would have silently died right here, indistinguishable from "never connected" to a player with no devtools open) or may still have a separate root cause; the next real-device retest is what tells us whether fixing this alone was enough.
 
-## 94. Open questions
+## 94. A second real bug, found immediately after the first: local input capture always wrote to slot 0, so a slot-1 peer's own keypresses never landed anywhere the match sync could see them
+
+With §93's `onMessage` crash fixed, the maintainer's next real-device test (two desktop tabs) got further than ever — a live, running two-player match — and found only one of the two cars would move. Exactly the shape of bug §93 predicted: something else was still one connection-success away from ever being exercised.
+
+`runtime.js`'s `loop()` writes this device's own captured keyboard/pointer state into the World every frame — but unconditionally at index 0 (`world.inputs[0] = buttonMaskFromKeys() | ...`, and the same for `pointerXs[0]`/`pointerYs[0]`), regardless of `world.localPlayerSlot` (DESIGN.md §82's own local-player offset, already used correctly elsewhere for camera/HUD). For the host (slot 0) this is a no-op bug — their real input already lands exactly where it should. For the guest (slot 1), it's silent and total: their own real keypresses land in `inputs[0]`, while `startMatchSync`'s `beforeTick` (DESIGN.md §80) reads `inputs[localSlot]` — `inputs[1]` for them — as "this peer's real input for the tick." That slot was never touched by real capture at all, so every tick the guest sent was just whatever `inputsForTick`'s own remote-merge logic had last left sitting there. The guest's own controls were never connected to anything.
+
+**The fix**: index by `world.localPlayerSlot` instead of the hardcoded `0`, for both the button mask and the per-player pointer coordinates. `localPlayerSlot` defaults to `0`, so single-player and hosting are byte-for-byte unaffected — this only changes behavior for a peer actually occupying a non-zero slot.
+
+Docs: none — an internal engine bug fix, not a change to any documented field/opcode/format (the `inputs[4]`/`pointerXs[4]`/`pointerYs[4]` per-player model itself, DESIGN.md §77, was already correctly documented; only its *capture* side had the bug).
+
+Verified via `test/smoke.js`: a new check drives this through the real capture path (`page.keyboard.down`, not a test directly assigning `world.inputs` the way the existing two-player-drive checks do) with `world.localPlayerSlot` set to 1, asserting the real keypress lands at `inputs[1]` and *not* `inputs[0]` — the exact regression, reproduced and now guarded against. Full suite otherwise unaffected (default `localPlayerSlot` keeps every prior single-player and host-perspective check passing unchanged).
+
+## 95. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
