@@ -141,50 +141,78 @@ function joinMatch(cart, roomCode, opts){
 // separator, seen in essentially every real-world URL) so it's safe to
 // just concatenate.
 //
-// The fragment itself needs real work: kernel.js's encodeCartUrl joins
-// `encodeURIComponent(name) + ',' + encodeURIComponent(author) + ',' +
-// payload` — completely fine for this app's own `location.hash` routing
-// (never parsed as a "real" URL, just read back as an opaque string),
-// but not safe to hand a third-party link detector unmodified. A first
-// attempt here just ran the whole fragment through one more
-// `encodeURIComponent`, reasoning that the two literal, unescaped commas
-// (name|author, author|payload) were the problem — that was real (iOS
-// iMessage's detector did split a raw link at exactly that comma) but
-// incomplete: it left `%`-escapes behind (encodeURIComponent leaves `%`
-// itself unescaped when re-run on an already-escaped string's own `%XX`
-// sequences... no — it escapes the `%` too, turning one `%20` into
-// `%2520` — MORE percent-signs, not fewer), and a cart whose name needs
-// no escaping at all (no spaces, no commas — "Corridor" vs "Race Car")
-// was observed to link fine even at nearly double the length, while
-// Race Car's kept splitting even after that fix landed. The common
-// factor isn't length or specifically commas — it's the `%` character
-// itself surviving into the link at all.
+// The fragment needed two rounds of real investigation to get right
+// (DESIGN.md §85-87), both against iOS iMessage's link detector — the
+// only external, non-mocked signal this whole Multiplayer arc ever got.
+// Two *different* bugs turned out to be stacked on top of each other:
 //
-// The actual fix: encode the whole fragment as base64url (kernel.js's
-// own b64urlEncode/b64urlDecode, already used for the cart payload
-// itself — same alphabet, one encoding scheme for "safe to put in a
-// link," not two) instead of percent-encoding it. The fragment is
-// guaranteed pure ASCII by construction (encodeCartUrl already
-// URI-encodes name/author, and the payload is base64url), so treating
-// each character as one byte is lossless — no UTF-8 machinery needed.
-// The result is a run of nothing but letters, digits, `-`, and `_`: the
-// same character class the payload itself already uses, which has never
-// had a reported link-splitting issue. Longer than the percent-encoded
-// attempt (base64 costs ~33% over the original), but length demonstrably
-// isn't what iMessage's detector was reacting to here.
+// 1. A bare comma reads as sentence punctuation, not URL syntax, to
+//    iMessage's detector, and splits the link outright. kernel.js's
+//    encodeCartUrl joins `encodeURIComponent(name) + ',' +
+//    encodeURIComponent(author) + ',' + payload` with two literal,
+//    unescaped commas — fine for this app's own `location.hash` routing,
+//    not fine handed to a third party. Confirmed directly: a raw link
+//    split exactly at that comma.
+// 2. Independently, iMessage (and Signal) cap a single unbroken run of
+//    URL-safe characters at roughly 300 before splitting it into two
+//    separate tokens regardless of punctuation — documented publicly
+//    (see this function's own comment below) and confirmed here by a
+//    cart whose payload's naturally-occurring base64url `-`/`_`
+//    characters happened to leave a long enough gap to trip it.
+//
+// A tried-and-discarded first fix wrapped the *entire* fragment in one
+// more `encodeURIComponent`, then in base64url — both genuinely removed
+// literal commas, but both also made bug 2 worse, not better: encoding
+// mostly-printable-ASCII *text* (not random bytes) through base64
+// systematically under-produces the very `-`/`/` symbols base64 needs to
+// break up a long run, so the "fixed" link could go 1400+ characters
+// with zero natural breaks. Both attempts also had a real, independent
+// cost the maintainer flagged directly: the link stopped being
+// human-readable — no more seeing "Race Car" in a link before opening
+// it, which is a real quality worth keeping, not just a coincidence of
+// the format.
+//
+// The actual fix addresses each bug at its source instead of
+// obliterating the whole fragment's readability to route around both:
+// escape only the two real structural commas (anything inside an
+// already-`encodeURIComponent`'d name/author can't contain a *literal*
+// comma to begin with, so this can't misfire on a comma-containing cart
+// name), then insert a `-` every LINK_BREAK_INTERVAL characters through
+// the whole thing, comfortably under the ~300-character danger zone.
+// Insertion/removal is purely position-based — it doesn't need to tell
+// "a `-` I inserted" apart from "a `-` that was already there" (both
+// look identical once inserted), it just always removes the character
+// sitting at each known interval boundary, which loslessly reconstructs
+// the exact original by construction regardless of what's there.
+const IMESSAGE_LINK_BREAK_INTERVAL = 200; // Patrick Weaver measured iMessage/Signal breaking bare (unbroken) base64 runs somewhere between 300 and 303 chars (patrickweaver.net/blog/imessage-mystery) — 200 leaves comfortable margin
+function insertLinkBreaks(str){
+  let out = '';
+  for(let i = 0; i < str.length; i += IMESSAGE_LINK_BREAK_INTERVAL){
+    out += str.slice(i, i + IMESSAGE_LINK_BREAK_INTERVAL);
+    if(i + IMESSAGE_LINK_BREAK_INTERVAL < str.length) out += '-';
+  }
+  return out;
+}
+function removeLinkBreaks(str){
+  let out = '', i = 0;
+  while(i < str.length){
+    out += str.slice(i, i + IMESSAGE_LINK_BREAK_INTERVAL);
+    i += IMESSAGE_LINK_BREAK_INTERVAL;
+    if(i < str.length) i += 1; // skip the inserted '-'
+  }
+  return out;
+}
 function parseJoinLinkHash(hash){
   const m = hash.match(/&mp=([^&]+)$/);
   if(!m) return { gameHash: hash, code: null };
-  const bytes = K.b64urlDecode(hash.slice(0, m.index));
-  let gameHash = '';
-  for(let i = 0; i < bytes.length; i++) gameHash += String.fromCharCode(bytes[i]);
+  const gameHash = removeLinkBreaks(hash.slice(0, m.index)).replace(/%2C/g, ',');
   return { gameHash, code: m[1] };
 }
 function buildJoinLink(roomCode){
   const fragment = getCurrentFragment();
   if(!fragment) return null;
-  const bytes = Uint8Array.from(fragment, c => c.charCodeAt(0));
-  return location.origin + location.pathname + location.search + '#' + K.b64urlEncode(bytes) + '&mp=' + roomCode;
+  const safe = insertLinkBreaks(fragment.replace(/,/g, '%2C'));
+  return location.origin + location.pathname + location.search + '#' + safe + '&mp=' + roomCode;
 }
 
 // navigator.clipboard.writeText needs a secure context (https, or

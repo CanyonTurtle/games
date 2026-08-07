@@ -1930,20 +1930,29 @@ async function main(){
   // parseJoinLinkHash does (no room/network involved at all).
   const parseJoinLinkResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const originalFragment = 'Race%20Car,Urlcade,z.abc123'; // literal separator commas + a %-escape, as encodeCartUrl produces
-    const b64 = D.b64urlEncode(Uint8Array.from(originalFragment, c => c.charCodeAt(0)));
+    // Literal separator commas + a %-escape, as encodeCartUrl produces,
+    // padded past 200 chars so the round-trip also exercises the
+    // interval-break insertion/removal, not just the comma escape.
+    const originalFragment = 'Race%20Car,Urlcade,z.' + 'a'.repeat(300);
+    const INTERVAL = 200; // must match multiplayer.js's own IMESSAGE_LINK_BREAK_INTERVAL
+    const commaEscaped = originalFragment.replace(/,/g, '%2C');
+    let wrapped = '';
+    for(let i = 0; i < commaEscaped.length; i += INTERVAL){
+      wrapped += commaEscaped.slice(i, i + INTERVAL);
+      if(i + INTERVAL < commaEscaped.length) wrapped += '-';
+    }
     return {
-      withCode: D.parseJoinLinkHash(b64 + '&mp=WXYZ2'),
+      withCode: D.parseJoinLinkHash(wrapped + '&mp=WXYZ2'),
       withoutCode: D.parseJoinLinkHash(originalFragment), // never wrapped (no &mp=) -> not a join link, returned raw
       lowercaseIsPreserved: D.parseJoinLinkHash('somehash&mp=lowercase').code, // normalization is joinMatch's job, not the parser's
-      b64,
+      wrapped,
       originalFragment,
     };
   });
-  check('parseJoinLinkHash decodes the base64url-wrapped gameHash back to the exact original fragment (byte-identical, including its %-escapes and commas)', parseJoinLinkResult.withCode.gameHash === parseJoinLinkResult.originalFragment && parseJoinLinkResult.withCode.code === 'WXYZ2', JSON.stringify(parseJoinLinkResult));
+  check('parseJoinLinkHash decodes the comma-escaped, interval-broken gameHash back to the exact original fragment (byte-identical, including its %-escapes and commas)', parseJoinLinkResult.withCode.gameHash === parseJoinLinkResult.originalFragment && parseJoinLinkResult.withCode.code === 'WXYZ2', JSON.stringify(parseJoinLinkResult));
   check('parseJoinLinkHash returns a null code and the hash completely unwrapped when there is no &mp= suffix', parseJoinLinkResult.withoutCode.gameHash === parseJoinLinkResult.originalFragment && parseJoinLinkResult.withoutCode.code === null, JSON.stringify(parseJoinLinkResult));
   check('parseJoinLinkHash does not itself normalize case (joinMatch/connectToRoom already does)', parseJoinLinkResult.lowercaseIsPreserved === 'lowercase', JSON.stringify(parseJoinLinkResult));
-  check('the wrapped gameHash itself contains no punctuation (pure base64url alphabet, nothing a link detector could trip on)', /^[A-Za-z0-9_-]+$/.test(parseJoinLinkResult.b64), JSON.stringify(parseJoinLinkResult));
+  check('the wrapped gameHash contains no bare comma (both structural commas were escaped)', !parseJoinLinkResult.wrapped.includes(','), JSON.stringify(parseJoinLinkResult));
 
   // Second: clicking "Copy Link" while hosting actually copies a link
   // that carries both the current game and the room code — spies on
@@ -1986,24 +1995,35 @@ async function main(){
   });
   check('the "Copy Link" button is shown while hosting', copyLinkResult.hadCopyBtn, JSON.stringify(copyLinkResult));
   check('the copied link carries the hosting session\'s own room code as &mp=', copyLinkResult.copiedText && copyLinkResult.copiedText.endsWith('&mp=' + copyLinkResult.roomCode), JSON.stringify(copyLinkResult));
-  // Regression check for two real bugs found via manual two-device
-  // testing (DESIGN.md §85, §86). First attempt: percent-encode just the
-  // fragment's two literal separator commas (Race Car's own fragment has
-  // one between name and author, one between author and payload) — real
-  // fix for a real split, but incomplete: it left the name's own
-  // %-escape (Race Car's name has a space, "Race%20Car") in place, and
-  // running encodeURIComponent a second time over an already-escaped
-  // string turns one %-sequence into more (%20 -> %2520), not fewer.
-  // "Corridor" (Doom-like's cart name, no space, no % at all) linked
-  // fine throughout at nearly double the length, which is what pointed
-  // at `%` itself, not comma or length, as what iMessage's detector
-  // actually reacts to. The real fix wraps the whole fragment as
-  // base64url instead of percent-encoding it: the copied link's hash
-  // portion (everything up to `&mp=`) should now contain literally
-  // nothing but the base64url alphabet — no `%`, no comma, no space, no
-  // punctuation of any kind for a detector to trip on.
+  // Regression check for three real bugs found via manual two-device
+  // testing (DESIGN.md §85-87). Round 1: percent-encoding just the two
+  // structural commas fixed the exact split point reported, but running
+  // encodeURIComponent a second time over an already-escaped string like
+  // Race Car's name ("Race%20Car") multiplies %-sequences rather than
+  // removing them, and `%` itself turned out to also trip the detector.
+  // Round 2: wrapping the whole fragment as base64url eliminated all `%`/
+  // comma/space characters, but base64-encoding mostly-printable-ASCII
+  // *text* (not random bytes) systematically under-produces the `-`/`_`
+  // symbols a real base64 payload would have, so the "fixed" link could
+  // run 1000+ characters with no natural break at all — externally
+  // documented (Patrick Weaver, patrickweaver.net/blog/imessage-mystery)
+  // as exactly the shape of run iMessage/Signal split on their own,
+  // independent of punctuation, past ~300 characters. Both rounds also
+  // cost real readability: the cart's name stopped being visible in the
+  // link at all, a regression the maintainer flagged directly.
+  //
+  // The actual fix: escape only the two real structural commas (keeping
+  // the name/author human-readable), then insert a `-` every 200
+  // characters so no unbroken run ever nears the ~300-char danger zone.
+  // The copied link's hash portion should therefore (a) contain no bare
+  // comma, (b) still contain the cart's own (encodeURIComponent'd) name
+  // so it stays human-readable, and (c) never have a run of 200+
+  // characters with no `-`/`_` in it.
   const hashPortion = copyLinkResult.copiedText ? copyLinkResult.copiedText.split('#')[1].split('&mp=')[0] : '';
-  check('the copied link\'s hash portion is pure base64url (no %, comma, or other punctuation at all)', /^[A-Za-z0-9_-]+$/.test(hashPortion), JSON.stringify({hashPortion}));
+  const longestBreaklessRun = hashPortion.split(/[-_]/).reduce((max, part) => Math.max(max, part.length), 0);
+  check('the copied link\'s hash portion has no bare comma (both structural commas escaped)', !hashPortion.includes(','), JSON.stringify({hashPortion}));
+  check('the copied link still shows the cart\'s own name in the URL (readability preserved, not obliterated by full-fragment encoding)', hashPortion.includes(encodeURIComponent('Race Car')), JSON.stringify({hashPortion}));
+  check('the copied link never runs 200+ characters without a break, safely under iMessage/Signal\'s ~300-char split threshold', longestBreaklessRun < 200, JSON.stringify({hashPortion, longestBreaklessRun}));
   check('the button shows "Copied!" feedback after a successful copy', copyLinkResult.feedbackText === 'Copied!', JSON.stringify(copyLinkResult));
 
   // Third: opening a join link (openLobbyAndJoin, main.js's boot() calls
