@@ -135,23 +135,40 @@ function joinMatch(cart, roomCode, opts){
 // A join link bundles this exact game with a room code, so opening it is
 // the recipient's whole "join" step — no separately-communicated code to
 // read off another screen and type in by hand. `&mp=<code>` is appended
-// directly to the fragment rather than carried as a real query string
-// (there's nowhere else to put it: everything after `#` is the fragment,
-// and a second `#` isn't legal in a URL) — safe to just concatenate,
-// since a cart fragment's own alphabet (base64url payload, URI-encoded
-// name/author, see kernel.js's encodeCartUrl) never contains `&`, so this
-// suffix can't be confused with anything the fragment itself produced.
-// parseJoinLinkHash is the exact inverse, used by main.js's boot() (and
-// exercised directly by test/smoke.js, without needing a live match to
-// verify the split itself).
+// after the fragment (there's nowhere else to put it: everything after
+// `#` is the fragment, and a second `#` isn't legal in a URL) — `&` is
+// never confusing to a URL/link detector (it's the standard query-param
+// separator, seen in essentially every real-world URL) so it's safe to
+// just concatenate.
+//
+// The fragment itself is a different story: kernel.js's encodeCartUrl
+// joins `encodeURIComponent(name) + ',' + encodeURIComponent(author) +
+// ',' + payload` with two literal, unescaped commas — completely fine
+// for this app's own `location.hash` routing (never parsed as a "real"
+// URL, just read back as an opaque string), but a bare comma sitting
+// inside what looks like a URL reads as ordinary sentence punctuation
+// to link-detection heuristics that aren't purely spec-following (iOS
+// iMessage's, observed directly: pasting a raw join link split it into
+// two separate tappable links right at the comma between the author and
+// the payload). The fix is to run the *whole* fragment through
+// `encodeURIComponent` once more before it goes in the link — turns
+// every comma, and the already-`%`-escaped name/author bytes, into a
+// single opaque run of letters/digits/%/-/_/./~ with no punctuation a
+// detector could mistake for a sentence boundary. `decodeURIComponent`
+// is the exact, lossless inverse (encodeURIComponent/decodeURIComponent
+// round-trip perfectly regardless of what's inside), so parseJoinLinkHash
+// just reverses it — the resulting gameHash is byte-identical to the
+// original fragment, ready for Runtime.startGame unchanged. A hash with
+// no `&mp=` suffix was never wrapped this way (it's an ordinary shelf/
+// debug/restart link) and is returned completely untouched.
 function parseJoinLinkHash(hash){
   const m = hash.match(/&mp=([^&]+)$/);
-  return m ? { gameHash: hash.slice(0, m.index), code: m[1] } : { gameHash: hash, code: null };
+  return m ? { gameHash: decodeURIComponent(hash.slice(0, m.index)), code: m[1] } : { gameHash: hash, code: null };
 }
 function buildJoinLink(roomCode){
   const fragment = getCurrentFragment();
   if(!fragment) return null;
-  return location.origin + location.pathname + location.search + '#' + fragment + '&mp=' + roomCode;
+  return location.origin + location.pathname + location.search + '#' + encodeURIComponent(fragment) + '&mp=' + roomCode;
 }
 
 // navigator.clipboard.writeText needs a secure context (https, or
