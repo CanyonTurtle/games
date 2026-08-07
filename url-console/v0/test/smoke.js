@@ -1941,12 +1941,20 @@ async function main(){
       return room;
     }
     const rooms = [];
-    const mockJoinRoomFn = (config, roomId) => { const room = makeMockRoom(); rooms.push({roomId, room}); return room; };
+    const mockJoinRoomFn = (config, roomId, callbacks) => { const room = makeMockRoom(); rooms.push({roomId, room, callbacks}); return room; };
     D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
     const hiddenOnChoiceScreen = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
     document.getElementById('mpHostBtn').click();
     const logAfterHost = document.getElementById('mpDiagLog').textContent;
     const visibleAfterHost = getComputedStyle(document.getElementById('mpDiag')).display !== 'none';
+    // Trystero's real onJoinError callback (DESIGN.md §92) — fires when
+    // SDP exchange succeeded but the WebRTC connection itself never
+    // completed. Simulated here the same way onPeerJoin is below: call
+    // the captured callback directly, since a real ICE failure isn't
+    // reproducible from this sandbox (same limitation noted throughout
+    // this file for anything needing the actual network).
+    rooms[0].callbacks.onJoinError({error: 'could not connect to peer abc123 after exchanging SDP', peerId: 'abc123def456', appId: 'urlcade-mp-test', roomId: rooms[0].roomId});
+    const logAfterJoinError = document.getElementById('mpDiagLog').textContent;
     rooms[0].room.onPeerJoin('mockPeerId');
     const logAfterConnect = document.getElementById('mpDiagLog').textContent;
     // Spy on the clipboard the same way the Copy Link test does — real
@@ -1960,7 +1968,7 @@ async function main(){
     const hiddenAfterClose = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
     const emptyAfterClose = document.getElementById('mpDiagLog').textContent === '';
     return {
-      hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterConnect,
+      hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterJoinError, logAfterConnect,
       copiedText, hiddenAfterClose, emptyAfterClose,
       roomCode: rooms[0] && rooms[0].roomId,
       expectedAppId: D.appIdForCart(cart),
@@ -1968,6 +1976,7 @@ async function main(){
   });
   check('the connection log is hidden on the initial Host/Join choice screen (nothing attempted yet)', diagResult.hiddenOnChoiceScreen, JSON.stringify(diagResult));
   check('hosting reveals the connection log and records the room code + waiting state', diagResult.visibleAfterHost && diagResult.logAfterHost.includes(diagResult.roomCode) && /waiting-for-peer/.test(diagResult.logAfterHost), JSON.stringify(diagResult));
+  check('Trystero\'s onJoinError callback (SDP exchanged, WebRTC connection itself failed) reaches the connection log', diagResult.logAfterJoinError.includes('could not connect to peer') && diagResult.logAfterJoinError.includes('after exchanging SDP'), JSON.stringify(diagResult));
   // The appId is the room-topic half a host and joiner have to agree on
   // to ever find each other — logging it lets that be compared directly
   // between two devices' diag logs, no separate network inspector

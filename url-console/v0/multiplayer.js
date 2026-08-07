@@ -105,7 +105,23 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     // exchange between two independent peers. Connecting to all 5
     // widens the chance at least one pair is mutually healthy for that,
     // at the cost of a few more open sockets per session.
-    room = joinRoomFn({appId: appIdForCart(cart), relayConfig: {redundancy: 5}}, roomCode);
+    // Trystero's own third `callbacks` argument (`joinRoom(config,
+    // roomId, callbacks)`) — never wired before this round — reports
+    // exactly the failure this whole diagnostics arc has been trying to
+    // pin down: onJoinError fires with a specific, already-worded
+    // message ("could not connect to peer X after exchanging SDP") when
+    // two peers' signaling (SDP offer/answer) succeeds but the
+    // WebRTC/ICE connection itself never completes — as opposed to
+    // failing earlier, before any peer is even found. Surfacing it
+    // directly answers whether this app's stalls are in that specific
+    // bucket (which is what a missing TURN server, or something like
+    // iCloud Private Relay interfering with STUN, would look like) or
+    // somewhere upstream of it.
+    room = joinRoomFn(
+      {appId: appIdForCart(cart), relayConfig: {redundancy: 5}},
+      roomCode,
+      {onJoinError: ({error, peerId}) => pushDiag(`join error: ${error}` + (peerId ? ` (peer ${String(peerId).slice(0, 6)})` : ''))}
+    );
   } catch(err){
     session.error = err.message;
     setState('error');
