@@ -422,11 +422,39 @@ function pollDiag(){
     }
   }
 }
+// Trystero's own tracker-protocol layer (vendor/trystero/torrent.mjs's
+// warn()) already detects and reports exactly the class of failure this
+// diagnostic panel exists to catch — a tracker relay responding with a
+// "failure reason" or "warning message" to an announce, which is
+// precisely what "relays reach OPEN but no peer is ever found" would
+// look like — but only ever sends it to console.warn, invisible on a
+// phone with no devtools attached. Capturing it here (filtered to this
+// library's own `${libName}: ...` prefix, so an unrelated page warning
+// doesn't get misattributed as a multiplayer problem) closes that gap
+// without touching the vendored library itself. Calls through to the
+// real console.warn too — this is additive, not a replacement, so
+// anyone who *does* have devtools open still sees it there as well.
+let originalConsoleWarn = null;
+function installConsoleWarnCapture(){
+  if(originalConsoleWarn) return; // already installed
+  originalConsoleWarn = console.warn.bind(console);
+  console.warn = (...args) => {
+    originalConsoleWarn(...args);
+    const text = args.map(a => (typeof a === 'string' ? a : String(a))).join(' ');
+    if(text.includes('Trystero')) pushDiag(`console.warn: ${text}`);
+  };
+}
+function uninstallConsoleWarnCapture(){
+  if(!originalConsoleWarn) return;
+  console.warn = originalConsoleWarn;
+  originalConsoleWarn = null;
+}
 function startDiag(role, roomCode){
   diagStartTime = Date.now();
   diagLog = [];
   lastRelayStates = {};
   lastPeerStates = {};
+  installConsoleWarnCapture();
   pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)}`);
   pollDiag();
   clearInterval(diagPollTimer);
@@ -439,6 +467,7 @@ function startDiag(role, roomCode){
 function stopDiag(){
   clearInterval(diagPollTimer);
   diagPollTimer = null;
+  uninstallConsoleWarnCapture();
   diagLog = [];
   renderDiag();
 }

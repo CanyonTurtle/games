@@ -1986,6 +1986,33 @@ async function main(){
   });
   check('a joinRoomFn that throws synchronously still reaches the connection log, not just the lobby UI', /error.*mock signaling failure/.test(diagErrorResult.log), JSON.stringify(diagErrorResult));
 
+  // vendor/trystero/torrent.mjs's own warn() reports tracker-level
+  // failures (a relay responding with a "failure reason"/"warning
+  // message" to an announce) only via console.warn — otherwise
+  // invisible on a phone with no devtools. The diag panel captures it
+  // while a session is active; a real Trystero-prefixed warning is the
+  // exact shape of message that library actually emits (see this file's
+  // own warn() helper), an unrelated page warning is not, and closing
+  // the lobby must restore the original console.warn so nothing leaks
+  // into later, unrelated test output.
+  const consoleWarnCaptureResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const cart = D.getWorld().cart;
+    const mockJoinRoomFn = () => ({ onPeerJoin:null, onPeerLeave:null, leave(){} });
+    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    document.getElementById('mpHostBtn').click();
+    console.warn('Trystero: torrent tracker failure from wss://tracker.example.com - mock tracker rejection');
+    const logWithTrackerWarning = document.getElementById('mpDiagLog').textContent;
+    console.warn('an unrelated page warning nothing to do with multiplayer');
+    const logAfterUnrelatedWarning = document.getElementById('mpDiagLog').textContent;
+    D.closeMultiplayerLobby();
+    const restoredAfterClose = console.warn.toString().includes('[native code]');
+    return { logWithTrackerWarning, logAfterUnrelatedWarning, restoredAfterClose };
+  });
+  check('a Trystero-prefixed console.warn (tracker failure/warning) reaches the connection log', consoleWarnCaptureResult.logWithTrackerWarning.includes('mock tracker rejection'), JSON.stringify(consoleWarnCaptureResult));
+  check('an unrelated console.warn is left out of the connection log (filtered to this library\'s own messages)', !consoleWarnCaptureResult.logAfterUnrelatedWarning.includes('unrelated page warning'), JSON.stringify(consoleWarnCaptureResult));
+  check('closing the lobby restores the original console.warn (no permanent monkey-patch left behind)', consoleWarnCaptureResult.restoredAfterClose, JSON.stringify(consoleWarnCaptureResult));
+
   // Join links (DESIGN.md §84) — "Copy Link" bundles the current game's
   // fragment with the hosting session's room code into one URL, so a
   // friend's whole "join" step is opening it. First, the pure hash split
