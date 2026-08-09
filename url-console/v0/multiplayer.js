@@ -16,7 +16,7 @@
    gameplay sync, once there's a connected room to drive it with.
    ============================================================ */
 import { joinRoom as trysteroJoinRoom, selfId, getRelaySockets } from './vendor/trystero/torrent.mjs';
-import { startGame, getCurrentFragment, getWorld, setPerTickHook, getIdentity } from './runtime.js';
+import { startGame, getCurrentFragment, getWorld, setPerTickHook, getIdentity, buildCardThumbnail } from './runtime.js';
 import { CARTS } from './carts/index.js';
 import * as Avatars from './avatars.js';
 
@@ -159,7 +159,7 @@ async function fetchTurnCredentials(targetArray){
 // see the wire-protocol note above `session.queue`/`startMatch` below.
 // A match only ever begins on an explicit party-start message, never as
 // a side effect of a peer joining the room.
-function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs = 5000, fetchTurnCredentialsFn = fetchTurnCredentials} = {}){
+function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs = 5000, fetchTurnCredentialsFn = fetchTurnCredentials, countdownMs = 3000} = {}){
   const listeners = new Set();
   const queueListeners = new Set();
   const matchStartListeners = new Set();
@@ -179,6 +179,7 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs =
     peerIdentity: null, // {name, avatarId} once the peer's own party-identity message arrives — null until then
     lastMatchFragment: null, // the fragment of the most recently *started* match — End Round's own "restart" candidate
     cascade: null, // {id, candidates, index, selfVote, peerVote} while a post-round Ready/Skip vote is in progress, else null
+    countdownMs, // DESIGN.md §10x — a purely local, fixed pre-match countdown; see beginSyncedMatch's own comment for why this needs no wire message. Stashed on the session (not just closed over here) since beginSyncedMatch is a module-level function that only ever receives `session`, the same reason voteTimeoutMs never needed this but countdownMs does — nothing else reads voteTimeoutMs outside this closure.
     onStateChange(fn){ listeners.add(fn); return () => listeners.delete(fn); },
     onQueueChange(fn){ queueListeners.add(fn); return () => queueListeners.delete(fn); },
     onMatchStart(fn){ matchStartListeners.add(fn); return () => matchStartListeners.delete(fn); },
@@ -725,6 +726,50 @@ let activeSync = null; // the startMatchSync() handle for the current 'connected
 // AbortController: nothing here needs to actually cancel startGame()
 // mid-flight, just to notice it's stale once it resolves.
 let matchGeneration = 0;
+// Set true for the duration of runCountdown() (below) — session.state/
+// session.cascade alone can't distinguish "counting down" from whatever
+// state preceded it, since the countdown view bypasses renderSessionBody()
+// entirely rather than being one more branch of it.
+let inCountdown = false;
+
+// Transition animations (DESIGN.md §10x) — scoped to an actual change in
+// which *kind* of view #mpBody is showing, not fired on every render.
+// #mpBody gets fully replaced (innerHTML) on every renderLobby()/
+// runCountdown() tick, including routine updates that aren't a state
+// change at all (a queue item added, the peer's avatar arriving, a
+// thumbnail resolving, the countdown number ticking down) — animating
+// all of those would read as flicker, not the "more friendly" transition
+// this was actually asked for. renderKindOf() is deliberately a
+// different concept from session.state alone: 'cascade' layers on top of
+// 'connected', 'countdown' isn't a session state at all, and
+// lobbyMode('choice'/'join-form') only applies before a session exists.
+let lastRenderedKind = null;
+// Exposed via window.__urlcadeDebug purely for testability — asserting
+// "a class was present" after one render can't distinguish a re-trigger
+// from having never changed; a counter that only increments on an actual
+// kind change is the direct, observable signal test/smoke.js needs.
+let animationTriggerCount = 0;
+function renderKindOf(){
+  if(inCountdown) return 'countdown';
+  if(!activeSession) return lobbyMode; // 'choice' | 'join-form'
+  if(activeSession.state === 'connected' && activeSession.cascade) return 'cascade';
+  return activeSession.state; // 'waiting-for-peer' | 'connected' | 'peer-left' | 'error' | 'left'
+}
+// Called right after every #mpBody innerHTML replace (renderLobby()'s
+// three branches, runCountdown()'s own per-tick render) — replays the
+// shared viewIn entrance animation (index.html; the same keyframe/
+// restart idiom runtime.js's startGame()/showMenu() already use) only
+// when renderKindOf() actually changed since the last call.
+function maybeAnimateBody(body){
+  const kind = renderKindOf();
+  if(kind !== lastRenderedKind){
+    body.classList.remove('mp-body-anim');
+    void body.offsetWidth; // force reflow so re-adding the class restarts the CSS animation instead of no-oping
+    body.classList.add('mp-body-anim');
+    animationTriggerCount++;
+  }
+  lastRenderedKind = kind;
+}
 
 // Diagnostics (DESIGN.md §88) — a "the connection just stalls" report
 // looks identical from this file's own state machine whether the cause
@@ -857,15 +902,27 @@ function stopDiag(){
   uninstallConsoleWarnCapture();
   diagLog = [];
   renderDiag();
+  // Also resets the <details> open/closed state itself, not just the log
+  // text — an error-triggered auto-expand (handleSessionStateChange)
+  // shouldn't leak into the *next* party's panel, which should start
+  // collapsed regardless of how the last one ended.
+  const wrap = document.getElementById('mpDiagWrap');
+  if(wrap) wrap.open = false;
 }
 function renderDiag(){
-  const panel = document.getElementById('mpDiag');
+  // The wrapper (<details>#mpDiagWrap), not #mpDiag itself — DESIGN.md
+  // §10x collapsed the panel behind a native disclosure; this still only
+  // controls whether the disclosure shows up *at all* (nothing to
+  // disclose before a session exists), never its open/closed state,
+  // which the browser's own <details> toggle (or the error-state
+  // auto-expand below) owns instead.
+  const wrap = document.getElementById('mpDiagWrap');
   const logEl = document.getElementById('mpDiagLog');
-  if(!logEl || !panel) return;
+  if(!logEl || !wrap) return;
   // '' (not 'block') would just clear the inline override and fall back
-  // to .mp-diag's own CSS default, which is display:none — so this has
-  // to set an explicit visible value, not merely "not none".
-  panel.style.display = diagLog.length ? 'block' : 'none';
+  // to .mp-diag-wrap's own CSS default, which is display:none — so this
+  // has to set an explicit visible value, not merely "not none".
+  wrap.style.display = diagLog.length ? 'block' : 'none';
   logEl.textContent = diagLog.join('\n');
   logEl.scrollTop = logEl.scrollHeight;
 }
@@ -933,6 +990,70 @@ function closeLobby(){
   document.getElementById('mpOverlay').classList.remove('active');
 }
 
+function sleep(ms){ return new Promise(resolve => setTimeout(resolve, ms)); }
+
+// The pre-match "Get Ready" countdown (DESIGN.md §10x) — who you're about
+// to play, and what, not just a bare number, per the plan's own decision.
+// Reuses thumbSlot()/attachDynamicSlots() (below) for the game's real
+// thumbnail and the peer's real avatar — the same two-phase
+// emit-a-placeholder/fill-it-in-after pattern every other dynamic bit of
+// this panel already uses.
+function renderCountdownBody(session, fragment, secondsLeft){
+  let name = '(untitled)', author = '';
+  try{ ({ name, author } = K.decodeCartUrl(fragment)); } catch(err){ /* the fragment is one both peers already agreed to play — a decode failure here would be a deeper bug, not a reason to crash the countdown */ }
+  return `
+    <h3>Get Ready</h3>
+    <div class="mp-peer-info"><span id="mpPeerAvatarSlot" class="mp-peer-avatar"></span><span class="mp-peer-name">${esc(peerDisplayName(session))}</span></div>
+    <div class="cart mp-countdown-game">
+      ${thumbSlot(fragment)}
+      <div class="cart-body">
+        <h2>${esc(name || '(untitled)')}</h2>
+        <p class="cart-author">${author ? 'by ' + esc(author) : ''}</p>
+      </div>
+    </div>
+    <div class="mp-countdown-number">${secondsLeft}</div>
+  `;
+}
+
+// Purely local, fixed-duration — no wire message needed. Both peers
+// reach beginSyncedMatch() independently off the same onMatchStart event
+// (one immediately from the sender's own session.startMatch()/cascade
+// resolution, the other after the party-start wire round-trip), the same
+// "deterministic and symmetric" shape assignSlot() already relies on for
+// slot assignment — a fixed local countdown on each side lands both
+// peers' actual startGame() calls within a fraction of a second of each
+// other, comfortably inside what the 8-tick rollback ring buffer
+// (~133ms at 60fps) already tolerates day to day.
+//
+// Ticks off real elapsed time (not a fixed per-second setTimeout chain)
+// so the displayed number is correct regardless of how session.countdownMs
+// divides into whole seconds — smoke.js injects durations as short as a
+// few tens of ms. generation is checked on every tick (the same counter
+// beginSyncedMatch's own post-startGame() guard already uses, bumped by
+// stopSync()'s two existing callers) so a peer leaving — or a fresh
+// cascade starting — mid-countdown aborts it exactly like a stale
+// in-flight startGame() already gets discarded, no new invalidation call
+// site needed.
+async function runCountdown(session, fragment, generation){
+  const body = document.getElementById('mpBody');
+  const startTime = Date.now();
+  const tickMs = 100;
+  inCountdown = true;
+  try{
+    while(generation === matchGeneration){
+      const remainingMs = session.countdownMs - (Date.now() - startTime);
+      if(remainingMs <= 0) return;
+      const secondsLeft = Math.max(1, Math.ceil(remainingMs / 1000));
+      body.innerHTML = renderCountdownBody(session, fragment, secondsLeft);
+      attachDynamicSlots(session, body);
+      maybeAnimateBody(body); // a no-op past the very first tick — renderKindOf() stays 'countdown' for the rest of this loop
+      await sleep(Math.min(tickMs, remainingMs));
+    }
+  } finally {
+    inCountdown = false;
+  }
+}
+
 // Fires on an explicit party-start message (either peer clicking Play on
 // a queue item, see session.startMatch above) — never as a side effect
 // of a peer simply joining the room (see handleSessionStateChange below).
@@ -944,12 +1065,20 @@ function closeLobby(){
 // exact fragment both peers agreed on over the wire, not whatever
 // happens to be loaded locally (getCurrentFragment()) — that's the
 // concrete mechanism behind the "explicit cart agreement" guarantee
-// PARTY_APP_ID's own comment above describes. Hides the modal rather
-// than closing it — closeLobby() would also leave the room.
+// PARTY_APP_ID's own comment above describes.
 async function beginSyncedMatch(session, fragment){
-  document.getElementById('mpOverlay').classList.remove('active');
   if(!fragment) return;
   const generation = ++matchGeneration;
+  // The overlay stays open (and visible, even if the player had it
+  // hidden — DESIGN.md §10x, matching the existing "X only hides, it
+  // never cancels anything" posture) through the countdown, so both
+  // peers actually see who/what they're about to play. Only hidden once
+  // the countdown finishes and the real match is about to start,
+  // mirroring what this function always did before the countdown existed.
+  document.getElementById('mpOverlay').classList.add('active');
+  await runCountdown(session, fragment, generation);
+  if(generation !== matchGeneration) return; // superseded during the countdown itself (peer left, or a fresh cascade started)
+  document.getElementById('mpOverlay').classList.remove('active');
   await startGame(fragment);
   if(generation !== matchGeneration) return; // superseded — the peer already left (or this side closed) while startGame() was in flight
   const world = getWorld();
@@ -1002,6 +1131,51 @@ function ensureMultiplayerCapableCartsLoaded(){
   });
 }
 
+// Shelf-style thumbnails for queue/add-game cards (DESIGN.md §10x) —
+// fragment-keyed, same lazy-decode-then-renderLobby() idiom as
+// mpCapableCartsList/ensureMultiplayerCapableCartsLoaded just above.
+// Needed because a queue item only ever carries {fragment, name, author,
+// maxPlayers, addedBy} over the wire (party-queue's own wire shape,
+// never a decoded cart), so buildCardThumbnail's actual input has to be
+// built locally, once, the same way renderMenu() does it for the real
+// shelf — and cached, since decoding+rendering isn't free and the same
+// fragment can appear again across re-renders (a queue item, and later
+// that same game's own restart/cascade candidate).
+const thumbCache = new Map(); // fragment -> {status:'loading'} | {status:'ready', canvas} | {status:'error'}
+function ensureThumbnail(fragment){
+  if(thumbCache.has(fragment)) return;
+  thumbCache.set(fragment, {status: 'loading'});
+  (async () => {
+    let entry;
+    try{
+      const cart = K.decodeCart(await K.decodePayloadToBytes(K.decodeCartUrl(fragment).payload));
+      entry = {status: 'ready', canvas: buildCardThumbnail(cart)};
+    } catch(err){
+      // Same graceful-degradation posture as renderMenu()'s own shelf
+      // cards — a fragment that fails to decode just shows no thumbnail,
+      // not a thrown error.
+      entry = {status: 'error'};
+    }
+    thumbCache.set(fragment, entry);
+    renderLobby();
+  })();
+}
+// The same fragment can need a thumbnail in more than one slot at once
+// (e.g. a game that's both already queued *and* still offered in "Add a
+// game" — nothing dedupes those two lists against each other) — a single
+// cached <canvas> can only ever have one DOM parent, so each slot gets
+// its own copy of the cached pixels rather than the cached node itself
+// (cloneNode() alone wouldn't do this: cloning a canvas element copies
+// neither its drawn bitmap nor its 2D context, only the element).
+function cloneThumbCanvas(src){
+  const c = document.createElement('canvas');
+  c.width = src.width;
+  c.height = src.height;
+  c.className = 'cart-thumb';
+  c.getContext('2d').drawImage(src, 0, 0);
+  return c;
+}
+
 // The peer's display name once known (party-identity has arrived and it
 // isn't blank), else the generic "your friend" fallback this file used
 // throughout before Stage 3 — a peer who never set a name (still the
@@ -1011,33 +1185,55 @@ function peerDisplayName(session){
   return session.peerIdentity && session.peerIdentity.name ? session.peerIdentity.name : 'your friend';
 }
 
+// A synchronous placeholder <div>, kicking off the (async, cached)
+// thumbnail decode as a side effect — renderLobby()'s own post-innerHTML
+// pass (below) walks every [data-thumb-fragment] slot afterward and
+// appends whatever thumbCache now has for it, the same two-phase
+// "emit a slot, fill it in after innerHTML exists" pattern this file
+// already uses for the peer's avatar canvas.
+function thumbSlot(fragment){
+  ensureThumbnail(fragment);
+  return `<div class="cart-thumb-slot" data-thumb-fragment="${esc(fragment)}"></div>`;
+}
+
 function renderQueueList(session){
   if(!session.queue.length){
     return `<p class="mp-queue-empty">No games queued yet — add one below.</p>`;
   }
-  const rows = session.queue.map(item => `
-    <div class="mp-queue-item">
-      <div class="mp-queue-info">
-        <span class="mp-queue-name">${esc(item.name || '(untitled)')}</span>
-        <span class="mp-queue-added-by">added by ${item.addedBy === session.selfId ? 'you' : esc(peerDisplayName(session))}</span>
-      </div>
-      <div class="mp-queue-item-actions">
-        <button class="mp-queue-play" data-queue-id="${esc(item.id)}">Play</button>
-        <button class="mp-queue-remove" data-queue-id="${esc(item.id)}" title="Remove">&times;</button>
+  const cards = session.queue.map(item => `
+    <div class="cart mp-queue-item" data-queue-id="${esc(item.id)}">
+      ${thumbSlot(item.fragment)}
+      <div class="cart-body">
+        <h2>${esc(item.name || '(untitled)')}</h2>
+        <p class="cart-author">added by ${item.addedBy === session.selfId ? 'you' : esc(peerDisplayName(session))}</p>
+        <div class="mp-queue-item-actions">
+          <button class="playbtn mp-queue-play" data-queue-id="${esc(item.id)}">&#9654; Play</button>
+          <button class="mp-queue-remove" data-queue-id="${esc(item.id)}" title="Remove">&times;</button>
+        </div>
       </div>
     </div>
   `).join('');
-  return `<div class="mp-queue-list">${rows}</div>`;
+  return `<div class="mp-card-grid">${cards}</div>`;
 }
 function renderAddGameSection(){
   ensureMultiplayerCapableCartsLoaded();
   if(!mpCapableCartsList){
-    return `<div class="mp-queue-add"><p class="mp-queue-empty">Loading games…</p></div>`;
+    return `<div class="mp-queue-add"><h4>Add a game</h4><p class="mp-queue-empty">Loading games…</p></div>`;
   }
-  const options = mpCapableCartsList.map(c => `
-    <button class="mp-queue-add-btn" data-cart-key="${esc(c.key)}">+ ${esc(c.name || c.key)} <span class="mp-queue-add-players">${c.maxPlayers}p</span></button>
+  if(!mpCapableCartsList.length){
+    return `<div class="mp-queue-add"><h4>Add a game</h4><p class="mp-queue-empty">No multiplayer games on the shelf yet.</p></div>`;
+  }
+  const cards = mpCapableCartsList.map(c => `
+    <button type="button" class="cart mp-cart-add" data-cart-key="${esc(c.key)}">
+      ${thumbSlot(c.fragment)}
+      <div class="cart-body">
+        <h2>${esc(c.name || c.key)}</h2>
+        <p class="cart-author">${c.author ? 'by ' + esc(c.author) : ''}</p>
+        <p class="cart-players">&#128101; ${c.maxPlayers} players</p>
+      </div>
+    </button>
   `).join('');
-  return `<div class="mp-queue-add"><h4>Add a game</h4><div class="mp-queue-add-list">${options}</div></div>`;
+  return `<div class="mp-queue-add"><h4>Add a game</h4><div class="mp-card-grid">${cards}</div></div>`;
 }
 
 function voteLabel(choice){
@@ -1117,18 +1313,36 @@ function renderSessionBody(session){
   return ''; // 'left' — closeLobby() already hid the overlay by the time this could render
 }
 
+// Fills in the two kinds of "real DOM node, not stringable into
+// innerHTML" content every #mpBody render might contain — the peer's
+// avatar canvas and any shelf-style thumbnail canvases (DESIGN.md
+// §10x) — after the HTML string that left placeholders for them has
+// already been set. Shared by renderLobby() and runCountdown()'s own
+// per-tick render (below), which bypasses renderSessionBody()'s normal
+// dispatch entirely but still needs both kinds of slot filled in.
+function attachDynamicSlots(session, body){
+  // Left empty (no placeholder avatar) until the peer's actual identity
+  // arrives — a made-up default would misrepresent them.
+  const peerAvatarSlot = document.getElementById('mpPeerAvatarSlot');
+  if(peerAvatarSlot && session.peerIdentity) peerAvatarSlot.appendChild(Avatars.renderAvatarCanvas(session.peerIdentity.avatarId));
+  // thumbSlot() (used by renderQueueList/renderAddGameSection/the
+  // countdown view) already kicked off ensureThumbnail() as a side
+  // effect of emitting each placeholder; this fills in whichever ones
+  // thumbCache already has a real canvas for (a fresh decode still in
+  // flight just leaves that one slot empty until the next render
+  // ensureThumbnail() itself triggers once it resolves).
+  body.querySelectorAll('[data-thumb-fragment]').forEach(slot => {
+    const entry = thumbCache.get(slot.dataset.thumbFragment);
+    if(entry && entry.status === 'ready') slot.appendChild(cloneThumbCanvas(entry.canvas));
+  });
+}
+
 function renderLobby(){
   const body = document.getElementById('mpBody');
   if(activeSession){
     body.innerHTML = renderSessionBody(activeSession);
-    // renderSessionBody's own peerDisplayName() handles the text; the
-    // avatar is a real <canvas> (Avatars.renderAvatarCanvas), which can
-    // only be appended after the innerHTML above exists, same pattern
-    // main.js's own renderIdentityChip uses. Left empty (no placeholder
-    // avatar) until the peer's actual identity arrives — a made-up
-    // default would misrepresent them.
-    const peerAvatarSlot = document.getElementById('mpPeerAvatarSlot');
-    if(peerAvatarSlot && activeSession.peerIdentity) peerAvatarSlot.appendChild(Avatars.renderAvatarCanvas(activeSession.peerIdentity.avatarId));
+    attachDynamicSlots(activeSession, body);
+    maybeAnimateBody(body);
     const cancelBtn = document.getElementById('mpCancelBtn');
     if(cancelBtn) cancelBtn.addEventListener('click', closeLobby);
     const copyLinkBtn = document.getElementById('mpCopyLinkBtn');
@@ -1159,7 +1373,7 @@ function renderLobby(){
     body.querySelectorAll('.mp-queue-remove').forEach(btn => btn.addEventListener('click', () => {
       activeSession.removeFromQueue(btn.dataset.queueId);
     }));
-    body.querySelectorAll('.mp-queue-add-btn').forEach(btn => btn.addEventListener('click', () => {
+    body.querySelectorAll('.mp-cart-add').forEach(btn => btn.addEventListener('click', () => {
       const cart = mpCapableCartsList && mpCapableCartsList.find(c => c.key === btn.dataset.cartKey);
       if(cart) activeSession.addToQueue({fragment: cart.fragment, name: cart.name, author: cart.author, maxPlayers: cart.maxPlayers});
     }));
@@ -1181,6 +1395,7 @@ function renderLobby(){
       if(!code.trim()) return;
       startSession('join', code);
     });
+    maybeAnimateBody(body);
     return;
   }
   body.innerHTML = `
@@ -1195,6 +1410,7 @@ function renderLobby(){
   `;
   document.getElementById('mpHostBtn').addEventListener('click', () => startSession('host'));
   document.getElementById('mpJoinBtn').addEventListener('click', () => { lobbyMode = 'join-form'; renderLobby(); });
+  maybeAnimateBody(body);
 }
 
 // A small always-present indicator (index.html's #partyIndicator, styled
@@ -1240,6 +1456,14 @@ function handleSessionStateChange(state, session){
     stopSync();
     document.getElementById('mpOverlay').classList.add('active');
   }
+  // A real connection problem is exactly when the technical log stops
+  // being optional — auto-expand it rather than leaving a player who
+  // just hit an error to discover "Connection details" is even there.
+  // Every other state leaves the panel exactly as the player left it.
+  if(state === 'error'){
+    const wrap = document.getElementById('mpDiagWrap');
+    if(wrap) wrap.open = true;
+  }
   updatePartyIndicator();
   renderLobby();
 }
@@ -1263,6 +1487,15 @@ function startSession(role, code){
   // state wouldn't otherwise ever reach the diag log the way every later
   // transition does.
   pushDiag(`session state: ${activeSession.state}` + (activeSession.error ? ` (${activeSession.error})` : ''));
+  // Same reasoning as handleSessionStateChange's own auto-expand below —
+  // this covers the one path that never reaches that listener at all: a
+  // joinRoomFn that throws synchronously sets 'error' directly on the
+  // session object (connectToRoom's catch block), before onStateChange
+  // even has a subscriber.
+  if(activeSession.state === 'error'){
+    const wrap = document.getElementById('mpDiagWrap');
+    if(wrap) wrap.open = true;
+  }
   unsubscribeSession = activeSession.onStateChange(handleSessionStateChange);
   unsubscribeQueue = activeSession.onQueueChange(() => renderLobby());
   unsubscribeMatchStart = activeSession.onMatchStart(fragment => beginSyncedMatch(activeSession, fragment));
@@ -1357,6 +1590,11 @@ function updateMultiplayerButton(){
 function initMultiplayerUI(){
   document.getElementById('mpCloseBtn').addEventListener('click', hideLobby);
   document.getElementById('mpOverlay').addEventListener('click', e => {
+    // #mpOverlay is now full-screen (DESIGN.md §10x) — .mp-card fills the
+    // whole overlay, so there's no visible scrim left to click outside
+    // it. Left in place anyway: harmless (the condition just never
+    // matches from a real click), and still correct if a future revision
+    // ever leaves any margin around the card again.
     if(e.target.id === 'mpOverlay') hideLobby(); // click on the scrim itself, not the card
   });
   document.getElementById('partyIndicator').addEventListener('click', () => {
@@ -1367,9 +1605,15 @@ function initMultiplayerUI(){
   if(copyDiagBtn) copyDiagBtn.addEventListener('click', () => copyDiagLog(copyDiagBtn));
 }
 
+// Test-only observability (DESIGN.md §10x) — see animationTriggerCount's
+// own comment above for why a plain "was the class present" check can't
+// distinguish a re-trigger from never having changed.
+function getLobbyAnimationTriggerCount(){ return animationTriggerCount; }
+
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
   openLobby, openLobbyAndJoin, closeLobby, hideLobby, leaveMatchKeepParty,
   updateMultiplayerButton, initMultiplayerUI, broadcastIdentity, endRound,
   startMatchSync, parseJoinLinkHash, TURN_CONFIG, fetchTurnCredentials,
+  getLobbyAnimationTriggerCount,
 };

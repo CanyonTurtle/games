@@ -2010,6 +2010,17 @@ async function main(){
     // at connect time (startSession's host-only seeding) — one queue
     // item, with one Play button, should already be showing.
     const queuePlayButtons = document.querySelectorAll('.mp-queue-play').length;
+    // Shelf-integrated queue cards (DESIGN.md §10x) — the auto-seeded
+    // queue item above came from a real currently-loaded cart's real
+    // fragment, so its thumbnail should actually resolve. ensureThumbnail
+    // is async (fired as a side effect of the very same render that just
+    // produced queuePlayButtons), so poll briefly rather than assuming
+    // it's already settled by this point in the same tick.
+    for(let i = 0; i < 50 && !document.querySelector('.mp-queue-item .cart-thumb'); i++){
+      await new Promise(r => setTimeout(r, 20));
+    }
+    const queueThumbCanvas = document.querySelector('.mp-queue-item .cart-thumb');
+    const hasThumbCanvas = queueThumbCanvas instanceof HTMLCanvasElement;
 
     rooms[0].room.onPeerLeave('mockPeerId');
     const peerLeftHtml = document.getElementById('mpBody').innerHTML;
@@ -2029,9 +2040,11 @@ async function main(){
       overlayActiveAfterClose,
       turnConfigAfterFetch,
       turnConfigSameArrayReference,
+      hasThumbCanvas,
     };
   });
   check('the lobby opens on a Host/Join choice screen', lobbyResult.hadHostJoinButtons, JSON.stringify(lobbyResult));
+  check('a queued item\'s card shows a real rendered thumbnail, not just text', lobbyResult.hasThumbCanvas, JSON.stringify(lobbyResult));
   check('hosting shows a room code that matches what was passed to joinRoomFn', lobbyResult.roomCodeLen > 0 && lobbyResult.roomIdMatches, JSON.stringify(lobbyResult));
   // TURN servers (DESIGN.md §95, revised §10x after Open Relay Project's
   // static credentials stopped authenticating) — confirmed via a real
@@ -2144,10 +2157,16 @@ async function main(){
     D.openMultiplayerLobby({joinRoomFn: throwingJoinRoomFn});
     document.getElementById('mpHostBtn').click();
     const errorHtml = document.getElementById('mpBody').innerHTML;
+    // DESIGN.md §10x: a real connection error auto-expands the normally-
+    // collapsed diagnostics <details>, since a player who just hit a
+    // problem shouldn't have to know to go find "Connection details"
+    // themselves first.
+    const diagAutoExpanded = document.getElementById('mpDiagWrap').open === true;
     D.closeMultiplayerLobby();
-    return { showsError: errorHtml.includes('mock signaling failure') };
+    return { showsError: errorHtml.includes('mock signaling failure'), diagAutoExpanded };
   });
   check('a joinRoomFn that throws surfaces a visible error state instead of a silent no-op', mpErrorResult.showsError, JSON.stringify(mpErrorResult));
+  check('a connection error auto-expands the normally-collapsed connection details panel', mpErrorResult.diagAutoExpanded, JSON.stringify(mpErrorResult));
 
   // Connection diagnostics (DESIGN.md §88) — a small always-present log
   // surfacing relay/peer connection state directly in the lobby UI, for
@@ -2176,10 +2195,17 @@ async function main(){
     const rooms = [];
     const mockJoinRoomFn = (config, roomId, callbacks) => { const room = makeMockRoom(); rooms.push({roomId, room, callbacks}); return room; };
     D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
-    const hiddenOnChoiceScreen = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
+    const hiddenOnChoiceScreen = getComputedStyle(document.getElementById('mpDiagWrap')).display === 'none';
     document.getElementById('mpHostBtn').click();
     const logAfterHost = document.getElementById('mpDiagLog').textContent;
-    const visibleAfterHost = getComputedStyle(document.getElementById('mpDiag')).display !== 'none';
+    const visibleAfterHost = getComputedStyle(document.getElementById('mpDiagWrap')).display !== 'none';
+    // DESIGN.md §10x: the panel is a real, populated <details>, but
+    // stays collapsed by default (no `open` attribute) even though it's
+    // now showing (not display:none) — a player only sees it if they
+    // actually tap "Connection details".
+    const collapsedByDefaultDespiteContent = document.getElementById('mpDiagWrap').open === false;
+    document.querySelector('#mpDiagWrap summary').click();
+    const expandsOnSummaryClick = document.getElementById('mpDiagWrap').open === true;
     // Trystero's real onJoinError callback (DESIGN.md §92) — fires when
     // SDP exchange succeeded but the WebRTC connection itself never
     // completed. Simulated here the same way onPeerJoin is below: call
@@ -2198,10 +2224,11 @@ async function main(){
     navigator.clipboard.writeText = (text) => { copiedText = text; return Promise.resolve(); };
     document.getElementById('mpDiagCopyBtn').click();
     D.closeMultiplayerLobby();
-    const hiddenAfterClose = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
+    const hiddenAfterClose = getComputedStyle(document.getElementById('mpDiagWrap')).display === 'none';
     const emptyAfterClose = document.getElementById('mpDiagLog').textContent === '';
     return {
-      hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterJoinError, logAfterConnect,
+      hiddenOnChoiceScreen, visibleAfterHost, collapsedByDefaultDespiteContent, expandsOnSummaryClick,
+      logAfterHost, logAfterJoinError, logAfterConnect,
       copiedText, hiddenAfterClose, emptyAfterClose,
       roomCode: rooms[0] && rooms[0].roomId,
       expectedAppId: D.PARTY_APP_ID,
@@ -2209,6 +2236,8 @@ async function main(){
   });
   check('the connection log is hidden on the initial Host/Join choice screen (nothing attempted yet)', diagResult.hiddenOnChoiceScreen, JSON.stringify(diagResult));
   check('hosting reveals the connection log and records the room code + waiting state', diagResult.visibleAfterHost && diagResult.logAfterHost.includes(diagResult.roomCode) && /waiting-for-peer/.test(diagResult.logAfterHost), JSON.stringify(diagResult));
+  check('the connection log stays collapsed by default even once populated', diagResult.collapsedByDefaultDespiteContent, JSON.stringify(diagResult));
+  check('tapping "Connection details" expands the collapsed connection log', diagResult.expandsOnSummaryClick, JSON.stringify(diagResult));
   check('Trystero\'s onJoinError callback (SDP exchanged, WebRTC connection itself failed) reaches the connection log', diagResult.logAfterJoinError.includes('could not connect to peer') && diagResult.logAfterJoinError.includes('after exchanging SDP'), JSON.stringify(diagResult));
   // The appId is the room-topic half a host and joiner have to agree on
   // to ever find each other — logging it lets that be compared directly
@@ -2222,6 +2251,72 @@ async function main(){
   check('a peer joining is recorded as a "connected" session-state line', /session state: connected/.test(diagResult.logAfterConnect), JSON.stringify(diagResult));
   check('the Copy button on the connection log copies its exact text', diagResult.copiedText === diagResult.logAfterConnect, JSON.stringify(diagResult));
   check('closing the lobby hides the connection log and clears it for next time', diagResult.hiddenAfterClose && diagResult.emptyAfterClose, JSON.stringify(diagResult));
+
+  // Transition animations (DESIGN.md §10x) — scoped to an actual change
+  // in which *kind* of view #mpBody is showing (choice -> waiting-for-
+  // peer -> connected -> cascade), not fired on every render. A queue
+  // mutation within the same 'connected' kind must NOT retrigger it —
+  // the animationTriggerCount getter (not just "was the class present")
+  // is what makes that distinction observable.
+  const animResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    const baseline = D.getLobbyAnimationTriggerCount(); // this counter accumulates across the whole suite's run, not just this test — every check below compares against this baseline or the previous step, never an absolute value
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    const afterChoice = D.getLobbyAnimationTriggerCount();
+    document.getElementById('mpHostBtn').click(); // 'waiting-for-peer'
+    const afterWaiting = D.getLobbyAnimationTriggerCount();
+    rooms[0].onPeerJoin('mockPeer'); // 'connected'
+    const afterConnected = D.getLobbyAnimationTriggerCount();
+    document.querySelector('.mp-cart-add')?.click(); // adds to the queue — still 'connected', must NOT retrigger
+    const afterQueueMutation = D.getLobbyAnimationTriggerCount();
+    D.endRound(); // 'cascade' (a fresh candidate list off the just-added queue item + no prior match — still counts as a kind change)
+    const afterCascade = D.getLobbyAnimationTriggerCount();
+    D.closeMultiplayerLobby();
+    return { baseline, afterChoice, afterWaiting, afterConnected, afterQueueMutation, afterCascade };
+  });
+  check('opening the lobby (choice screen) triggers the entrance animation once', animResult.afterChoice === animResult.baseline + 1, JSON.stringify(animResult));
+  check('hosting (choice -> waiting-for-peer) triggers the entrance animation again', animResult.afterWaiting === animResult.afterChoice + 1, JSON.stringify(animResult));
+  check('a peer joining (waiting-for-peer -> connected) triggers the entrance animation again', animResult.afterConnected === animResult.afterWaiting + 1, JSON.stringify(animResult));
+  check('a queue mutation within the same \'connected\' kind does NOT retrigger the entrance animation', animResult.afterQueueMutation === animResult.afterConnected, JSON.stringify(animResult));
+  check('starting a vote cascade (connected -> cascade) triggers the entrance animation again', animResult.afterCascade === animResult.afterQueueMutation + 1, JSON.stringify(animResult));
+
+  // Full-screen #mpOverlay (DESIGN.md §10x) — scoped strictly to that
+  // one overlay's own ID, never touching the shared .mp-overlay/.mp-card
+  // rules #identityOverlay also relies on. The concrete regression test
+  // for that scoping: #mpOverlay's card should fill the viewport at both
+  // a normal desktop size and a narrow mobile one, while #identityOverlay
+  // stays a small centered card at the very same viewport.
+  const originalViewport = page.viewportSize();
+  const fullscreenResult = {};
+  for(const [label, size] of [['desktop', {width: 1280, height: 800}], ['mobile', {width: 390, height: 844}]]){
+    await page.setViewportSize(size);
+    fullscreenResult[label] = await page.evaluate(() => {
+      const D = window.__urlcadeDebug;
+      D.openMultiplayerLobby({joinRoomFn: () => ({onPeerJoin:null, onPeerLeave:null, leave(){}, makeAction: () => ({onMessage:null, send(){}})})});
+      const mpRect = document.querySelector('#mpOverlay .mp-card').getBoundingClientRect();
+      D.closeMultiplayerLobby();
+      document.getElementById('identityOverlay').classList.add('active');
+      const idRect = document.querySelector('#identityOverlay .mp-card').getBoundingClientRect();
+      document.getElementById('identityOverlay').classList.remove('active');
+      return {
+        mpFillsViewport: Math.abs(mpRect.width - window.innerWidth) < 2 && Math.abs(mpRect.height - window.innerHeight) < 2,
+        identityStaysSmall: idRect.width < 400,
+        viewportWidth: window.innerWidth,
+        mpWidth: mpRect.width,
+        idWidth: idRect.width,
+      };
+    });
+  }
+  await page.setViewportSize(originalViewport);
+  check('#mpOverlay fills the full viewport at a desktop size', fullscreenResult.desktop.mpFillsViewport, JSON.stringify(fullscreenResult.desktop));
+  check('#mpOverlay fills the full viewport at a narrow mobile size', fullscreenResult.mobile.mpFillsViewport, JSON.stringify(fullscreenResult.mobile));
+  check('#identityOverlay stays a small centered card, not full-screen, at the same viewports', fullscreenResult.desktop.identityStaysSmall && fullscreenResult.mobile.identityStaysSmall, JSON.stringify(fullscreenResult));
 
   // A synchronously-throwing joinRoomFn's error also has to reach the
   // log, even though it lands on 'error' before onStateChange has a
@@ -2504,7 +2599,11 @@ async function main(){
       return room;
     }
     const rooms = [];
-    D.openMultiplayerLobby({joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    // countdownMs injected short (DESIGN.md §10x) — same override
+    // convention as voteTimeoutMs, so this test doesn't have to sit
+    // through the real 3s "Get Ready" countdown beginSyncedMatch() now
+    // runs before a match actually starts.
+    D.openMultiplayerLobby({joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push(room); return room; }, countdownMs: 50});
     document.getElementById('mpHostBtn').click();
     rooms[0].onPeerJoin('mockPeer');
     const overlayActiveRightAfterJoin = document.getElementById('mpOverlay').classList.contains('active');
@@ -2518,7 +2617,7 @@ async function main(){
   });
   check('a peer joining shows the party queue instead of auto-starting a match', uiSyncResult.overlayActiveRightAfterJoin, JSON.stringify(uiSyncResult));
   check('the host\'s currently-loaded game is auto-seeded into the queue with a working Play button', uiSyncResult.hadAutoSeededPlayButton, JSON.stringify(uiSyncResult));
-  await page.waitForTimeout(400); // beginSyncedMatch() awaits Runtime.startGame()
+  await page.waitForTimeout(500); // beginSyncedMatch() now runs the (injected-short) countdown before awaiting Runtime.startGame()
   const afterMatchStart = await page.evaluate(() => ({
     overlayActive: document.getElementById('mpOverlay').classList.contains('active'),
     restartHidden: getComputedStyle(document.getElementById('restartBtn')).display === 'none',
@@ -2538,6 +2637,112 @@ async function main(){
   }));
   check('closing the lobby after a match restores the restart button', afterClose.restartRestored, JSON.stringify(afterClose));
   check('closing the lobby after a match clears World.multiplayerActive again (the World keeps playing, just no longer gated)', afterClose.multiplayerActive === false, JSON.stringify(afterClose));
+
+  // Pre-match "Get Ready" countdown (DESIGN.md §10x) — the view itself
+  // (peer info, the target game's real thumbnail, a live number), and
+  // the two behavioral guarantees the plan called for: a peer leaving
+  // mid-countdown must not let a stale countdown go on to start a dead
+  // match, and closing the panel mid-countdown must NOT cancel the
+  // match — only hide the view, matching the existing "X only hides,
+  // Leave Party actually leaves" posture everywhere else in the lobby.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const countdownViewResult = await page.evaluate(async () => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    // Long enough (relative to the 100ms tick) to observe the displayed
+    // number actually count down across at least two distinct values.
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }, countdownMs: 1300});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    document.querySelector('.mp-queue-play').click();
+    const seenNumbers = new Set();
+    const peerNameSeen = [];
+    const hasThumbSeen = [];
+    for(let i = 0; i < 20; i++){
+      const numEl = document.querySelector('.mp-countdown-number');
+      if(numEl) seenNumbers.add(numEl.textContent);
+      const nameEl = document.querySelector('.mp-peer-info .mp-peer-name');
+      if(nameEl) peerNameSeen.push(nameEl.textContent);
+      hasThumbSeen.push(!!document.querySelector('.mp-countdown-game .cart-thumb'));
+      await new Promise(r => setTimeout(r, 100));
+    }
+    return {
+      distinctNumbersSeen: [...seenNumbers],
+      showedPeerName: peerNameSeen.some(n => n === 'your friend'),
+      showedThumbAtSomePoint: hasThumbSeen.includes(true),
+    };
+  });
+  await page.waitForTimeout(500); // let this countdown finish + the match settle before the next test opens a fresh lobby
+  await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
+  check('the countdown screen counts down through more than one distinct number', countdownViewResult.distinctNumbersSeen.length > 1, JSON.stringify(countdownViewResult));
+  check('the countdown screen shows who you\'re about to play, not just a bare number', countdownViewResult.showedPeerName, JSON.stringify(countdownViewResult));
+  check('the countdown screen shows the target game\'s real thumbnail', countdownViewResult.showedThumbAtSomePoint, JSON.stringify(countdownViewResult));
+
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const countdownPeerLeftResult = await page.evaluate(async () => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }, countdownMs: 1000});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    document.querySelector('.mp-queue-play').click();
+    await new Promise(r => setTimeout(r, 150)); // well inside the 1000ms countdown
+    rooms[0].onPeerLeave('mockPeer');
+    // Wait past when the original (now-abandoned) countdown would have
+    // finished — the direct analog of the existing matchGeneration
+    // staleness test covering the startGame() await gap.
+    await new Promise(r => setTimeout(r, 1200));
+    return {
+      multiplayerActiveAfterPeerLeft: window.__urlcadeDebug.getWorld().multiplayerActive,
+      endRoundStillHidden: getComputedStyle(document.getElementById('endRoundBtn')).display === 'none',
+    };
+  });
+  await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
+  check('a peer leaving mid-countdown discards the countdown instead of letting it start a match with no one there', !countdownPeerLeftResult.multiplayerActiveAfterPeerLeft && countdownPeerLeftResult.endRoundStillHidden, JSON.stringify(countdownPeerLeftResult));
+
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const countdownCloseResult = await page.evaluate(async () => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }, countdownMs: 250});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    document.querySelector('.mp-queue-play').click();
+    document.getElementById('mpCloseBtn').click(); // hide, mid-countdown — must NOT cancel the match
+    const overlayHiddenRightAfterClose = !document.getElementById('mpOverlay').classList.contains('active');
+    await new Promise(r => setTimeout(r, 600)); // past the countdown + startGame() settling
+    return {
+      overlayHiddenRightAfterClose,
+      multiplayerActiveAfterClose: window.__urlcadeDebug.getWorld().multiplayerActive,
+    };
+  });
+  await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
+  check('closing the panel mid-countdown just hides it (no session/session-state change)', countdownCloseResult.overlayHiddenRightAfterClose, JSON.stringify(countdownCloseResult));
+  check('closing the panel mid-countdown does not cancel the match — it still starts on schedule', countdownCloseResult.multiplayerActiveAfterClose === true, JSON.stringify(countdownCloseResult));
 
   // Shared party queue (DESIGN.md §97, Multiplayer Party Stage 1) —
   // exercised directly via connectToRoom's own session API (addToQueue/
@@ -2857,14 +3062,17 @@ async function main(){
       return room;
     }
     const rooms = [];
-    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    // countdownMs injected short (DESIGN.md §10x), same reasoning as the
+    // gameplay-sync UI test above — no reason to sit through a real 3s
+    // countdown here either.
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }, countdownMs: 50});
     document.getElementById('mpHostBtn').click();
     rooms[0].onPeerJoin('mockPeer');
     const endRoundHiddenBeforeMatch = getComputedStyle(document.getElementById('endRoundBtn')).display === 'none';
     document.querySelector('.mp-queue-play').click(); // start the auto-seeded match
     return { endRoundHiddenBeforeMatch };
   });
-  await page.waitForTimeout(400); // beginSyncedMatch() awaits Runtime.startGame()
+  await page.waitForTimeout(500); // beginSyncedMatch() now runs the (injected-short) countdown before awaiting Runtime.startGame()
   const afterMatchStartForEndRound = await page.evaluate(() => ({
     endRoundVisible: getComputedStyle(document.getElementById('endRoundBtn')).display !== 'none',
     restartHiddenDuringMatch: getComputedStyle(document.getElementById('restartBtn')).display === 'none',
