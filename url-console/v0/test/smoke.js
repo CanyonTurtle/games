@@ -1936,7 +1936,7 @@ async function main(){
   // Full lobby state machine, driven with a mock joinRoomFn (no real
   // network): host -> a peer joins -> connected, shows the right player
   // number -> that peer leaves -> peer-left -> close leaves the room.
-  const lobbyResult = await page.evaluate(() => {
+  const lobbyResult = await page.evaluate(async () => {
     const D = window.__urlcadeDebug;
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
@@ -1958,12 +1958,25 @@ async function main(){
     }
     const rooms = [];
     const mockJoinRoomFn = (config, roomId) => { const room = makeMockRoom(); rooms.push({config, roomId, room}); return room; };
+    // Stands in for the real fetchTurnCredentials (metered.ca's TURN REST
+    // API, DESIGN.md §10x) — mutates the same array joinRoomFn's config
+    // was handed, the exact by-reference behavior the real fetch depends
+    // on to reach a peer connection created after it resolves.
+    const fakeFetchTurnCredentialsFn = async (targetArray) => {
+      targetArray.push({urls: 'turn:test.example:3478', username: 'test-user', credential: 'test-cred'});
+    };
 
-    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn, fetchTurnCredentialsFn: fakeFetchTurnCredentialsFn});
     const choiceHtml = document.getElementById('mpBody').innerHTML;
     document.getElementById('mpHostBtn').click();
     const roomCodeShown = document.querySelector('.mp-room-code')?.textContent;
     const roomIdMatches = rooms[0] && rooms[0].roomId === roomCodeShown;
+    // connectToRoom fires fetchTurnCredentialsFn without awaiting it (so
+    // joining never blocks on the network round trip) — give the injected
+    // fake's microtask a turn to resolve before inspecting the result.
+    await Promise.resolve();
+    const turnConfigAfterFetch = rooms[0].config.turnConfig.slice();
+    const turnConfigSameArrayReference = rooms[0].config.turnConfig === D.TURN_CONFIG;
 
     rooms[0].room.onPeerJoin('mockPeerId');
     // Connecting no longer auto-starts a match (DESIGN.md §97) — it
@@ -1994,20 +2007,26 @@ async function main(){
       peerLeftShowsDisconnect: /disconnected/i.test(peerLeftHtml),
       roomLeaveWasCalled: rooms[0].room.leaveCalled,
       overlayActiveAfterClose,
-      turnConfig: rooms[0].config.turnConfig,
+      turnConfigAfterFetch,
+      turnConfigSameArrayReference,
     };
   });
   check('the lobby opens on a Host/Join choice screen', lobbyResult.hadHostJoinButtons, JSON.stringify(lobbyResult));
   check('hosting shows a room code that matches what was passed to joinRoomFn', lobbyResult.roomCodeLen > 0 && lobbyResult.roomIdMatches, JSON.stringify(lobbyResult));
-  // TURN servers (DESIGN.md §95) — confirmed via a real two-device
-  // attempt that signaling succeeds but the WebRTC connection itself
-  // fails without one ("could not connect to peer X after exchanging
-  // SDP"). Regression guard: a config with at least one turn: URL and
-  // credentials actually reaches joinRoomFn, not just a documented
-  // intention that silently bit-rots.
-  check('connectToRoom passes at least one TURN server with credentials to joinRoomFn',
-    Array.isArray(lobbyResult.turnConfig) && lobbyResult.turnConfig.length > 0 &&
-    lobbyResult.turnConfig.every(s => /^turns?:/i.test(s.urls) && s.username && s.credential),
+  // TURN servers (DESIGN.md §95, revised §10x after Open Relay Project's
+  // static credentials stopped authenticating) — confirmed via a real
+  // two-device attempt that signaling succeeds but the WebRTC connection
+  // itself fails without a working TURN relay ("could not connect to peer
+  // X after exchanging SDP"). Regression guard, now for the runtime-fetch
+  // wiring rather than a hardcoded array: joinRoomFn's config is handed
+  // the exact same array fetchTurnCredentialsFn populates (by reference,
+  // not a snapshot at join time), and a fetch that resolves after
+  // joinRoomFn was already called still lands in it.
+  check('connectToRoom hands joinRoomFn the very array fetchTurnCredentialsFn populates (by reference, not a snapshot)',
+    lobbyResult.turnConfigSameArrayReference, JSON.stringify(lobbyResult));
+  check('a TURN credential fetch that resolves after joinRoomFn was called still reaches its config (fire-and-forget, not blocking)',
+    Array.isArray(lobbyResult.turnConfigAfterFetch) && lobbyResult.turnConfigAfterFetch.length > 0 &&
+    lobbyResult.turnConfigAfterFetch.every(s => /^turns?:/i.test(s.urls) && s.username && s.credential),
     JSON.stringify(lobbyResult));
   check('a mock peer joining shows the shared party queue instead of auto-starting a match', lobbyResult.overlayStillActiveOnConnect && lobbyResult.showsPartyOnConnect, JSON.stringify(lobbyResult));
   check('the host\'s currently-loaded game is auto-seeded into the queue on connect', lobbyResult.queuePlayButtons === 1, JSON.stringify(lobbyResult));
