@@ -3252,7 +3252,19 @@ Docs: none — `maxPlayers` itself was already documented (`cart-object.md`); th
 
 Verified via `test/smoke.js`: extended the existing shelf-rendering DOM check to also capture each card's badge text, asserting exactly one of the 9 shipped carts (Race Car, the only `maxPlayers:2` cart today) shows a "2 players" badge and no other card shows one. 3 clean full-suite runs.
 
-## 97. Open questions
+## 97. Multiplayer Party — second stage: player identity, and a fixed avatar set that needed no cart at all
+
+The Party plan (§96) needs a name/avatar for each player, saved once and reused across every game in a party, not scoped to any single cart — so it can't reuse `STORE_PERSIST`'s per-cart-hash `persistKey` scheme. It follows the *other* existing localStorage precedent instead: the audio toggle's `AUDIO_ENABLED_KEY` (a single fixed key, a module-level var seeded synchronously in a try/catch, plain getter/setter, exported through `window.__urlcadeDebug`). `getIdentity`/`setIdentity` (runtime.js) are that same shape, one level up: `{name, avatarId}` instead of a boolean. `avatarId` is stored as a bare integer with no bounds-checking in `runtime.js` deliberately — that module has no reason to know how many avatars exist; an out-of-range or stale id (e.g. after the avatar set changes shape someday) is the renderer's problem to wrap safely, not the storage layer's to reject.
+
+The avatars themselves are a new small module, `avatars.js` — eight hand-authored `kind:1` shape lists, the exact same `{type:SHAPE_ELLIPSE|SHAPE_RECT, ..., color}` primitives the sprite editor already authors (same shape as STARTER_TEMPLATE's own ball sprite). The interesting decision was *how* to rasterize them: `World.buildBitmap` (the sprite editor's own rendering path) needs a real `World` instance purely to resolve a shape's `color` index through `this.paletteRGB`, itself derived from a cart's `paletteParams` via `generatePalette`. An avatar isn't part of any cart, so standing up a throwaway `World` (and the GL-texture disposal dance `buildCardThumbnail` already has to do for the same reason) just to reuse a trivial index-to-RGB lookup would be pure overhead for no benefit. Instead, `avatars.js` calls `kernel.js`'s `renderShapeList` directly — already a pure function needing no `World` — and resolves the resulting index array against a small fixed hex-color table of its own. Same rasterization logic reused, zero World/cart machinery pulled in.
+
+One real bug found immediately by the test suite, not by inspection: `build-site.sh` (the single source of truth for what actually ships, shared by `pages.yml` and `test/smoke.js` alike, DESIGN.md §29) has an explicit file list, not a glob — adding `avatars.js` without adding it there meant `main.js`'s new `import * as Avatars from './avatars.js'` 404'd in the built site, which fails the *entire* module graph, not just the one import. Fixed by adding it alongside `multiplayer.js` in both the copy list and the cache-busting list.
+
+Docs: none — internal data-layer/avatar-rendering addition, no cart-facing field/opcode/format.
+
+Verified via `test/smoke.js`: identity round-trips through `localStorage` including across a real full page reload (not just an in-memory variable surviving); every one of the 8 fixed avatars rasterizes to a non-blank 8×8 canvas; an out-of-range `avatarId` (negative or past the end) renders safely instead of throwing. 3 clean full-suite runs — the `build-site.sh` gap above was caught by the very first run timing out at the initial page-load check, before ever reaching the new checks themselves, which is exactly the kind of failure this suite's "test the real built site, not an approximation" posture (DESIGN.md §29) exists to catch.
+
+## 98. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
