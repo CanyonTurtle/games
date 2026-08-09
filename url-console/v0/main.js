@@ -132,6 +132,59 @@ document.getElementById('audioToggleBtn').addEventListener('click', () => {
 });
 updateAudioToggleUI();
 
+// Player identity (Multiplayer Party, DESIGN.md §97+) — a chip on the
+// shelf's own header, not the multiplayer overlay, since it's useful to
+// set before ever starting a party. Always shows *something* (a
+// placeholder when unset) rather than being blank, so there's always a
+// visible thing to tap. selectedAvatarId is this picker's own transient
+// UI state while the overlay is open — Runtime.getIdentity()/setIdentity
+// remain the single source of truth otherwise, re-read fresh every time
+// the overlay opens rather than assumed to still match what's on screen.
+function renderIdentityChip(){
+  const chip = document.getElementById('identityChip');
+  const identity = Runtime.getIdentity();
+  chip.innerHTML = '';
+  chip.appendChild(Avatars.renderAvatarCanvas(identity.avatarId));
+  const label = document.createElement('span');
+  label.textContent = identity.name || 'Set your name';
+  chip.appendChild(label);
+}
+let selectedAvatarId = 0;
+function renderIdentityAvatarGrid(){
+  const grid = document.getElementById('identityAvatarGrid');
+  grid.innerHTML = '';
+  Avatars.AVATARS.forEach((avatar, i) => {
+    const swatch = document.createElement('button');
+    swatch.type = 'button';
+    swatch.className = 'identity-avatar-swatch' + (i === selectedAvatarId ? ' selected' : '');
+    swatch.title = avatar.name;
+    swatch.appendChild(Avatars.renderAvatarCanvas(i));
+    swatch.addEventListener('click', () => { selectedAvatarId = i; renderIdentityAvatarGrid(); });
+    grid.appendChild(swatch);
+  });
+}
+function openIdentityPicker(){
+  const identity = Runtime.getIdentity();
+  document.getElementById('identityNameInput').value = identity.name;
+  selectedAvatarId = identity.avatarId;
+  renderIdentityAvatarGrid();
+  document.getElementById('identityOverlay').classList.add('active');
+}
+function closeIdentityPicker(){
+  document.getElementById('identityOverlay').classList.remove('active');
+}
+document.getElementById('identityChip').addEventListener('click', openIdentityPicker);
+document.getElementById('identityCloseBtn').addEventListener('click', closeIdentityPicker);
+document.getElementById('identityOverlay').addEventListener('click', e => {
+  if(e.target.id === 'identityOverlay') closeIdentityPicker(); // scrim, not the card
+});
+document.getElementById('identitySaveBtn').addEventListener('click', () => {
+  Runtime.setIdentity({name: document.getElementById('identityNameInput').value.trim(), avatarId: selectedAvatarId});
+  renderIdentityChip();
+  closeIdentityPicker();
+});
+renderIdentityChip();
+
 document.getElementById('backBtn').addEventListener('click', goToMenu);
 // startGame() re-decodes the current fragment from scratch and rebuilds
 // the World, re-running on_init — exactly what "start this game over"

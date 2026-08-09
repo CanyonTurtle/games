@@ -44,7 +44,7 @@
 
   #menu{display:none;max-width:760px;margin:0 auto;padding:calc(28px + var(--safe-t)) 18px 60px;}
   #menu.active{display:block;}
-  .faceplate{border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:22px;}
+  .faceplate{position:relative;border-bottom:1px solid var(--rule);padding-bottom:18px;margin-bottom:22px;}
   .faceplate .model{font-size:11px;letter-spacing:.18em;color:var(--ink-dim);
     text-transform:uppercase;margin:0 0 6px;}
   #menu h1{font-size:clamp(28px,5vw,40px);margin:0 0 10px;letter-spacing:.02em;
@@ -468,6 +468,25 @@
     max-height:150px;overflow-y:auto;overflow-x:auto;white-space:pre-wrap;
     word-break:break-word;margin:0;}
 
+  /* Player identity (DESIGN.md §97+) — a small chip in the shelf's own
+     header, not tucked into the multiplayer overlay, since it's useful
+     (and settable) whether or not a party is ever started. Populated by
+     main.js's renderIdentityChip() with either the saved avatar+name or
+     a neutral "set your name" placeholder — never left blank, so
+     there's always something to tap. */
+  .identity-chip{position:absolute;top:0;right:0;display:flex;align-items:center;gap:7px;
+    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:20px;
+    padding:5px 12px 5px 5px;cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink);}
+  .identity-chip:hover{border-color:var(--accent);color:var(--accent);}
+  .identity-chip canvas{width:22px;height:22px;border-radius:50%;image-rendering:pixelated;
+    background:var(--bg);flex:0 0 auto;}
+  .identity-avatar-grid{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px;}
+  .identity-avatar-swatch{width:44px;height:44px;border-radius:6px;border:1px solid var(--rule);
+    background:var(--bg);cursor:pointer;display:flex;align-items:center;justify-content:center;}
+  .identity-avatar-swatch:hover{border-color:var(--accent);}
+  .identity-avatar-swatch.selected{border-color:var(--accent);border-width:2px;}
+  .identity-avatar-swatch canvas{width:28px;height:28px;image-rendering:pixelated;}
+
   #faultBanner{display:none;position:absolute;top:calc(52px + var(--safe-t));left:0;right:0;
     z-index:4;color:#ff6b5e;font-weight:700;font-size:12.5px;letter-spacing:.03em;text-align:center;
     text-shadow:0 1px 3px rgba(0,0,0,.7);}
@@ -499,6 +518,7 @@
   <div class="faceplate">
     <p class="model">Games that live in a link</p>
     <h1>The Urlcade <span class="dim">// cartridge shelf</span></h1>
+    <button type="button" id="identityChip" class="identity-chip" title="Set your name and avatar for multiplayer"></button>
   </div>
   <p>Pick a game below and play — nothing to install, no account, no wait.
   Every game here is small enough to fit entirely inside its own link, so
@@ -551,6 +571,20 @@
         <button id="mpDiagCopyBtn" type="button">Copy</button>
       </div>
       <pre id="mpDiagLog" class="mp-diag-log"></pre>
+    </div>
+  </div>
+</div>
+
+<div id="identityOverlay" class="mp-overlay">
+  <div class="mp-card">
+    <button id="identityCloseBtn" class="mp-close" title="Close">&times;</button>
+    <h3>Your name &amp; avatar</h3>
+    <p>Shown to whoever you play multiplayer with — saved on this device
+    only, no account.</p>
+    <input type="text" id="identityNameInput" maxlength="24" placeholder="Your name" autocomplete="off" spellcheck="false">
+    <div id="identityAvatarGrid" class="identity-avatar-grid"></div>
+    <div class="mp-actions">
+      <button id="identitySaveBtn" class="mp-primary">Save</button>
     </div>
   </div>
 </div>
