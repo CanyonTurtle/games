@@ -100,6 +100,26 @@ async function main(){
   page.on('pageerror', e => errors.push(e.message));
   page.on('console', m => { if(m.type() === 'error') errors.push(m.text()); });
 
+  // Every test below that drives the lobby through a real hostMatch/
+  // joinMatch/connectToRoom (rather than a fetchTurnCredentialsFn
+  // override, DESIGN.md §103) also fires the real fetchTurnCredentials()
+  // fire-and-forget — which would otherwise reach out to the real
+  // metered.ca TURN REST API from this sandboxed test run and fail with
+  // a network error surfaced as a console error, tripping the blanket
+  // "no console/page errors" check below for reasons that have nothing
+  // to do with what any individual test is actually checking. Routed
+  // once, for the whole page/run, rather than threaded through every
+  // individual test — this is infrastructure the tests share, not
+  // something any single test's own behavior depends on.
+  await page.route('**/api/v1/turn/credentials*', route => route.fulfill({
+    status: 200,
+    contentType: 'application/json',
+    body: JSON.stringify([
+      {urls: 'stun:stun.relay.metered.ca:80'},
+      {urls: 'turn:global.relay.metered.ca:80', username: 'smoke-test-user', credential: 'smoke-test-cred'},
+    ]),
+  }));
+
   await page.goto(`${base}/index.html`);
   await page.waitForFunction(() => window.__urlcadeDebug && Object.keys(window.__urlcadeDebug.CARTS).length === 9, {timeout: 10000});
   check('all 9 shelf carts registered', true);

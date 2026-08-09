@@ -78,8 +78,11 @@ const PARTY_APP_ID = 'urlcade-mp-party-v1';
 // (it is not itself a TURN password) and is meant to ship in client-side
 // code the same way the old static credentials did — metered.ca's own
 // docs assume this deployment shape.
-const METERED_SUBDOMAIN = ''; // TODO: metered.ca dashboard "App name" (the `<subdomain>` in `<subdomain>.metered.ca`)
-const METERED_API_KEY = ''; // TODO: metered.ca dashboard API key
+// The dashboard's own "App domain" — metered.ca now issues these under
+// metered.live rather than metered.ca itself, so this is the full host,
+// not a subdomain to interpolate into a fixed suffix.
+const METERED_TURN_HOST = 'urlcade.metered.live';
+const METERED_API_KEY = '28f6b47f99040f457763ef26a0859d555df0';
 
 // Mutated in place (never reassigned) once fetchTurnCredentials() resolves
 // — starts empty (STUN-only) rather than stale/broken entries, since a
@@ -107,23 +110,29 @@ const TURN_CONFIG = [];
 // by-reference wiring joinRoomFn's config relies on, without a real
 // network call or real metered.ca credentials.
 async function fetchTurnCredentials(targetArray){
-  if(!METERED_SUBDOMAIN || !METERED_API_KEY){
-    pushDiag('TURN not configured (METERED_SUBDOMAIN/METERED_API_KEY empty) — STUN-only');
+  // Captured *before* the fetch itself, not after — the point is "was a
+  // teardown already pending/in-progress when I started," and diagStopGeneration's
+  // own comment explains why a value read here rather than at
+  // connectToRoom's call site is what's actually needed.
+  const startGeneration = diagStopGeneration;
+  const stillOwnsDiagLog = () => diagStopGeneration === startGeneration;
+  if(!METERED_TURN_HOST || !METERED_API_KEY){
+    if(stillOwnsDiagLog()) pushDiag('TURN not configured (METERED_TURN_HOST/METERED_API_KEY empty) — STUN-only');
     return;
   }
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 4000);
   try{
-    const url = `https://${METERED_SUBDOMAIN}.metered.ca/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED_API_KEY)}`;
+    const url = `https://${METERED_TURN_HOST}/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED_API_KEY)}`;
     const res = await fetch(url, {signal: controller.signal});
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const servers = await res.json();
     if(!Array.isArray(servers) || !servers.length) throw new Error('empty credential list');
     targetArray.length = 0;
     targetArray.push(...servers);
-    pushDiag(`TURN credentials refreshed (${servers.length} servers)`);
+    if(stillOwnsDiagLog()) pushDiag(`TURN credentials refreshed (${servers.length} servers)`);
   } catch(err){
-    pushDiag(`TURN credential fetch failed: ${err.message} (falling back to STUN-only)`);
+    if(stillOwnsDiagLog()) pushDiag(`TURN credential fetch failed: ${err.message} (falling back to STUN-only)`);
   } finally{
     clearTimeout(timeoutId);
   }
@@ -746,6 +755,18 @@ let diagLog = [];
 let diagPollTimer = null;
 let lastRelayStates = {};
 let lastPeerStates = {};
+// Bumped by stopDiag() only (every session teardown, DESIGN.md §103) —
+// fetchTurnCredentials() (below) captures this at the moment it's fired
+// (before the *current* session's own startDiag() has even run yet, see
+// connectToRoom) and checks it again once the fetch resolves, skipping
+// its own pushDiag lines if a teardown happened in between. Without
+// this, a fetch kicked off by a session that's already been left (its
+// own pushDiag calls otherwise having no owner to check against) can
+// resolve arbitrarily late and write a stray "TURN credentials
+// refreshed" line into whatever session's log happens to be showing at
+// that moment — confusing for a real user, and a source of cross-test
+// contamination in test/smoke.js, where many sessions share one page.
+let diagStopGeneration = 0;
 
 function diagElapsed(){ return ((Date.now() - diagStartTime) / 1000).toFixed(1) + 's'; }
 function pushDiag(msg){
@@ -830,6 +851,7 @@ function startDiag(role, roomCode){
 // screen with no stale diagnostics from whatever session just ended,
 // not leftover text sitting there until a new session happens to start.
 function stopDiag(){
+  diagStopGeneration++;
   clearInterval(diagPollTimer);
   diagPollTimer = null;
   uninstallConsoleWarnCapture();
