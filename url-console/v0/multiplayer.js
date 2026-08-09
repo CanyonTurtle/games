@@ -16,8 +16,9 @@
    gameplay sync, once there's a connected room to drive it with.
    ============================================================ */
 import { joinRoom as trysteroJoinRoom, selfId, getRelaySockets } from './vendor/trystero/torrent.mjs';
-import { startGame, getCurrentFragment, getWorld, setPerTickHook } from './runtime.js';
+import { startGame, getCurrentFragment, getWorld, setPerTickHook, getIdentity } from './runtime.js';
 import { CARTS } from './carts/index.js';
+import * as Avatars from './avatars.js';
 
 // kernel.js loads as a plain (non-module) <script> before this file —
 // see index.html's own script-tag comment — so its exports land on
@@ -109,6 +110,7 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   const listeners = new Set();
   const queueListeners = new Set();
   const matchStartListeners = new Set();
+  const peerIdentityListeners = new Set();
   let nextQueueId = 1;
   const session = {
     roomCode,
@@ -118,9 +120,11 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     playerSlot: null,
     error: null,
     queue: [],
+    peerIdentity: null, // {name, avatarId} once the peer's own party-identity message arrives — null until then
     onStateChange(fn){ listeners.add(fn); return () => listeners.delete(fn); },
     onQueueChange(fn){ queueListeners.add(fn); return () => queueListeners.delete(fn); },
     onMatchStart(fn){ matchStartListeners.add(fn); return () => matchStartListeners.delete(fn); },
+    onPeerIdentityChange(fn){ peerIdentityListeners.add(fn); return () => peerIdentityListeners.delete(fn); },
   };
   function setState(next){
     session.state = next;
@@ -182,6 +186,7 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   // that match's own World each time.
   const queueAction = room.makeAction('party-queue');
   const startAction = room.makeAction('party-start');
+  const identityAction = room.makeAction('party-identity');
   function broadcastQueue(){
     queueAction.send({items: session.queue});
   }
@@ -191,6 +196,20 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   };
   startAction.onMessage = data => {
     for(const fn of matchStartListeners) fn(data.fragment);
+  };
+  identityAction.onMessage = data => {
+    session.peerIdentity = data && typeof data === 'object'
+      ? {name: typeof data.name === 'string' ? data.name : '', avatarId: Number.isInteger(data.avatarId) ? data.avatarId : 0}
+      : null;
+    for(const fn of peerIdentityListeners) fn(session.peerIdentity);
+  };
+  // Exposed on the session (rather than just fired once at connect time)
+  // so a *local* identity edit mid-party — the Stage 0c picker's own Save
+  // button, via this file's module-level broadcastIdentity() export below
+  // — can push the update immediately, not just whatever name/avatar was
+  // set before the room was joined.
+  session.broadcastOwnIdentity = () => {
+    identityAction.send(getIdentity());
   };
   session.addToQueue = ({fragment, name, author, maxPlayers}) => {
     // selfId + a counter alone is enough to keep two *distinct* real peers
@@ -222,16 +241,18 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   };
   // Trystero's send() only reaches peers already connected at send-time
   // — it does not replay past sends to a peer who joins (or rejoins)
-  // later. Re-broadcasting the current queue on every join closes that
-  // gap: a peer who connects (or reconnects after 'peer-left') always
-  // ends up with whatever the other side's queue currently is, rather
-  // than staying stuck with whatever it last saw (or nothing at all).
+  // later. Re-broadcasting the current queue (and, same reasoning, this
+  // peer's own identity) on every join closes that gap: a peer who
+  // connects (or reconnects after 'peer-left') always ends up with
+  // whatever the other side's queue/identity currently is, rather than
+  // staying stuck with whatever it last saw (or nothing at all).
   room.onPeerJoin = peerId => {
     if(session.peerId) return; // a 3rd peer is outside v1's 2-player cap — see this file's own header comment; never becomes "the" opponent
     session.peerId = peerId;
     assignSlot();
     setState('connected');
     broadcastQueue();
+    session.broadcastOwnIdentity();
   };
   room.onPeerLeave = peerId => {
     if(peerId !== session.peerId) return;
@@ -486,6 +507,7 @@ let lobbyMode = 'choice'; // 'choice' | 'join-form' — only meaningful while ac
 let unsubscribeSession = null;
 let unsubscribeQueue = null;
 let unsubscribeMatchStart = null;
+let unsubscribePeerIdentity = null;
 let activeSync = null; // the startMatchSync() handle for the current 'connected' session, if any
 // Bumped every time beginSyncedMatch starts, and checked after its one
 // await — guards against a peer leaving (or this side closing the
@@ -676,11 +698,13 @@ function closeLobby(){
   if(unsubscribeSession) unsubscribeSession();
   if(unsubscribeQueue) unsubscribeQueue();
   if(unsubscribeMatchStart) unsubscribeMatchStart();
+  if(unsubscribePeerIdentity) unsubscribePeerIdentity();
   stopDiag();
   activeSession = null;
   unsubscribeSession = null;
   unsubscribeQueue = null;
   unsubscribeMatchStart = null;
+  unsubscribePeerIdentity = null;
   lobbyMode = 'choice';
   document.getElementById('mpOverlay').classList.remove('active');
 }
@@ -749,6 +773,15 @@ function ensureMultiplayerCapableCartsLoaded(){
   });
 }
 
+// The peer's display name once known (party-identity has arrived and it
+// isn't blank), else the generic "your friend" fallback this file used
+// throughout before Stage 3 — a peer who never set a name (still the
+// DEFAULT_IDENTITY default, runtime.js) is handled the same as one whose
+// identity hasn't arrived yet, rather than showing an empty string.
+function peerDisplayName(session){
+  return session.peerIdentity && session.peerIdentity.name ? session.peerIdentity.name : 'your friend';
+}
+
 function renderQueueList(session){
   if(!session.queue.length){
     return `<p class="mp-queue-empty">No games queued yet — add one below.</p>`;
@@ -757,7 +790,7 @@ function renderQueueList(session){
     <div class="mp-queue-item">
       <div class="mp-queue-info">
         <span class="mp-queue-name">${esc(item.name || '(untitled)')}</span>
-        <span class="mp-queue-added-by">added by ${item.addedBy === session.selfId ? 'you' : 'your friend'}</span>
+        <span class="mp-queue-added-by">added by ${item.addedBy === session.selfId ? 'you' : esc(peerDisplayName(session))}</span>
       </div>
       <div class="mp-queue-item-actions">
         <button class="mp-queue-play" data-queue-id="${esc(item.id)}">Play</button>
@@ -795,6 +828,7 @@ function renderSessionBody(session){
   if(s === 'connected'){
     return `
       <h3>Party</h3>
+      <div class="mp-peer-info"><span id="mpPeerAvatarSlot" class="mp-peer-avatar"></span><span class="mp-peer-name">${esc(peerDisplayName(session))}</span></div>
       <div class="mp-status">${statusDot('good')} Connected — you're Player ${session.playerSlot + 1} of 2</div>
       ${renderQueueList(session)}
       ${renderAddGameSection()}
@@ -804,6 +838,7 @@ function renderSessionBody(session){
   if(s === 'peer-left'){
     return `
       <h3>Opponent disconnected</h3>
+      <div class="mp-peer-info"><span id="mpPeerAvatarSlot" class="mp-peer-avatar"></span><span class="mp-peer-name">${esc(peerDisplayName(session))}</span></div>
       <div class="mp-status">${statusDot('bad')} Still in room ${esc(session.roomCode)} — waiting for them to reconnect…</div>
       <div class="mp-actions"><button id="mpCancelBtn">Close</button></div>
     `;
@@ -822,6 +857,14 @@ function renderLobby(){
   const body = document.getElementById('mpBody');
   if(activeSession){
     body.innerHTML = renderSessionBody(activeSession);
+    // renderSessionBody's own peerDisplayName() handles the text; the
+    // avatar is a real <canvas> (Avatars.renderAvatarCanvas), which can
+    // only be appended after the innerHTML above exists, same pattern
+    // main.js's own renderIdentityChip uses. Left empty (no placeholder
+    // avatar) until the peer's actual identity arrives — a made-up
+    // default would misrepresent them.
+    const peerAvatarSlot = document.getElementById('mpPeerAvatarSlot');
+    if(peerAvatarSlot && activeSession.peerIdentity) peerAvatarSlot.appendChild(Avatars.renderAvatarCanvas(activeSession.peerIdentity.avatarId));
     const cancelBtn = document.getElementById('mpCancelBtn');
     if(cancelBtn) cancelBtn.addEventListener('click', closeLobby);
     const copyLinkBtn = document.getElementById('mpCopyLinkBtn');
@@ -832,10 +875,12 @@ function renderLobby(){
       if(unsubscribeSession) unsubscribeSession();
       if(unsubscribeQueue) unsubscribeQueue();
       if(unsubscribeMatchStart) unsubscribeMatchStart();
+      if(unsubscribePeerIdentity) unsubscribePeerIdentity();
       activeSession = null;
       unsubscribeSession = null;
       unsubscribeQueue = null;
       unsubscribeMatchStart = null;
+      unsubscribePeerIdentity = null;
       lobbyMode = 'choice';
       renderLobby();
     });
@@ -889,19 +934,29 @@ function renderLobby(){
 // shelf, game, Tinker — is currently active, DESIGN.md §100) reopening
 // the panel on tap. Shown for 'connected' and 'peer-left' (still a real
 // party, just between peers right now) — not 'waiting-for-peer' (no
-// second player to have a party *with* yet) or 'error'/'left'. Real
-// peer name/avatar is Stage 3 (§101+); this stage is just the chrome.
+// second player to have a party *with* yet) or 'error'/'left'. Shows the
+// peer's real avatar/name once their party-identity message has arrived
+// (DESIGN.md §101); a generic 👥/"Party" placeholder until then.
 function updatePartyIndicator(){
   const el = document.getElementById('partyIndicator');
   if(!el) return;
   const state = activeSession && activeSession.state;
   const visible = state === 'connected' || state === 'peer-left';
-  // 'inline-block' (not '') — clearing the inline override would just
-  // fall back to #partyIndicator's own CSS default, which is
-  // display:none (same gotcha this file's own renderDiag() already
-  // has a comment about).
-  el.style.display = visible ? 'inline-block' : 'none';
-  if(visible) el.textContent = state === 'connected' ? '\u{1F465} Party' : '\u{1F465} Party ⚠';
+  // 'flex' (not '') — clearing the inline override would just fall back
+  // to #partyIndicator's own CSS default, which is display:none (same
+  // gotcha this file's own renderDiag() already has a comment about).
+  el.style.display = visible ? 'flex' : 'none';
+  if(!visible) return;
+  el.innerHTML = '';
+  const avatarSlot = document.createElement('span');
+  avatarSlot.className = 'mp-indicator-avatar';
+  if(activeSession.peerIdentity) avatarSlot.appendChild(Avatars.renderAvatarCanvas(activeSession.peerIdentity.avatarId));
+  else avatarSlot.textContent = '\u{1F465}';
+  el.appendChild(avatarSlot);
+  const label = document.createElement('span');
+  const peerName = activeSession.peerIdentity && activeSession.peerIdentity.name ? activeSession.peerIdentity.name : 'Party';
+  label.textContent = state === 'connected' ? peerName : peerName + ' ⚠';
+  el.appendChild(label);
 }
 
 // The single listener driving both the modal's contents and the actual
@@ -943,6 +998,7 @@ function startSession(role, code){
   unsubscribeSession = activeSession.onStateChange(handleSessionStateChange);
   unsubscribeQueue = activeSession.onQueueChange(() => renderLobby());
   unsubscribeMatchStart = activeSession.onMatchStart(fragment => beginSyncedMatch(activeSession, fragment));
+  unsubscribePeerIdentity = activeSession.onPeerIdentityChange(() => { updatePartyIndicator(); renderLobby(); });
   if(role === 'host'){
     try{
       const fragment = getCurrentFragment();
@@ -956,11 +1012,21 @@ function startSession(role, code){
   renderLobby();
 }
 
+// Broadcasts the local player's current identity (Runtime.getIdentity())
+// to the connected peer, if a party is actually active — a no-op
+// otherwise. Exported for the Stage 0c identity picker's own Save button
+// (main.js) to call after Runtime.setIdentity(), so a live name/avatar
+// edit mid-party reaches the peer immediately rather than waiting for
+// the next reconnect's automatic re-broadcast (connectToRoom's own
+// room.onPeerJoin, above).
+function broadcastIdentity(){
+  if(activeSession) activeSession.broadcastOwnIdentity();
+}
+
 // Opens the lobby modal — no longer scoped to a particular cart (the
 // party room is a fixed topic now, see PARTY_APP_ID above); the caller
-// (main.js) still only shows the "Multiplayer" button when the
-// currently-loaded cart supports it (updateMultiplayerButton below),
-// since that's what gets auto-seeded into the queue on Host.
+// (main.js) shows the "Multiplayer" button unconditionally now
+// (updateMultiplayerButton below) since a party isn't cart-scoped either.
 // `opts` (an optional {joinRoomFn}) passes straight through to
 // hostMatch/joinMatch — main.js's real button click never supplies one
 // (so real Trystero is used), but test/smoke.js reaches this same
@@ -1017,6 +1083,6 @@ function initMultiplayerUI(){
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
   openLobby, openLobbyAndJoin, closeLobby, hideLobby, leaveMatchKeepParty,
-  updateMultiplayerButton, initMultiplayerUI,
+  updateMultiplayerButton, initMultiplayerUI, broadcastIdentity,
   startMatchSync, parseJoinLinkHash,
 };

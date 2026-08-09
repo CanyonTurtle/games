@@ -180,6 +180,7 @@ document.getElementById('identityOverlay').addEventListener('click', e => {
 document.getElementById('identitySaveBtn').addEventListener('click', () => {
   Runtime.setIdentity({name: document.getElementById('identityNameInput').value.trim(), avatarId: selectedAvatarId});
   renderIdentityChip();
+  Multiplayer.broadcastIdentity(); // pushes a live edit to the peer immediately if a party is already connected (DESIGN.md §101)
   closeIdentityPicker();
 });
 renderIdentityChip();
@@ -277,6 +278,7 @@ window.__urlcadeDebug = {
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
   hideMultiplayerLobby: Multiplayer.hideLobby, leaveMatchKeepParty: Multiplayer.leaveMatchKeepParty,
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch, connectToRoom: Multiplayer.connectToRoom,
+  broadcastIdentity: Multiplayer.broadcastIdentity,
   startMatchSync: Multiplayer.startMatchSync,
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
   PARTY_APP_ID: Multiplayer.PARTY_APP_ID,
