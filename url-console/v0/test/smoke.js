@@ -289,9 +289,17 @@ async function main(){
     hasThumb: !!div.querySelector('.cart-thumb'),
     title: div.querySelector('h2')?.textContent || '',
     author: div.querySelector('.cart-author')?.textContent || '',
+    playersBadge: div.querySelector('.cart-players')?.textContent || null,
   })));
   check('all 9 shelf cards rendered a thumbnail canvas + name + author',
     shelfCards.length === 9 && shelfCards.every(c => c.hasThumb && c.title && /^by /.test(c.author)),
+    JSON.stringify(shelfCards));
+  // Player-count badge — only rendered for maxPlayers>=2 carts (currently
+  // just Race Car), and absent (not "1 players") for every single-player
+  // cart, so the shelf doesn't get noisy with a badge on the majority.
+  check('exactly one shelf card (Race Car) shows a "2 players" badge, no other card shows one',
+    shelfCards.filter(c => c.playersBadge !== null).length === 1 &&
+    shelfCards.some(c => c.title === 'Race Car' && /2 players/.test(c.playersBadge || '')),
     JSON.stringify(shelfCards));
 
   const keys = await page.evaluate(() => Object.keys(window.__urlcadeDebug.CARTS));
