@@ -23,6 +23,7 @@ const K = window.UrlcadeKernel;
 import * as Runtime from './runtime.js';
 import * as Inspector from './inspector.js';
 import * as Multiplayer from './multiplayer.js';
+import * as Avatars from './avatars.js';
 import { CARTS, registerAllCarts } from './carts/index.js';
 
 function goToMenu(){
@@ -216,6 +217,8 @@ window.__urlcadeDebug = {
   deflateRawCompress: K.deflateRawCompress, deflateRawDecompress: K.deflateRawDecompress,
   hasCompression: () => K.HAS_COMPRESSION,
   isAudioEnabled: Runtime.isAudioEnabled, setAudioEnabled: Runtime.setAudioEnabled,
+  getIdentity: Runtime.getIdentity, setIdentity: Runtime.setIdentity,
+  AVATARS: Avatars.AVATARS, renderAvatarCanvas: Avatars.renderAvatarCanvas,
   // Multiplayer (DESIGN.md §79) — openLobby's optional {joinRoomFn} lets
   // this drive the full lobby UI/state-machine with a mock transport,
   // the only way to exercise it without reaching a real signaling

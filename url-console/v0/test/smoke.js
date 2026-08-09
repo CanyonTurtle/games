@@ -695,6 +695,54 @@ async function main(){
   // regardless of which parity the two clicks above landed on.
   await page.evaluate(() => window.__urlcadeDebug.setAudioEnabled(false));
 
+  // 1e2. Player identity data layer (Multiplayer Party Stage 0b,
+  // DESIGN.md §97+) — a single global localStorage preference (name +
+  // avatarId), same shape as the audio toggle just verified above,
+  // plus the fixed avatar shape-list set rendered without any World/cart
+  // involved (avatars.js's own pure renderAvatarCanvas).
+  const identityResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const before = D.getIdentity();
+    const afterSet = D.setIdentity({name: 'Sam', avatarId: 3});
+    return { before, afterSet, stored: localStorage.getItem('urlcade_identity') };
+  });
+  check('getIdentity defaults to an empty name and avatarId 0 before anything is set',
+    identityResult.before.name === '' && identityResult.before.avatarId === 0, JSON.stringify(identityResult));
+  check('setIdentity returns and stores the new name/avatarId',
+    identityResult.afterSet.name === 'Sam' && identityResult.afterSet.avatarId === 3 &&
+    JSON.parse(identityResult.stored).name === 'Sam', JSON.stringify(identityResult));
+  await page.evaluate(() => { location.hash = ''; });
+  await page.reload();
+  await page.waitForTimeout(200);
+  const identityAfterReload = await page.evaluate(() => window.__urlcadeDebug.getIdentity());
+  check('identity survives a full page reload (real localStorage persistence, not just an in-memory var)',
+    identityAfterReload.name === 'Sam' && identityAfterReload.avatarId === 3, JSON.stringify(identityAfterReload));
+  // Cleanup — leave identity blank for the rest of the suite.
+  await page.evaluate(() => window.__urlcadeDebug.setIdentity({name: '', avatarId: 0}));
+
+  const avatarResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    const results = D.AVATARS.map((a, i) => {
+      const canvas = D.renderAvatarCanvas(i);
+      const ctx = canvas.getContext('2d');
+      const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      let opaquePixels = 0;
+      for(let p = 0; p < data.length; p += 4) if(data[p+3] > 0) opaquePixels++;
+      return { name: a.name, width: canvas.width, height: canvas.height, opaquePixels };
+    });
+    // Out-of-range ids (negative, and past the end) must not throw —
+    // avatars.js's own normalizeAvatarId wraps them instead of this
+    // module having to validate a saved-but-stale avatarId itself.
+    let outOfRangeThrew = false;
+    try{ D.renderAvatarCanvas(-1); D.renderAvatarCanvas(999); }catch(e){ outOfRangeThrew = true; }
+    return { results, outOfRangeThrew, count: D.AVATARS.length };
+  });
+  check('every fixed avatar renders a non-blank 8x8 canvas',
+    avatarResult.count > 0 && avatarResult.results.every(r => r.width === 8 && r.height === 8 && r.opaquePixels > 0),
+    JSON.stringify(avatarResult));
+  check('an out-of-range avatarId (negative or past the end) renders safely instead of throwing',
+    !avatarResult.outOfRangeThrew, JSON.stringify(avatarResult));
+
   // 1f. Tilemap authoring — shape layers (mapShapes/blankMap, DESIGN.md
   // §74). Three layers: (a) the kernel-level compositing primitives
   // directly, (b) a full encodeCart/decodeCart round-trip through the

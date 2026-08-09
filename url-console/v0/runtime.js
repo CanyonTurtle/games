@@ -105,6 +105,44 @@ function setAudioEnabled(enabled){
   }
 }
 
+// Player identity (Multiplayer Party, DESIGN.md §97+) — a single global
+// preference, not scoped to any cart (unlike STORE_PERSIST's persistKey,
+// hashed per-cart above): a name/avatar has to survive across every game
+// in a party, not just one. Same shape as the audio toggle just above —
+// one fixed localStorage key, seeded synchronously in a try/catch, plain
+// getter/setter — a remembered preference, never an account.
+//
+// avatarId is stored as a bare integer with no bounds validation here on
+// purpose: this module has no reason to know how many avatars exist
+// (that's avatars.js's own list) — an out-of-range or stale id is
+// avatars.js's renderAvatarCanvas's problem to wrap safely, not this
+// module's to reject.
+const IDENTITY_KEY = 'urlcade_identity';
+const DEFAULT_IDENTITY = { name: '', avatarId: 0 };
+let identity = { ...DEFAULT_IDENTITY };
+try{
+  const raw = localStorage.getItem(IDENTITY_KEY);
+  if(raw){
+    const saved = JSON.parse(raw);
+    if(saved && typeof saved === 'object'){
+      identity = {
+        name: typeof saved.name === 'string' ? saved.name.slice(0, 24) : '',
+        avatarId: Number.isInteger(saved.avatarId) ? saved.avatarId : 0,
+      };
+    }
+  }
+}catch(e){}
+
+function getIdentity(){ return { ...identity }; }
+function setIdentity(next){
+  identity = {
+    name: typeof next.name === 'string' ? next.name.slice(0, 24) : identity.name,
+    avatarId: Number.isInteger(next.avatarId) ? next.avatarId : identity.avatarId,
+  };
+  try{ localStorage.setItem(IDENTITY_KEY, JSON.stringify(identity)); }catch(e){}
+  return getIdentity();
+}
+
 // Memory caps (DESIGN.md §76) — a real bug backstop independent of
 // anything network-related: spawnEntity() used to push onto
 // this.entities completely unbounded, so a cart whose on_tick
@@ -1596,5 +1634,6 @@ export {
   pauseGame, resumeGame, getCurrentFragment,
   render, getWorld, isUsingGL, startLoop,
   isAudioEnabled, setAudioEnabled,
+  getIdentity, setIdentity,
   hashCartBytes, setPerTickHook,
 };
