@@ -203,6 +203,9 @@ Multiplayer.initMultiplayerUI();
 document.getElementById('multiplayerBtn').addEventListener('click', () => {
   Multiplayer.openLobby();
 });
+document.getElementById('endRoundBtn').addEventListener('click', () => {
+  Multiplayer.endRound();
+});
 document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDebug);
 document.getElementById('debugBtn').addEventListener('click', () => {
   location.hash = 'debug:' + Runtime.getCurrentFragment();
@@ -278,7 +281,7 @@ window.__urlcadeDebug = {
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
   hideMultiplayerLobby: Multiplayer.hideLobby, leaveMatchKeepParty: Multiplayer.leaveMatchKeepParty,
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch, connectToRoom: Multiplayer.connectToRoom,
-  broadcastIdentity: Multiplayer.broadcastIdentity,
+  broadcastIdentity: Multiplayer.broadcastIdentity, endRound: Multiplayer.endRound,
   startMatchSync: Multiplayer.startMatchSync,
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
   PARTY_APP_ID: Multiplayer.PARTY_APP_ID,

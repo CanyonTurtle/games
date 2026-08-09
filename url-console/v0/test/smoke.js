@@ -2687,6 +2687,162 @@ async function main(){
   check('the party panel renders the peer\'s real avatar as a canvas, not just their name', identityUiResult.panelHasAvatarCanvas, JSON.stringify(identityUiResult));
   check('the party indicator shows the peer\'s real name too, not just the panel', identityUiResult.indicatorShowsPeerName, JSON.stringify(identityUiResult));
 
+  // End Round + Ready/Skip vote cascade (DESIGN.md §10x, Multiplayer
+  // Party's final stage) — exercised directly against connectToRoom's
+  // own session API, same pattern as the queue/identity tests above.
+  // voteTimeoutMs is injected short (50ms) so the timeout-driven checks
+  // below don't need to block on the real 5s default.
+  const cascadeResult = await page.evaluate(async () => {
+    const D = window.__urlcadeDebug;
+    function makeLinkedRoomPair(){
+      const actionsA = {}, actionsB = {};
+      function makeRoom(mySide, otherSide){
+        return {
+          onPeerJoin: null, onPeerLeave: null, leave(){},
+          makeAction(type){
+            if(!mySide[type]) mySide[type] = { handler: null };
+            const slot = mySide[type];
+            return {
+              get onMessage(){ return slot.handler; },
+              set onMessage(fn){ slot.handler = fn; },
+              send(data){
+                const otherSlot = otherSide[type] || (otherSide[type] = { handler: null });
+                if(otherSlot.handler) otherSlot.handler(data);
+              },
+            };
+          },
+        };
+      }
+      return { roomA: makeRoom(actionsA, actionsB), roomB: makeRoom(actionsB, actionsA) };
+    }
+    const { roomA, roomB } = makeLinkedRoomPair();
+    const opts = { voteTimeoutMs: 50 };
+    const sessionA = D.connectToRoom('TESTC', Object.assign({joinRoomFn: () => roomA}, opts));
+    const sessionB = D.connectToRoom('TESTC', Object.assign({joinRoomFn: () => roomB}, opts));
+    roomA.onPeerJoin('peerB');
+    roomB.onPeerJoin('peerA');
+
+    // Simulate a match having just been played (startMatch, not a real
+    // World/beginSyncedMatch — this test is purely about the session-level
+    // cascade state machine) and one game already queued.
+    sessionA.startMatch('FRAGMENT_MATCH');
+    sessionA.addToQueue({fragment: 'FRAGMENT_QUEUED1', name: 'Queued One', author: 'A', maxPlayers: 2});
+
+    let resolvedA = null, resolvedB = null;
+    sessionA.onMatchStart(f => { resolvedA = f; });
+    sessionB.onMatchStart(f => { resolvedB = f; });
+
+    // 1. Explicit ready/ready starts the restart candidate (index 0).
+    sessionA.endRound();
+    const candidatesMatchAcrossPeers = JSON.stringify(sessionA.cascade.candidates) === JSON.stringify(sessionB.cascade.candidates);
+    sessionA.vote('ready');
+    sessionB.vote('ready');
+    const readyReadyResult = { resolvedA, resolvedB, cascadeClearedA: sessionA.cascade === null, cascadeClearedB: sessionB.cascade === null };
+
+    // 2. Explicit skip advances to queue-item #1 (index 1) with a fresh vote.
+    resolvedA = null; resolvedB = null;
+    sessionA.endRound(); // fresh cascade — lastMatchFragment is now FRAGMENT_MATCH still (the resolved restart candidate)
+    sessionA.vote('skip');
+    const skipResult = {
+      indexA: sessionA.cascade.index, indexB: sessionB.cascade.index,
+      fragmentA: sessionA.cascade.candidates[sessionA.cascade.index].fragment,
+      selfVoteA: sessionA.cascade.selfVote, peerVoteA: sessionA.cascade.peerVote,
+      selfVoteB: sessionB.cascade.selfVote, peerVoteB: sessionB.cascade.peerVote,
+    };
+
+    // 3. A short injected timeout produces the same unanimous-ready
+    // outcome as an explicit click — A votes explicitly, B lets its own
+    // local timer auto-cast 'ready' after voteTimeoutMs.
+    resolvedA = null; resolvedB = null;
+    sessionA.vote('ready'); // explicit, on the current (index 1) candidate
+    await new Promise(r => setTimeout(r, 120)); // > voteTimeoutMs — let B's timer fire
+    const timeoutReadyResult = { resolvedA, resolvedB, matched: resolvedA !== null && resolvedA === resolvedB };
+
+    // 4. A skip arriving while a timeout-triggered ready for the *same*
+    // candidate is still in flight must not corrupt the cascade — the
+    // concrete regression test for the cascadeId/candidateIndex
+    // staleness guard. Add a second queued game so there's a candidate
+    // to advance *to* (skipping the last candidate would just exhaust
+    // the cascade, which wouldn't exercise the guard the same way).
+    sessionA.addToQueue({fragment: 'FRAGMENT_QUEUED2', name: 'Queued Two', author: 'A', maxPlayers: 2});
+    let matchStartedDuringRace = false;
+    const unsubA = sessionA.onMatchStart(() => { matchStartedDuringRace = true; });
+    sessionA.endRound(); // fresh cascade, index 0, 3 candidates now — arms a 50ms timer for index 0
+    const indexBeforeRace = sessionA.cascade.index;
+    // Let the index-0 timer age partway (20ms of its 50ms budget) before
+    // the skip arrives, so its eventual firing and the *new* candidate's
+    // own fresh 50ms timer land at clearly different absolute times —
+    // otherwise both would complete inside the same wait window below
+    // and a second, entirely legitimate unanimous-ready (on the *new*
+    // candidate, both sides' fresh timers firing) would resolve the
+    // cascade for real, masking whether the stale one was actually
+    // discarded or just never got the chance to matter.
+    await new Promise(r => setTimeout(r, 20));
+    sessionB.vote('skip'); // advances both sides to the next candidate, arming a fresh timer there
+    const indexRightAfterSkip = sessionA.cascade.index;
+    // 25ms from here: the stale index-0 timer (armed at T=0, fires at
+    // T=50, i.e. 30ms from now) hasn't fired yet at this exact point,
+    // but will within the wait below; the fresh index-1 timer (armed at
+    // T=20, fires at T=70, i.e. 50ms from now) has not.
+    await new Promise(r => setTimeout(r, 35));
+    const raceResult = {
+      indexBeforeRace, indexRightAfterSkip,
+      indexAfterWait: sessionA.cascade ? sessionA.cascade.index : null,
+      cascadeStillAlive: sessionA.cascade !== null,
+      matchStartedDuringRace,
+    };
+    unsubA();
+
+    return { candidatesMatchAcrossPeers, readyReadyResult, skipResult, timeoutReadyResult, raceResult };
+  });
+  check('both peers derive the exact same candidate list from one endRound() trigger', cascadeResult.candidatesMatchAcrossPeers, JSON.stringify(cascadeResult));
+  check('explicit ready/ready resolves to the restart candidate on both sides, clearing the cascade', cascadeResult.readyReadyResult.resolvedA === 'FRAGMENT_MATCH' && cascadeResult.readyReadyResult.resolvedB === 'FRAGMENT_MATCH' && cascadeResult.readyReadyResult.cascadeClearedA && cascadeResult.readyReadyResult.cascadeClearedB, JSON.stringify(cascadeResult.readyReadyResult));
+  check('an explicit skip advances both sides to the next candidate with a freshly-reset vote', cascadeResult.skipResult.indexA === 1 && cascadeResult.skipResult.indexB === 1 && cascadeResult.skipResult.fragmentA === 'FRAGMENT_QUEUED1' && !cascadeResult.skipResult.selfVoteA && !cascadeResult.skipResult.peerVoteA && !cascadeResult.skipResult.selfVoteB && !cascadeResult.skipResult.peerVoteB, JSON.stringify(cascadeResult.skipResult));
+  check('a short injected vote timeout auto-casts ready and produces the same unanimous outcome as an explicit click', cascadeResult.timeoutReadyResult.matched && cascadeResult.timeoutReadyResult.resolvedA === 'FRAGMENT_QUEUED1', JSON.stringify(cascadeResult.timeoutReadyResult));
+  check('an explicit skip immediately advances the cascade past the candidate a stale timeout was still armed for', cascadeResult.raceResult.indexRightAfterSkip === cascadeResult.raceResult.indexBeforeRace + 1, JSON.stringify(cascadeResult.raceResult));
+  check('the stale timeout (armed for the pre-skip candidate) is discarded by the cascadeId/candidateIndex staleness guard instead of corrupting the advanced cascade', cascadeResult.raceResult.indexAfterWait === cascadeResult.raceResult.indexRightAfterSkip && cascadeResult.raceResult.cascadeStillAlive && !cascadeResult.raceResult.matchStartedDuringRace, JSON.stringify(cascadeResult.raceResult));
+
+  // Same feature through the real UI this time: the End Round button
+  // only appears during a live synced match, clicking it swaps the
+  // panel from the queue view to the vote view, and Ready/Skip buttons
+  // are real, clickable elements — not just internal session state.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.waitForTimeout(200);
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
+  const endRoundUiResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}};
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    const endRoundHiddenBeforeMatch = getComputedStyle(document.getElementById('endRoundBtn')).display === 'none';
+    document.querySelector('.mp-queue-play').click(); // start the auto-seeded match
+    return { endRoundHiddenBeforeMatch };
+  });
+  await page.waitForTimeout(400); // beginSyncedMatch() awaits Runtime.startGame()
+  const afterMatchStartForEndRound = await page.evaluate(() => ({
+    endRoundVisible: getComputedStyle(document.getElementById('endRoundBtn')).display !== 'none',
+    restartHiddenDuringMatch: getComputedStyle(document.getElementById('restartBtn')).display === 'none',
+  }));
+  check('the End Round button stays hidden before any match has started', endRoundUiResult.endRoundHiddenBeforeMatch, JSON.stringify(endRoundUiResult));
+  check('the End Round button appears once a synced match is running, alongside the already-hidden restart button', afterMatchStartForEndRound.endRoundVisible && afterMatchStartForEndRound.restartHiddenDuringMatch, JSON.stringify(afterMatchStartForEndRound));
+  await page.click('#endRoundBtn');
+  await page.waitForTimeout(100);
+  const afterEndRoundClick = await page.evaluate(() => ({
+    overlayActive: document.getElementById('mpOverlay').classList.contains('active'),
+    bodyHtml: document.getElementById('mpBody').innerHTML,
+    endRoundHiddenAfterClick: getComputedStyle(document.getElementById('endRoundBtn')).display === 'none',
+  }));
+  check('clicking End Round reopens the panel showing the vote UI, not the queue', afterEndRoundClick.overlayActive && /Vote: Next Game/.test(afterEndRoundClick.bodyHtml) && afterEndRoundClick.bodyHtml.includes('mp-vote-ready') && afterEndRoundClick.bodyHtml.includes('mp-vote-skip'), JSON.stringify(afterEndRoundClick));
+  check('ending the round hides the End Round button again (the match sync it applied to has stopped)', afterEndRoundClick.endRoundHiddenAfterClick, JSON.stringify(afterEndRoundClick));
+  await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
+
   // STORE_PERSIST gating itself (DESIGN.md §81), isolated from the match
   // flow above — a tick that later gets rolled back by resimulateFrom()
   // (DESIGN.md §78) can't take a localStorage write back the way it can

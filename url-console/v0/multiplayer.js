@@ -106,12 +106,15 @@ const TURN_CONFIG = [
 // see the wire-protocol note above `session.queue`/`startMatch` below.
 // A match only ever begins on an explicit party-start message, never as
 // a side effect of a peer joining the room.
-function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
+function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs = 5000} = {}){
   const listeners = new Set();
   const queueListeners = new Set();
   const matchStartListeners = new Set();
   const peerIdentityListeners = new Set();
+  const cascadeListeners = new Set();
   let nextQueueId = 1;
+  let cascadeCounter = 0; // see the End Round / vote cascade block below for why this stays purely local
+  let cascadeVoteTimer = null;
   const session = {
     roomCode,
     selfId,
@@ -121,10 +124,13 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     error: null,
     queue: [],
     peerIdentity: null, // {name, avatarId} once the peer's own party-identity message arrives — null until then
+    lastMatchFragment: null, // the fragment of the most recently *started* match — End Round's own "restart" candidate
+    cascade: null, // {id, candidates, index, selfVote, peerVote} while a post-round Ready/Skip vote is in progress, else null
     onStateChange(fn){ listeners.add(fn); return () => listeners.delete(fn); },
     onQueueChange(fn){ queueListeners.add(fn); return () => queueListeners.delete(fn); },
     onMatchStart(fn){ matchStartListeners.add(fn); return () => matchStartListeners.delete(fn); },
     onPeerIdentityChange(fn){ peerIdentityListeners.add(fn); return () => peerIdentityListeners.delete(fn); },
+    onCascadeChange(fn){ cascadeListeners.add(fn); return () => cascadeListeners.delete(fn); },
   };
   function setState(next){
     session.state = next;
@@ -132,6 +138,19 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   }
   function notifyQueueChange(){
     for(const fn of queueListeners) fn(session.queue);
+    // Wire-protocol correctness rule (DESIGN.md §99's plan, carried into
+    // §10x's End Round stage): candidates are snapshotted the instant a
+    // cascade begins, so a queue mutation observed mid-cascade has to
+    // invalidate that snapshot rather than leave a vote referring to a
+    // candidate list that's no longer accurate. startCascade() (below)
+    // is what re-snapshots; calling it again here (from either the local
+    // mutation path or the remote queueAction.onMessage path, both of
+    // which already call notifyQueueChange) is what keeps candidateIndex
+    // meaningful even after a mid-vote queue change.
+    if(session.cascade) startCascade();
+  }
+  function notifyCascadeChange(){
+    for(const fn of cascadeListeners) fn(session.cascade);
   }
   function assignSlot(){
     if(!session.peerId){ session.playerSlot = null; return; }
@@ -187,6 +206,8 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   const queueAction = room.makeAction('party-queue');
   const startAction = room.makeAction('party-start');
   const identityAction = room.makeAction('party-identity');
+  const endRoundAction = room.makeAction('party-end-round');
+  const voteAction = room.makeAction('party-vote');
   function broadcastQueue(){
     queueAction.send({items: session.queue});
   }
@@ -195,6 +216,13 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     notifyQueueChange();
   };
   startAction.onMessage = data => {
+    // Mirrors what session.startMatch() already does for the sending
+    // side — without this, only whichever peer clicked Play would ever
+    // remember the match's fragment, so the two sides' End Round
+    // "restart" candidate (buildCascadeCandidates, below) would silently
+    // diverge: one side offering a restart candidate the other doesn't
+    // even have, shifting every later candidateIndex out of alignment.
+    session.lastMatchFragment = data.fragment;
     for(const fn of matchStartListeners) fn(data.fragment);
   };
   identityAction.onMessage = data => {
@@ -236,9 +264,133 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   // are called directly here rather than only from startAction.onMessage
   // (which only ever fires for the *other* peer's clicks).
   session.startMatch = fragment => {
+    session.lastMatchFragment = fragment; // End Round's own "restart" candidate — see the cascade block below
     startAction.send({fragment});
     for(const fn of matchStartListeners) fn(fragment);
   };
+
+  // End Round + Ready/Skip vote cascade (DESIGN.md §10x, Multiplayer
+  // Party's final stage). Either peer can end the round currently
+  // playing; both sides then vote Ready/Skip through a shared,
+  // deterministically-ordered candidate list — [restart the fragment
+  // that was just playing, ...the queue at the instant the round
+  // ended] — advancing to the next candidate on any Skip, resolving
+  // to a match the instant both sides are Ready on the same one.
+  //
+  // cascadeId is a purely *local* monotonic counter, never sent over
+  // the wire (party-end-round is `{}`) — it only needs to stay equal
+  // between the two peers, which it does by construction: it only ever
+  // increments on events both sides are guaranteed to process exactly
+  // once each, in the same order — a cascade starting (either peer's
+  // own endRound() call *and* the other peer's resulting
+  // endRoundAction.onMessage both call startCascade()) and a queue
+  // mutation observed mid-cascade (already reliably mirrored via
+  // notifyQueueChange above, itself called from both the local mutation
+  // path and queueAction's own onMessage). No coordination message is
+  // needed to keep two independent local counters in lockstep when both
+  // sides only ever increment them in response to events they're
+  // already guaranteed to see once each.
+  function buildCascadeCandidates(){
+    const list = [];
+    if(session.lastMatchFragment){
+      try{
+        const { name, author } = K.decodeCartUrl(session.lastMatchFragment);
+        list.push({id: 'restart', fragment: session.lastMatchFragment, name, author});
+      } catch(err){ /* a malformed remembered fragment just isn't offered as a restart candidate */ }
+    }
+    for(const item of session.queue) list.push({id: item.id, fragment: item.fragment, name: item.name, author: item.author});
+    return list;
+  }
+  function armVoteTimer(){
+    clearTimeout(cascadeVoteTimer);
+    const c = session.cascade;
+    if(!c) return;
+    const atId = c.id, atIndex = c.index;
+    cascadeVoteTimer = setTimeout(() => {
+      const cur = session.cascade;
+      if(!cur || cur.id !== atId || cur.index !== atIndex) return; // the cascade moved on before this fired
+      if(cur.selfVote) return; // already voted explicitly
+      castVote('ready');
+    }, voteTimeoutMs);
+  }
+  function startCascade(){
+    cascadeCounter++;
+    const candidates = buildCascadeCandidates();
+    session.cascade = candidates.length
+      ? { id: cascadeCounter, candidates, index: 0, selfVote: null, peerVote: null }
+      : null; // nothing to vote on (no prior match, empty queue) — End Round is a no-op in that edge case
+    if(session.cascade) armVoteTimer(); else clearTimeout(cascadeVoteTimer);
+    notifyCascadeChange();
+  }
+  function advanceOrResolve(){
+    const c = session.cascade;
+    if(!c) return;
+    if(c.selfVote === 'ready' && c.peerVote === 'ready'){
+      // Unanimous — both sides independently resolve off their own
+      // converged vote state and start the match directly (reusing the
+      // existing onMatchStart wiring, not session.startMatch's
+      // party-start broadcast) rather than exchanging a separate "go"
+      // message — the same deterministic-and-symmetric reasoning
+      // assignSlot() already relies on above.
+      const winner = c.candidates[c.index];
+      session.lastMatchFragment = winner.fragment;
+      session.cascade = null;
+      clearTimeout(cascadeVoteTimer);
+      notifyCascadeChange();
+      for(const fn of matchStartListeners) fn(winner.fragment);
+      return;
+    }
+    if(c.selfVote === 'skip' || c.peerVote === 'skip'){
+      const nextIndex = c.index + 1;
+      if(nextIndex >= c.candidates.length){
+        // Exhausted every candidate — back to the ordinary queue/shelf
+        // UI, no match starts.
+        session.cascade = null;
+        clearTimeout(cascadeVoteTimer);
+        notifyCascadeChange();
+        return;
+      }
+      session.cascade = { id: c.id, candidates: c.candidates, index: nextIndex, selfVote: null, peerVote: null };
+      armVoteTimer();
+      notifyCascadeChange();
+    }
+    // else: still waiting on one or both votes for this candidate.
+  }
+  function castVote(choice){
+    const c = session.cascade;
+    if(!c) return;
+    session.cascade = { ...c, selfVote: choice };
+    voteAction.send({cascadeId: c.id, candidateIndex: c.index, choice});
+    // Notify before advanceOrResolve(), not just from inside it — a vote
+    // that doesn't yet resolve or advance anything (still waiting on the
+    // peer) still changed session.cascade.selfVote, and the panel needs
+    // to reflect that immediately (e.g. "You: Ready") rather than
+    // silently doing nothing until the peer's own vote arrives.
+    notifyCascadeChange();
+    advanceOrResolve();
+  }
+  endRoundAction.onMessage = () => {
+    startCascade();
+  };
+  voteAction.onMessage = data => {
+    const c = session.cascade;
+    // Stale-vote guard: a vote for a cascade/candidate this side has
+    // already moved past (a Skip it processed locally before this
+    // arrived, or a queue-mutation reset) is silently discarded rather
+    // than corrupting the current one.
+    if(!c || !data || c.id !== data.cascadeId || c.index !== data.candidateIndex) return;
+    session.cascade = { ...c, peerVote: data.choice };
+    notifyCascadeChange(); // same reasoning as castVote above — reflect the peer's vote immediately even if it doesn't resolve/advance anything yet
+    advanceOrResolve();
+  };
+  session.endRound = () => {
+    endRoundAction.send({});
+    startCascade();
+  };
+  session.vote = choice => {
+    castVote(choice);
+  };
+
   // Trystero's send() only reaches peers already connected at send-time
   // — it does not replay past sends to a peer who joins (or rejoins)
   // later. Re-broadcasting the current queue (and, same reasoning, this
@@ -261,6 +413,7 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     setState('peer-left');
   };
   session.leave = () => {
+    clearTimeout(cascadeVoteTimer);
     room.leave();
     setState('left');
   };
@@ -508,6 +661,7 @@ let unsubscribeSession = null;
 let unsubscribeQueue = null;
 let unsubscribeMatchStart = null;
 let unsubscribePeerIdentity = null;
+let unsubscribeCascade = null;
 let activeSync = null; // the startMatchSync() handle for the current 'connected' session, if any
 // Bumped every time beginSyncedMatch starts, and checked after its one
 // await — guards against a peer leaving (or this side closing the
@@ -666,6 +820,7 @@ function stopSync(){
   const world = getWorld();
   if(world){ world.multiplayerActive = false; world.localPlayerSlot = 0; }
   document.getElementById('restartBtn').style.display = '';
+  document.getElementById('endRoundBtn').style.display = 'none';
 }
 
 // Detaches a live match's sync hook (same teardown stopSync() already
@@ -699,12 +854,14 @@ function closeLobby(){
   if(unsubscribeQueue) unsubscribeQueue();
   if(unsubscribeMatchStart) unsubscribeMatchStart();
   if(unsubscribePeerIdentity) unsubscribePeerIdentity();
+  if(unsubscribeCascade) unsubscribeCascade();
   stopDiag();
   activeSession = null;
   unsubscribeSession = null;
   unsubscribeQueue = null;
   unsubscribeMatchStart = null;
   unsubscribePeerIdentity = null;
+  unsubscribeCascade = null;
   lobbyMode = 'choice';
   document.getElementById('mpOverlay').classList.remove('active');
 }
@@ -741,6 +898,11 @@ async function beginSyncedMatch(session, fragment){
   // guard in connectToRoom above. Restored by stopSync() once the match
   // ends (peer-left or closeLobby()).
   document.getElementById('restartBtn').style.display = 'none';
+  // 'inline-block' (not '') — the button's CSS default is display:none,
+  // so clearing an inline override would just fall back to hidden (the
+  // same gotcha this file's own renderDiag()/updatePartyIndicator()
+  // comments already flag).
+  document.getElementById('endRoundBtn').style.display = 'inline-block';
 }
 
 function statusDot(kind){ return `<span class="mp-status-dot mp-${kind}"></span>`; }
@@ -811,6 +973,40 @@ function renderAddGameSection(){
   return `<div class="mp-queue-add"><h4>Add a game</h4><div class="mp-queue-add-list">${options}</div></div>`;
 }
 
+function voteLabel(choice){
+  if(choice === 'ready') return '✅ Ready';
+  if(choice === 'skip') return '⏭ Skip';
+  return 'Waiting…';
+}
+// The post-round Ready/Skip vote (DESIGN.md §10x) — shown instead of the
+// normal queue view for as long as session.cascade is non-null. Ready is
+// unanimous-required per candidate (both selfVote and peerVote ===
+// 'ready'); Skip from either side advances immediately, no need to wait
+// on the other vote. An explicit click always beats the local 5s
+// implicit-yes timer (session.vote below short-circuits it); the timer
+// itself is invisible here on purpose — the plan doesn't call for a
+// visible countdown, only the eventual auto-ready behavior.
+function renderCascade(session){
+  const c = session.cascade;
+  const candidate = c.candidates[c.index];
+  return `
+    <h3>Vote: Next Game</h3>
+    <div class="mp-peer-info"><span id="mpPeerAvatarSlot" class="mp-peer-avatar"></span><span class="mp-peer-name">${esc(peerDisplayName(session))}</span></div>
+    <div class="mp-vote-candidate">
+      <div class="mp-vote-candidate-name">${esc(candidate.name || '(untitled)')}</div>
+      <div class="mp-vote-status">
+        <span>You: ${voteLabel(c.selfVote)}</span>
+        <span>${esc(peerDisplayName(session))}: ${voteLabel(c.peerVote)}</span>
+      </div>
+    </div>
+    <div class="mp-actions">
+      <button class="mp-vote-ready mp-primary">Ready</button>
+      <button class="mp-vote-skip">Skip</button>
+    </div>
+    <div class="mp-actions"><button id="mpCancelBtn">Leave Party</button></div>
+  `;
+}
+
 function renderSessionBody(session){
   const s = session.state;
   if(s === 'waiting-for-peer'){
@@ -826,6 +1022,7 @@ function renderSessionBody(session){
     `;
   }
   if(s === 'connected'){
+    if(session.cascade) return renderCascade(session);
     return `
       <h3>Party</h3>
       <div class="mp-peer-info"><span id="mpPeerAvatarSlot" class="mp-peer-avatar"></span><span class="mp-peer-name">${esc(peerDisplayName(session))}</span></div>
@@ -876,14 +1073,18 @@ function renderLobby(){
       if(unsubscribeQueue) unsubscribeQueue();
       if(unsubscribeMatchStart) unsubscribeMatchStart();
       if(unsubscribePeerIdentity) unsubscribePeerIdentity();
+      if(unsubscribeCascade) unsubscribeCascade();
       activeSession = null;
       unsubscribeSession = null;
       unsubscribeQueue = null;
       unsubscribeMatchStart = null;
       unsubscribePeerIdentity = null;
+      unsubscribeCascade = null;
       lobbyMode = 'choice';
       renderLobby();
     });
+    body.querySelectorAll('.mp-vote-ready').forEach(btn => btn.addEventListener('click', () => activeSession.vote('ready')));
+    body.querySelectorAll('.mp-vote-skip').forEach(btn => btn.addEventListener('click', () => activeSession.vote('skip')));
     body.querySelectorAll('.mp-queue-play').forEach(btn => btn.addEventListener('click', () => {
       const item = activeSession.queue.find(i => i.id === btn.dataset.queueId);
       if(item) activeSession.startMatch(item.fragment);
@@ -999,6 +1200,18 @@ function startSession(role, code){
   unsubscribeQueue = activeSession.onQueueChange(() => renderLobby());
   unsubscribeMatchStart = activeSession.onMatchStart(fragment => beginSyncedMatch(activeSession, fragment));
   unsubscribePeerIdentity = activeSession.onPeerIdentityChange(() => { updatePartyIndicator(); renderLobby(); });
+  // A cascade starting (or advancing) always brings the panel back —
+  // both peers need to see the vote prompt, not just whichever one
+  // clicked End Round — and stops whatever match sync was running,
+  // mirroring the wire protocol's "both sides stopSync() and enter the
+  // vote cascade" (idempotent: harmless if no match was actually live).
+  unsubscribeCascade = activeSession.onCascadeChange(cascade => {
+    if(cascade){
+      stopSync();
+      document.getElementById('mpOverlay').classList.add('active');
+    }
+    renderLobby();
+  });
   if(role === 'host'){
     try{
       const fragment = getCurrentFragment();
@@ -1021,6 +1234,13 @@ function startSession(role, code){
 // room.onPeerJoin, above).
 function broadcastIdentity(){
   if(activeSession) activeSession.broadcastOwnIdentity();
+}
+
+// The "End Round" topbar button's own handler (main.js) — a no-op if no
+// party is active, otherwise starts the vote cascade (session.endRound
+// above) for both peers.
+function endRound(){
+  if(activeSession) activeSession.endRound();
 }
 
 // Opens the lobby modal — no longer scoped to a particular cart (the
@@ -1083,6 +1303,6 @@ function initMultiplayerUI(){
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
   openLobby, openLobbyAndJoin, closeLobby, hideLobby, leaveMatchKeepParty,
-  updateMultiplayerButton, initMultiplayerUI, broadcastIdentity,
+  updateMultiplayerButton, initMultiplayerUI, broadcastIdentity, endRound,
   startMatchSync, parseJoinLinkHash,
 };
