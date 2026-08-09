@@ -646,6 +646,25 @@ function stopSync(){
   document.getElementById('restartBtn').style.display = '';
 }
 
+// Detaches a live match's sync hook (same teardown stopSync() already
+// does) without touching the party room connection at all — used by
+// main.js's navigation (goToMenu/openDebug) instead of closeLobby(),
+// since switching to the shelf or Tinker ends whatever match is running
+// (the World driving it is being torn down or paused either way) but
+// should NOT also end the party (DESIGN.md §100: the whole point of a
+// persistent room is that it survives navigating away from one match).
+function leaveMatchKeepParty(){
+  stopSync();
+}
+
+// Hides the panel without leaving the room — the scrim/X's job now
+// (DESIGN.md §100). Leaving is only ever the explicit in-panel button's
+// job (Cancel/Leave Party/Close, all wired to closeLobby below), so a
+// stray tap outside the card can never silently end a connected party.
+function hideLobby(){
+  document.getElementById('mpOverlay').classList.remove('active');
+}
+
 function closeLobby(){
   stopSync();
   // activeSession.leave() below triggers its own 'left' state transition
@@ -865,6 +884,26 @@ function renderLobby(){
   document.getElementById('mpJoinBtn').addEventListener('click', () => { lobbyMode = 'join-form'; renderLobby(); });
 }
 
+// A small always-present indicator (index.html's #partyIndicator, styled
+// fixed-position so it's visible regardless of which of the 3 views —
+// shelf, game, Tinker — is currently active, DESIGN.md §100) reopening
+// the panel on tap. Shown for 'connected' and 'peer-left' (still a real
+// party, just between peers right now) — not 'waiting-for-peer' (no
+// second player to have a party *with* yet) or 'error'/'left'. Real
+// peer name/avatar is Stage 3 (§101+); this stage is just the chrome.
+function updatePartyIndicator(){
+  const el = document.getElementById('partyIndicator');
+  if(!el) return;
+  const state = activeSession && activeSession.state;
+  const visible = state === 'connected' || state === 'peer-left';
+  // 'inline-block' (not '') — clearing the inline override would just
+  // fall back to #partyIndicator's own CSS default, which is
+  // display:none (same gotcha this file's own renderDiag() already
+  // has a comment about).
+  el.style.display = visible ? 'inline-block' : 'none';
+  if(visible) el.textContent = state === 'connected' ? '\u{1F465} Party' : '\u{1F465} Party ⚠';
+}
+
 // The single listener driving both the modal's contents and the actual
 // match lifecycle for as long as a session is active — including while
 // the modal itself is hidden (mid-match, see beginSyncedMatch), which
@@ -878,6 +917,7 @@ function handleSessionStateChange(state, session){
     stopSync();
     document.getElementById('mpOverlay').classList.add('active');
   }
+  updatePartyIndicator();
   renderLobby();
 }
 
@@ -947,17 +987,28 @@ function openLobbyAndJoin(code, opts){
   startSession('join', code);
 }
 
-// Shows/hides index.html's "Multiplayer" topbar button based on whether
-// the currently-loaded cart opted into it — called from main.js right
-// after every successful Runtime.startGame().
-function updateMultiplayerButton(cart){
-  document.getElementById('multiplayerBtn').style.display = (cart && cart.maxPlayers >= 2) ? '' : 'none';
+// Shows index.html's "Multiplayer" topbar button unconditionally now
+// (DESIGN.md §100) — the party room is no longer scoped to whatever
+// cart is currently loaded (§99), so gating the entry point on the
+// current cart's maxPlayers no longer makes sense: you can open a party
+// while playing any game and add a maxPlayers>=2 one to the shared queue
+// from inside it. Queue-*adding* stays gated on maxPlayers>=2 regardless
+// (renderAddGameSection above only lists those). Kept as a function
+// (rather than inlining a static display:'' in index.html) so the call
+// sites in main.js don't need to change and a future stage has one place
+// to add a real condition back if one turns out to be needed.
+function updateMultiplayerButton(){
+  document.getElementById('multiplayerBtn').style.display = '';
 }
 
 function initMultiplayerUI(){
-  document.getElementById('mpCloseBtn').addEventListener('click', closeLobby);
+  document.getElementById('mpCloseBtn').addEventListener('click', hideLobby);
   document.getElementById('mpOverlay').addEventListener('click', e => {
-    if(e.target.id === 'mpOverlay') closeLobby(); // click on the scrim itself, not the card
+    if(e.target.id === 'mpOverlay') hideLobby(); // click on the scrim itself, not the card
+  });
+  document.getElementById('partyIndicator').addEventListener('click', () => {
+    document.getElementById('mpOverlay').classList.add('active');
+    renderLobby();
   });
   const copyDiagBtn = document.getElementById('mpDiagCopyBtn');
   if(copyDiagBtn) copyDiagBtn.addEventListener('click', () => copyDiagLog(copyDiagBtn));
@@ -965,6 +1016,7 @@ function initMultiplayerUI(){
 
 export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
-  openLobby, openLobbyAndJoin, closeLobby, updateMultiplayerButton, initMultiplayerUI,
+  openLobby, openLobbyAndJoin, closeLobby, hideLobby, leaveMatchKeepParty,
+  updateMultiplayerButton, initMultiplayerUI,
   startMatchSync, parseJoinLinkHash,
 };
