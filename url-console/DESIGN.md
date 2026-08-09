@@ -3264,7 +3264,17 @@ Docs: none — internal data-layer/avatar-rendering addition, no cart-facing fie
 
 Verified via `test/smoke.js`: identity round-trips through `localStorage` including across a real full page reload (not just an in-memory variable surviving); every one of the 8 fixed avatars rasterizes to a non-blank 8×8 canvas; an out-of-range `avatarId` (negative or past the end) renders safely instead of throwing. 3 clean full-suite runs — the `build-site.sh` gap above was caught by the very first run timing out at the initial page-load check, before ever reaching the new checks themselves, which is exactly the kind of failure this suite's "test the real built site, not an approximation" posture (DESIGN.md §29) exists to catch.
 
-## 98. Open questions
+## 98. Multiplayer Party — third stage: the identity picker itself
+
+§97 built the storage/rendering layer for player identity (`getIdentity`/`setIdentity`, the fixed avatar set); this stage builds the actual UI on top of it — a small chip in the shelf's own header (not tucked inside the multiplayer overlay), since setting your name is useful before a party even exists. The chip always shows *something*: the saved avatar + name once set, or a neutral "Set your name" placeholder before that — never blank, so there's always a visible, tappable thing rather than an empty corner of the page.
+
+Clicking it opens a picker reusing `.mp-card`'s own visual shape (card-in-a-scrim, `mp-close`, `mp-primary` button) — a name input plus a grid of the 8 fixed avatars, mirroring the existing `.pal-swatch`/`.pal-swatch.selected` convention the palette editor already uses for "a grid of pickable, one-selected things." `Runtime.getIdentity()`/`setIdentity()` stay the single source of truth throughout: the picker re-reads fresh every time it opens rather than trusting whatever the chip happened to already be showing, and `selectedAvatarId` is purely this picker's own transient in-progress choice, discarded (not written anywhere) unless Save is actually pressed.
+
+Docs: none — UI on top of an already-internal (non-cart-facing) preference.
+
+Verified via `test/smoke.js`, driving the real chip/overlay/inputs (not just the storage functions §97 already covered): the chip shows the placeholder before anything's set; clicking it opens the overlay; typing a name, picking a non-default avatar, and clicking Save writes through to `Runtime.getIdentity()` (not just local UI state) and closes the overlay; the chip re-renders with the new name immediately, no reload needed. Also confirmed visually via Playwright screenshots of both the shelf (chip in the corner) and the open picker (all 8 avatars legible and distinct) — the sprite-editor/kernel rendering path §97 chose to reuse produces a real, readable result at picker size, not just a technically-non-blank canvas.
+
+## 99. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an

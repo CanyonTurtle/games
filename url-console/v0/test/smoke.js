@@ -743,6 +743,44 @@ async function main(){
   check('an out-of-range avatarId (negative or past the end) renders safely instead of throwing',
     !avatarResult.outOfRangeThrew, JSON.stringify(avatarResult));
 
+  // 1e3. The identity picker itself (Multiplayer Party Stage 0c) — the
+  // real chip/overlay, not just the storage layer above. Confirms the
+  // chip shows a placeholder before anything's set, opening/saving
+  // actually writes through Runtime.setIdentity (not just local UI
+  // state), and the chip re-renders to reflect it without a reload.
+  //
+  // Reload first: the chip is only ever re-rendered by code paths that
+  // call renderIdentityChip() (page load, or a real save through the
+  // picker) — the debug-surface setIdentity() call the previous check's
+  // cleanup used writes storage but, correctly, does not reach into and
+  // repaint a chip DOM node it doesn't own, so without this reload the
+  // chip here would still show stale content from before that cleanup.
+  await page.evaluate(() => { location.hash = ''; });
+  await page.reload();
+  await page.waitForTimeout(200);
+  const chipBeforeText = await page.evaluate(() => document.getElementById('identityChip').textContent);
+  check('the identity chip shows a placeholder before any name is set', chipBeforeText.includes('Set your name'), chipBeforeText);
+  await page.click('#identityChip');
+  const overlayOpenAfterClick = await page.evaluate(() => document.getElementById('identityOverlay').classList.contains('active'));
+  check('clicking the identity chip opens the picker overlay', overlayOpenAfterClick, String(overlayOpenAfterClick));
+  await page.fill('#identityNameInput', 'Robin');
+  // Second swatch (index 1, "Square") — not the first, so this also
+  // exercises actually changing the avatar selection away from its
+  // default rather than just accepting whatever was already selected.
+  await page.click('.identity-avatar-swatch:nth-child(2)');
+  await page.click('#identitySaveBtn');
+  const afterSave = await page.evaluate(() => ({
+    overlayOpen: document.getElementById('identityOverlay').classList.contains('active'),
+    chipText: document.getElementById('identityChip').textContent,
+    identity: window.__urlcadeDebug.getIdentity(),
+  }));
+  check('saving closes the overlay', !afterSave.overlayOpen, JSON.stringify(afterSave));
+  check('saving writes through to Runtime.setIdentity (name + chosen avatar, not just local UI state)',
+    afterSave.identity.name === 'Robin' && afterSave.identity.avatarId === 1, JSON.stringify(afterSave));
+  check('the chip re-renders with the new name immediately, no reload needed', afterSave.chipText.includes('Robin'), JSON.stringify(afterSave));
+  // Cleanup — leave identity blank for the rest of the suite.
+  await page.evaluate(() => window.__urlcadeDebug.setIdentity({name: '', avatarId: 0}));
+
   // 1f. Tilemap authoring — shape layers (mapShapes/blankMap, DESIGN.md
   // §74). Three layers: (a) the kernel-level compositing primitives
   // directly, (b) a full encodeCart/decodeCart round-trip through the
