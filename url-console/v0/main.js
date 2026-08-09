@@ -286,4 +286,5 @@ window.__urlcadeDebug = {
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
   PARTY_APP_ID: Multiplayer.PARTY_APP_ID,
   TURN_CONFIG: Multiplayer.TURN_CONFIG,
+  getLobbyAnimationTriggerCount: Multiplayer.getLobbyAnimationTriggerCount,
 };

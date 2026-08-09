@@ -39,6 +39,17 @@
   @media (prefers-reduced-motion: no-preference){
     .cart, .playbtn{transition:transform .15s ease, border-color .15s ease, box-shadow .15s ease;}
     .view.active{animation:viewIn .22s ease both;}
+    /* Multiplayer lobby transitions (DESIGN.md §10x) — .mp-overlay.active
+       is the modal's own open/close (shared by #mpOverlay and
+       #identityOverlay, safe for both since it's just a fade+slight-rise,
+       independent of size); .mp-body-anim is scoped narrower, applied by
+       multiplayer.js's own maybeAnimateBody() only when the *kind* of
+       view #mpBody is showing actually changes (queueing, joining,
+       voting, counting down), not on every routine re-render. Both reuse
+       the same viewIn keyframe .view.active already established, rather
+       than a second animation system. */
+    .mp-overlay.active{animation:viewIn .22s ease both;}
+    .mp-body-anim{animation:viewIn .2s ease both;}
   }
   @keyframes viewIn{from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none}}
 
@@ -64,7 +75,12 @@
     overflow:hidden;position:relative;}
   .cart:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(0,0,0,.25);
     border-color:var(--cart-accent, var(--accent));}
-  .cart-thumb-link{display:block;line-height:0;border-bottom:1px solid var(--rule);}
+  /* .cart-thumb-slot (not .cart-thumb-link) is the multiplayer lobby's
+     own version of this same wrapper (DESIGN.md §10x) — a plain <div>,
+     not an <a href>, since clicking a queue/add-game card must never
+     trigger a real hash navigation. Shares this rule rather than
+     duplicating it. */
+  .cart-thumb-link, .cart-thumb-slot{display:block;line-height:0;border-bottom:1px solid var(--rule);}
   .cart-thumb{display:block;width:100%;height:auto;image-rendering:pixelated;background:#0c0c0c;}
   .cart-body{padding:14px 16px 16px;}
   .cart h2{margin:0 0 2px;font-size:18px;letter-spacing:.01em;}
@@ -75,10 +91,18 @@
      would just be noise. */
   .cart-players{margin:-8px 0 12px;font-size:11px;color:var(--ink-dim);
     display:flex;align-items:center;gap:5px;}
-  a.playbtn{display:inline-flex;align-items:center;gap:8px;background:var(--cart-accent,var(--accent));
+  /* Not `a.playbtn` — the multiplayer lobby (DESIGN.md §10x) reuses this
+     same visual rule on a real <button>, not an <a href>, since a queue/
+     add-game card's click has to call session.startMatch()/addToQueue()
+     through JS, never trigger an actual hash navigation (which would
+     leave the party). `border:none;font-family` added here (rather than
+     left to each button's browser default) so a <button class="playbtn">
+     renders identically to the shelf's own <a class="playbtn">. */
+  .playbtn{display:inline-flex;align-items:center;gap:8px;background:var(--cart-accent,var(--accent));
     color:#141110;text-decoration:none;padding:9px 16px;border-radius:2px;font-weight:700;
-    font-size:13px;letter-spacing:.04em;border:1px solid rgba(0,0,0,.2);}
-  a.playbtn:hover{transform:translateX(2px);}
+    font-size:13px;letter-spacing:.04em;border:1px solid rgba(0,0,0,.2);
+    font-family:var(--mono);cursor:pointer;}
+  .playbtn:hover{transform:translateX(2px);}
   /* Shared by "+ New Cart" on the shelf and "Debug" in the game topbar —
      one visual language for "secondary action next to the main one",
      not a bespoke button style per place it shows up. */
@@ -428,6 +452,27 @@
   .mp-close{position:absolute;top:10px;right:10px;background:none;border:none;
     color:var(--ink-dim);font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;}
   .mp-close:hover{color:var(--accent);}
+
+  /* #mpOverlay only — full-screen on every viewport, not just mobile
+     (DESIGN.md §10x): the party queue is meant to feel like part of the
+     game shelf, not a small dropdown floating over it, and a full-bleed
+     surface gives the shelf-style cards (Stage 3) and the countdown
+     (Stage 4) room to breathe. Scoped strictly by #mpOverlay's own ID —
+     never touching the shared .mp-overlay/.mp-card rules above, which
+     #identityOverlay (the name/avatar picker, a small form with no
+     reason to go full-screen) still relies on unmodified. Modeled
+     directly on #inspectWrap/.inspect-topbar/.inspect-body's own
+     existing full-screen recipe below (safe-area math and all) rather
+     than inventing a second one. */
+  #mpOverlay{background:var(--bg);padding:0;align-items:stretch;justify-content:stretch;}
+  #mpOverlay .mp-card{max-width:none;width:100%;height:100%;height:100dvh;
+    border-radius:0;border:none;box-shadow:none;padding:0;
+    display:flex;flex-direction:column;overflow:hidden;}
+  .mp-topbar{flex:0 0 auto;display:flex;align-items:center;justify-content:flex-end;
+    padding:calc(10px + var(--safe-t)) calc(12px + var(--safe-r)) 10px calc(12px + var(--safe-l));
+    border-bottom:1px solid var(--rule);}
+  #mpOverlay .mp-close{position:static;}
+  .mp-body-scroll{flex:1;overflow-y:auto;padding:8px 18px calc(30px + var(--safe-b));}
   .mp-card h3{margin:0 0 14px;font-size:14px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink);}
   .mp-card p{margin:0 0 14px;font-size:12.5px;color:var(--ink-dim);line-height:1.5;}
   .mp-actions{display:flex;gap:10px;flex-wrap:wrap;}
@@ -448,32 +493,41 @@
   .mp-status-dot.mp-pending{background:var(--accent);animation:mp-pulse 1.2s ease-in-out infinite;}
   @keyframes mp-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
-  /* Shared party queue (DESIGN.md §97, Multiplayer Party Stage 1) — the
-     'connected' state's real body: a list of queued games plus an "Add
+  /* Shared party queue (DESIGN.md §97, Multiplayer Party Stage 1;
+     reskinned in §10x to share the shelf's own visual language) — the
+     'connected' state's real body: a grid of queued games plus an "Add
      a game" section, replacing what used to be a static "Starting the
-     match…" message now that connecting no longer auto-starts one. */
+     match…" message now that connecting no longer auto-starts one.
+     Queue/add-game cards reuse the shelf's own .cart/.cart-thumb-link/
+     .cart-thumb/.cart-body/.cart-author/.cart-players classes (real
+     thumbnails via runtime.js's buildCardThumbnail, DESIGN.md §10x) —
+     the party queue is meant to feel like part of the shelf, not a
+     dropdown list floating apart from it. .mp-card-grid duplicates
+     #cartList's own grid declaration under a class selector (the same
+     dense auto-fill layout) rather than sharing the ID rule, since these
+     cards live inside #mpOverlay, not #cartList. */
   .mp-queue-empty{margin:0 0 14px;font-size:12.5px;color:var(--ink-dim);}
-  .mp-queue-list{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;
-    max-height:220px;overflow-y:auto;}
-  .mp-queue-item{display:flex;align-items:center;justify-content:space-between;gap:10px;
-    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:4px;padding:8px 10px;}
-  .mp-queue-info{display:flex;flex-direction:column;gap:2px;min-width:0;}
-  .mp-queue-name{font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-  .mp-queue-added-by{font-size:10.5px;color:var(--ink-dim);}
-  .mp-queue-item-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
-  .mp-queue-item-actions button{font-family:var(--mono);font-size:11.5px;cursor:pointer;
-    border-radius:3px;border:1px solid var(--rule);background:var(--bg);color:var(--ink);}
-  .mp-queue-play{padding:5px 10px;}
-  .mp-queue-play:hover{border-color:var(--accent);color:var(--accent);}
-  .mp-queue-remove{padding:5px 8px;color:var(--ink-dim);}
+  .mp-card-grid{display:grid;gap:14px;grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));margin-bottom:16px;}
+  .mp-queue-item .cart-body{padding:10px 12px 12px;}
+  .mp-queue-item .cart-body h2{font-size:14.5px;}
+  .mp-queue-item-actions{display:flex;align-items:center;gap:6px;margin-top:8px;}
+  .mp-queue-item-actions .playbtn{padding:6px 10px;font-size:11.5px;flex:1 1 auto;justify-content:center;}
+  .mp-queue-remove{font-family:var(--mono);font-size:13px;cursor:pointer;flex:0 0 auto;
+    padding:6px 9px;border-radius:3px;border:1px solid var(--rule);background:var(--bg);color:var(--ink-dim);}
   .mp-queue-remove:hover{border-color:var(--bad);color:var(--bad);}
   .mp-queue-add h4{margin:0 0 8px;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-dim);}
-  .mp-queue-add-list{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
-  .mp-queue-add-btn{font-family:var(--mono);font-size:12px;text-align:left;cursor:pointer;
-    padding:8px 10px;border-radius:4px;border:1px solid var(--rule);background:var(--bg-elevated);color:var(--ink);
-    display:flex;align-items:center;justify-content:space-between;gap:8px;}
-  .mp-queue-add-btn:hover{border-color:var(--accent);color:var(--accent);}
-  .mp-queue-add-players{color:var(--ink-dim);font-size:10.5px;}
+  /* .cart is normally a plain (non-interactive) container on the real
+     shelf — the whole "Add a game" card is clickable here instead, so it
+     has to be a real <button>, not a <div>. Resets just the UA <button>
+     defaults that would otherwise fight .cart's own explicit background/
+     border/border-radius/overflow (already correct as-is, cascade order
+     alone lets them win) — display/width/padding/margin/font/text-align/
+     appearance, nothing visual. */
+  button.mp-cart-add{display:block;width:100%;padding:0;margin:0;font:inherit;
+    font-family:var(--mono);text-align:left;appearance:none;-webkit-appearance:none;}
+  button.mp-cart-add .cart-body{padding:10px 12px 12px;}
+  button.mp-cart-add .cart-body h2{font-size:14.5px;}
+  button.mp-cart-add .cart-players{margin:2px 0 0;}
 
   /* Post-round Ready/Skip vote cascade (DESIGN.md §10x, Multiplayer
      Party's final stage) — replaces the queue view in the same panel
@@ -483,15 +537,37 @@
   .mp-vote-candidate-name{font-size:15px;font-weight:700;margin-bottom:10px;}
   .mp-vote-status{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--ink-dim);}
 
-  /* Connection diagnostics (DESIGN.md §88) — a small always-present log
+  /* Pre-match "Get Ready" countdown (DESIGN.md §10x) — who and what,
+     plus a big number, shown for session.countdownMs (3s by default)
+     before a match actually starts. .mp-countdown-game reuses the same
+     .cart family the queue/add-game cards do (a real thumbnail), capped
+     to a comfortable width rather than stretching edge-to-edge like a
+     grid cell. */
+  .mp-countdown-game{max-width:220px;margin:0 auto 20px;}
+  .mp-countdown-number{font-size:64px;font-weight:800;text-align:center;
+    color:var(--accent);letter-spacing:.02em;}
+
+  /* Connection diagnostics (DESIGN.md §88) — a technical connection log
      of what the signaling relays and (once found) the peer's WebRTC
      connection are actually doing underneath the lobby's own
      waiting/connected/error states, for reading straight off a phone
-     screen with no computer or network-proxy app needed. display:none
-     by default and toggled by multiplayer.js's renderDiag() — empty
-     until a session actually starts attempting a connection, so the
-     first Host/Join choice screen doesn't show a blank box. */
-  .mp-diag{display:none;margin-top:4px;border-top:1px solid var(--rule);padding-top:12px;}
+     screen with no computer or network-proxy app needed. Real players
+     never need this in the common case, so it's tucked behind a native
+     <details> disclosure (DESIGN.md §10x) — collapsed by default (no
+     `open` attribute in the markup), no new JS state needed since the
+     browser's own toggle governs open/closed. multiplayer.js's
+     renderDiag() still hides the whole wrapper (.mp-diag-wrap, not
+     .mp-diag itself) whenever the log is empty — same reasoning as
+     before, just retargeted one element up — so the first Host/Join
+     choice screen doesn't show an empty disclosure triangle with nothing
+     behind it. Auto-expanded on a real connection error (multiplayer.js)
+     so a player who actually hits a problem doesn't have to know to tap
+     it first. */
+  .mp-diag-wrap{display:none;margin-top:4px;border-top:1px solid var(--rule);padding-top:12px;}
+  .mp-diag-summary{cursor:pointer;font-size:11px;letter-spacing:.03em;text-transform:uppercase;
+    color:var(--ink-dim);}
+  .mp-diag-summary:hover{color:var(--ink);}
+  .mp-diag{margin-top:10px;}
   .mp-diag-head{display:flex;align-items:center;justify-content:space-between;
     margin-bottom:6px;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-dim);}
   .mp-diag-head button{font-family:var(--mono);font-size:11px;padding:3px 9px;
@@ -629,14 +705,21 @@
 
 <div id="mpOverlay" class="mp-overlay">
   <div class="mp-card">
-    <button id="mpCloseBtn" class="mp-close" title="Close">&times;</button>
-    <div id="mpBody"></div>
-    <div id="mpDiag" class="mp-diag">
-      <div class="mp-diag-head">
-        <span>Connection log</span>
-        <button id="mpDiagCopyBtn" type="button">Copy</button>
-      </div>
-      <pre id="mpDiagLog" class="mp-diag-log"></pre>
+    <div class="mp-topbar">
+      <button id="mpCloseBtn" class="mp-close" title="Close">&times;</button>
+    </div>
+    <div class="mp-body-scroll">
+      <div id="mpBody"></div>
+      <details id="mpDiagWrap" class="mp-diag-wrap">
+        <summary class="mp-diag-summary">Connection details</summary>
+        <div id="mpDiag" class="mp-diag">
+          <div class="mp-diag-head">
+            <span>Connection log</span>
+            <button id="mpDiagCopyBtn" type="button">Copy</button>
+          </div>
+          <pre id="mpDiagLog" class="mp-diag-log"></pre>
+        </div>
+      </details>
     </div>
   </div>
 </div>

@@ -1636,4 +1636,5 @@ export {
   isAudioEnabled, setAudioEnabled,
   getIdentity, setIdentity,
   hashCartBytes, setPerTickHook,
+  buildCardThumbnail,
 };
