@@ -16,16 +16,14 @@
    gameplay sync, once there's a connected room to drive it with.
    ============================================================ */
 import { joinRoom as trysteroJoinRoom, selfId, getRelaySockets } from './vendor/trystero/torrent.mjs';
-import { hashCartBytes, startGame, getCurrentFragment, getWorld, setPerTickHook } from './runtime.js';
+import { startGame, getCurrentFragment, getWorld, setPerTickHook } from './runtime.js';
+import { CARTS } from './carts/index.js';
 
 // kernel.js loads as a plain (non-module) <script> before this file —
 // see index.html's own script-tag comment — so its exports land on
 // window.UrlcadeKernel rather than being import-able here, the same
 // convention runtime.js's own `const K = window.UrlcadeKernel` already
-// uses. hashCartBytes itself lives in runtime.js, not kernel.js, so it's
-// imported directly above instead — ES modules dedupe by URL, so this
-// doesn't re-run runtime.js's own module-init a second time regardless
-// of import order relative to main.js's.
+// uses.
 const K = window.UrlcadeKernel;
 
 // No 0/O/1/I — the four characters most likely to be misread or
@@ -42,17 +40,21 @@ function generateRoomCode(){
   return code;
 }
 
-// Namespaces a room to this exact cart's content, not just "this app" —
-// a host and a guest only ever find each other if they're looking at
-// byte-identical carts, so a hand-edited/recompiled variant of "the
-// same" cart gets its own room space rather than colliding with (or
-// silently connecting a player into) a differently-tuned build of it.
-// Reuses the exact hash runtime.js already computes for the persist
-// key (DESIGN.md §69) — one hashing scheme for "identify this cart's
-// content," not two.
-function appIdForCart(cart){
-  return 'urlcade-mp-' + hashCartBytes(K.encodeCart(cart));
-}
+// One fixed room topic for the whole party — not a hash of whatever
+// cart happens to be loaded (DESIGN.md §97: Multiplayer Party Stage 1).
+// A single persistent room lets two peers play several games in a row
+// without a fresh signaling handshake between each one, which is the
+// whole point of a "party." The guarantee that used to come from a
+// cart-derived topic — two peers who find each other are running
+// byte-identical game logic, required by the deterministic rollback-sync
+// engine — is replaced by an *explicit* one instead: whichever peer adds
+// a game to the shared queue sends the literal compiled fragment string
+// over this room, and a match always starts from that exact,
+// peer-verified payload (see addToQueue/startMatch below), never from
+// "whatever's currently loaded locally." That's a stronger guarantee
+// than the old one — a version mismatch becomes a legible protocol
+// issue instead of two peers silently never finding each other.
+const PARTY_APP_ID = 'urlcade-mp-party-v1';
 
 // Confirmed via a real two-device attempt (DESIGN.md §95): Trystero's own
 // onJoinError fired with "could not connect to peer X after exchanging
@@ -98,8 +100,16 @@ const TURN_CONFIG = [
 // (a config bug, not a live network failure — Trystero's own signaling
 // connects in the background and has no synchronous "the network is
 // unreachable" signal to catch here).
-function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
+//
+// 'connected' describes *party* connectivity only, not a live match —
+// see the wire-protocol note above `session.queue`/`startMatch` below.
+// A match only ever begins on an explicit party-start message, never as
+// a side effect of a peer joining the room.
+function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   const listeners = new Set();
+  const queueListeners = new Set();
+  const matchStartListeners = new Set();
+  let nextQueueId = 1;
   const session = {
     roomCode,
     selfId,
@@ -107,11 +117,17 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     peerId: null,
     playerSlot: null,
     error: null,
+    queue: [],
     onStateChange(fn){ listeners.add(fn); return () => listeners.delete(fn); },
+    onQueueChange(fn){ queueListeners.add(fn); return () => queueListeners.delete(fn); },
+    onMatchStart(fn){ matchStartListeners.add(fn); return () => matchStartListeners.delete(fn); },
   };
   function setState(next){
     session.state = next;
     for(const fn of listeners) fn(session.state, session);
+  }
+  function notifyQueueChange(){
+    for(const fn of queueListeners) fn(session.queue);
   }
   function assignSlot(){
     if(!session.peerId){ session.playerSlot = null; return; }
@@ -146,7 +162,7 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     // iCloud Private Relay interfering with STUN, would look like) or
     // somewhere upstream of it.
     room = joinRoomFn(
-      {appId: appIdForCart(cart), relayConfig: {redundancy: 5}, turnConfig: TURN_CONFIG},
+      {appId: PARTY_APP_ID, relayConfig: {redundancy: 5}, turnConfig: TURN_CONFIG},
       roomCode,
       {onJoinError: ({error, peerId}) => pushDiag(`join error: ${error}` + (peerId ? ` (peer ${String(peerId).slice(0, 6)})` : ''))}
     );
@@ -157,11 +173,65 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
     return session;
   }
   session._room = room; // startMatchSync (below) needs makeAction() once the match actually starts syncing
+
+  // Party-level channels — created once and live for the whole party,
+  // reused match after match (room.makeAction is memoized per room by
+  // type string, vendor/trystero/actions.mjs:78-82, confirmed directly
+  // this round). 'input' (startMatchSync, below) is the only action
+  // created fresh per match, since it needs a new onMessage closure over
+  // that match's own World each time.
+  const queueAction = room.makeAction('party-queue');
+  const startAction = room.makeAction('party-start');
+  function broadcastQueue(){
+    queueAction.send({items: session.queue});
+  }
+  queueAction.onMessage = data => {
+    session.queue = (data && data.items) || [];
+    notifyQueueChange();
+  };
+  startAction.onMessage = data => {
+    for(const fn of matchStartListeners) fn(data.fragment);
+  };
+  session.addToQueue = ({fragment, name, author, maxPlayers}) => {
+    // selfId + a counter alone is enough to keep two *distinct* real peers
+    // from ever colliding, but a random suffix is added anyway — cheap
+    // insurance against the pathological case (e.g. two sessions sharing
+    // one selfId within a single test/mock JS realm, as this file's own
+    // smoke.js coverage does) rather than a scenario this code otherwise
+    // has to reason carefully about.
+    const entry = {id: 'q' + (nextQueueId++) + '-' + selfId.slice(0, 6) + '-' + Math.random().toString(36).slice(2, 6), fragment, name, author, maxPlayers, addedBy: selfId};
+    session.queue = session.queue.concat([entry]);
+    broadcastQueue();
+    notifyQueueChange();
+    return entry;
+  };
+  session.removeFromQueue = id => {
+    session.queue = session.queue.filter(item => item.id !== id);
+    broadcastQueue();
+    notifyQueueChange();
+  };
+  // Unilateral — either peer can start a match on a queued (or
+  // freshly-added) fragment with no approval round-trip, matching the
+  // "no approval to queue" trust posture. Trystero's send() never loops
+  // a message back to its own sender, so the local match-start listeners
+  // are called directly here rather than only from startAction.onMessage
+  // (which only ever fires for the *other* peer's clicks).
+  session.startMatch = fragment => {
+    startAction.send({fragment});
+    for(const fn of matchStartListeners) fn(fragment);
+  };
+  // Trystero's send() only reaches peers already connected at send-time
+  // — it does not replay past sends to a peer who joins (or rejoins)
+  // later. Re-broadcasting the current queue on every join closes that
+  // gap: a peer who connects (or reconnects after 'peer-left') always
+  // ends up with whatever the other side's queue currently is, rather
+  // than staying stuck with whatever it last saw (or nothing at all).
   room.onPeerJoin = peerId => {
     if(session.peerId) return; // a 3rd peer is outside v1's 2-player cap — see this file's own header comment; never becomes "the" opponent
     session.peerId = peerId;
     assignSlot();
     setState('connected');
+    broadcastQueue();
   };
   room.onPeerLeave = peerId => {
     if(peerId !== session.peerId) return;
@@ -176,14 +246,14 @@ function connectToRoom(cart, roomCode, {joinRoomFn = trysteroJoinRoom} = {}){
   return session;
 }
 
-function hostMatch(cart, opts){
-  return connectToRoom(cart, generateRoomCode(), opts);
+function hostMatch(opts){
+  return connectToRoom(generateRoomCode(), opts);
 }
 // Room codes are generated uppercase (ROOM_CODE_ALPHABET); normalized
 // the same way here so a guest typing/pasting one in lowercase, or with
 // stray whitespace, still matches.
-function joinMatch(cart, roomCode, opts){
-  return connectToRoom(cart, String(roomCode).trim().toUpperCase(), opts);
+function joinMatch(roomCode, opts){
+  return connectToRoom(String(roomCode).trim().toUpperCase(), opts);
 }
 
 // A join link bundles this exact game with a room code, so opening it is
@@ -414,6 +484,8 @@ function esc(s){ return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;'); }
 let activeSession = null; // the connectToRoom() session currently shown, or null before Host/Join is chosen
 let lobbyMode = 'choice'; // 'choice' | 'join-form' — only meaningful while activeSession is null
 let unsubscribeSession = null;
+let unsubscribeQueue = null;
+let unsubscribeMatchStart = null;
 let activeSync = null; // the startMatchSync() handle for the current 'connected' session, if any
 // Bumped every time beginSyncedMatch starts, and checked after its one
 // await — guards against a peer leaving (or this side closing the
@@ -521,14 +593,13 @@ function startDiag(role, roomCode){
   lastRelayStates = {};
   lastPeerStates = {};
   installConsoleWarnCapture();
-  // appId (module-scoped `lobbyCart`, set by openLobby/openLobbyAndJoin
-  // just before this runs) is exactly the second half of the room's
-  // topic — a host and a joiner only ever find each other if this
-  // string matches on both sides for the same room code. Logging it
-  // here makes that comparison a straight side-by-side read of two
-  // diag logs, rather than needing a separate network inspector and a
-  // raw sha1'd info_hash to eyeball.
-  pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)} — appId ${appIdForCart(lobbyCart)}`);
+  // PARTY_APP_ID is exactly the second half of the room's topic — every
+  // party uses the same one now (DESIGN.md §97), so a host and a joiner
+  // only ever find each other if this string matches (it always will,
+  // it's a constant) and the room code matches. Logged anyway, mostly so
+  // a diag log from before this round and one from after look visibly
+  // different rather than silently comparing apples to oranges.
+  pushDiag(`${role === 'host' ? 'hosting' : 'joining'} room ${roomCode} — selfId ${selfId.slice(0, 6)} — appId ${PARTY_APP_ID}`);
   pollDiag();
   clearInterval(diagPollTimer);
   diagPollTimer = setInterval(pollDiag, DIAG_POLL_MS);
@@ -584,24 +655,32 @@ function closeLobby(){
   // and un-hide the panel right after this function just cleared it.
   if(activeSession) activeSession.leave();
   if(unsubscribeSession) unsubscribeSession();
+  if(unsubscribeQueue) unsubscribeQueue();
+  if(unsubscribeMatchStart) unsubscribeMatchStart();
   stopDiag();
   activeSession = null;
   unsubscribeSession = null;
+  unsubscribeQueue = null;
+  unsubscribeMatchStart = null;
   lobbyMode = 'choice';
   document.getElementById('mpOverlay').classList.remove('active');
 }
 
-// Fires once per 'connected' transition (including a reconnect after
-// 'peer-left' — see handleSessionStateChange below): restarts the game
-// fresh so both peers begin ticking from the exact same on_init state
-// (the World that was already running single-player has no reason to
-// agree with the peer's — different play sessions, different RNG
-// progress, different entity state), then wires the fresh World's
-// per-tick hook to this session's sync controller. Hides the modal
-// rather than closing it — closeLobby() would also leave the room.
-async function beginSyncedMatch(session){
+// Fires on an explicit party-start message (either peer clicking Play on
+// a queue item, see session.startMatch above) — never as a side effect
+// of a peer simply joining the room (see handleSessionStateChange below).
+// Restarts the game fresh so both peers begin ticking from the exact
+// same on_init state (the World that was already running single-player
+// has no reason to agree with the peer's — different play sessions,
+// different RNG progress, different entity state), then wires the fresh
+// World's per-tick hook to this session's sync controller. Takes the
+// exact fragment both peers agreed on over the wire, not whatever
+// happens to be loaded locally (getCurrentFragment()) — that's the
+// concrete mechanism behind the "explicit cart agreement" guarantee
+// PARTY_APP_ID's own comment above describes. Hides the modal rather
+// than closing it — closeLobby() would also leave the room.
+async function beginSyncedMatch(session, fragment){
   document.getElementById('mpOverlay').classList.remove('active');
-  const fragment = getCurrentFragment();
   if(!fragment) return;
   const generation = ++matchGeneration;
   await startGame(fragment);
@@ -623,6 +702,63 @@ async function beginSyncedMatch(session){
 
 function statusDot(kind){ return `<span class="mp-status-dot mp-${kind}"></span>`; }
 
+// The shelf's own maxPlayers>=2 carts, decoded from CARTS the same way
+// renderMenu() decodes every shelf card (never from an in-memory
+// authored object — see carts/index.js's own header) — cached at module
+// scope since CARTS itself never changes after registerAllCarts()
+// resolves at boot. Loaded lazily (the first 'connected' render kicks it
+// off) rather than at module init, so this file doesn't force CARTS'
+// full compile to finish before a lobby that never opens the "Add a
+// game" section needs it.
+let mpCapableCartsList = null;
+let mpCapableCartsPromise = null;
+async function loadMultiplayerCapableCarts(){
+  const list = [];
+  for(const [key, {fragment, name, author}] of Object.entries(CARTS)){
+    try{
+      const cart = K.decodeCart(await K.decodePayloadToBytes(K.decodeCartUrl(fragment).payload));
+      if(cart.maxPlayers >= 2) list.push({key, fragment, name, author, maxPlayers: cart.maxPlayers});
+    } catch(err){ /* a cart that fails to decode just doesn't show up here — same as it wouldn't on the shelf */ }
+  }
+  return list;
+}
+function ensureMultiplayerCapableCartsLoaded(){
+  if(mpCapableCartsList || mpCapableCartsPromise) return;
+  mpCapableCartsPromise = loadMultiplayerCapableCarts().then(list => {
+    mpCapableCartsList = list;
+    renderLobby(); // re-render once the async decode settles, same pattern beginSyncedMatch's own await uses
+  });
+}
+
+function renderQueueList(session){
+  if(!session.queue.length){
+    return `<p class="mp-queue-empty">No games queued yet — add one below.</p>`;
+  }
+  const rows = session.queue.map(item => `
+    <div class="mp-queue-item">
+      <div class="mp-queue-info">
+        <span class="mp-queue-name">${esc(item.name || '(untitled)')}</span>
+        <span class="mp-queue-added-by">added by ${item.addedBy === session.selfId ? 'you' : 'your friend'}</span>
+      </div>
+      <div class="mp-queue-item-actions">
+        <button class="mp-queue-play" data-queue-id="${esc(item.id)}">Play</button>
+        <button class="mp-queue-remove" data-queue-id="${esc(item.id)}" title="Remove">&times;</button>
+      </div>
+    </div>
+  `).join('');
+  return `<div class="mp-queue-list">${rows}</div>`;
+}
+function renderAddGameSection(){
+  ensureMultiplayerCapableCartsLoaded();
+  if(!mpCapableCartsList){
+    return `<div class="mp-queue-add"><p class="mp-queue-empty">Loading games…</p></div>`;
+  }
+  const options = mpCapableCartsList.map(c => `
+    <button class="mp-queue-add-btn" data-cart-key="${esc(c.key)}">+ ${esc(c.name || c.key)} <span class="mp-queue-add-players">${c.maxPlayers}p</span></button>
+  `).join('');
+  return `<div class="mp-queue-add"><h4>Add a game</h4><div class="mp-queue-add-list">${options}</div></div>`;
+}
+
 function renderSessionBody(session){
   const s = session.state;
   if(s === 'waiting-for-peer'){
@@ -631,19 +767,19 @@ function renderSessionBody(session){
       <h3>${hosting ? 'Hosting a match' : 'Joining a match'}</h3>
       ${hosting ? `<p>Send this link to a friend, or share the code below:</p><div class="mp-room-code">${esc(session.roomCode)}</div>` : ''}
       <div class="mp-status">${statusDot('pending')} ${hosting ? 'Waiting for your friend to join…' : `Connecting to ${esc(session.roomCode)}…`}</div>
-      <p>The match starts the moment they join — no account, no server,
-      just this browser talking directly to theirs.</p>
+      <p>Once they join you'll both see a shared queue of games to
+      play — no account, no server, just this browser talking directly
+      to theirs.</p>
       <div class="mp-actions">${hosting ? '<button id="mpCopyLinkBtn" class="mp-primary">Copy Link</button>' : ''}<button id="mpCancelBtn">Cancel</button></div>
     `;
   }
   if(s === 'connected'){
-    // Normally never seen — beginSyncedMatch() hides the modal for
-    // this state almost immediately. Still rendered defensively in
-    // case that async transition (it awaits startGame()) hasn't
-    // finished by the time this runs.
     return `
-      <h3>Connected!</h3>
-      <div class="mp-status">${statusDot('good')} You're Player ${session.playerSlot + 1} of 2 — starting the match…</div>
+      <h3>Party</h3>
+      <div class="mp-status">${statusDot('good')} Connected — you're Player ${session.playerSlot + 1} of 2</div>
+      ${renderQueueList(session)}
+      ${renderAddGameSection()}
+      <div class="mp-actions"><button id="mpCancelBtn">Leave Party</button></div>
     `;
   }
   if(s === 'peer-left'){
@@ -675,11 +811,26 @@ function renderLobby(){
     if(backBtn) backBtn.addEventListener('click', () => {
       if(activeSession) activeSession.leave();
       if(unsubscribeSession) unsubscribeSession();
+      if(unsubscribeQueue) unsubscribeQueue();
+      if(unsubscribeMatchStart) unsubscribeMatchStart();
       activeSession = null;
       unsubscribeSession = null;
+      unsubscribeQueue = null;
+      unsubscribeMatchStart = null;
       lobbyMode = 'choice';
       renderLobby();
     });
+    body.querySelectorAll('.mp-queue-play').forEach(btn => btn.addEventListener('click', () => {
+      const item = activeSession.queue.find(i => i.id === btn.dataset.queueId);
+      if(item) activeSession.startMatch(item.fragment);
+    }));
+    body.querySelectorAll('.mp-queue-remove').forEach(btn => btn.addEventListener('click', () => {
+      activeSession.removeFromQueue(btn.dataset.queueId);
+    }));
+    body.querySelectorAll('.mp-queue-add-btn').forEach(btn => btn.addEventListener('click', () => {
+      const cart = mpCapableCartsList && mpCapableCartsList.find(c => c.key === btn.dataset.cartKey);
+      if(cart) activeSession.addToQueue({fragment: cart.fragment, name: cart.name, author: cart.author, maxPlayers: cart.maxPlayers});
+    }));
     return;
   }
   if(lobbyMode === 'join-form'){
@@ -702,8 +853,9 @@ function renderLobby(){
   }
   body.innerHTML = `
     <h3>Multiplayer</h3>
-    <p>Play this cart with a friend — no account, no server, just a code
-    to share.</p>
+    <p>Start a party with a friend — no account, no server, just a code
+    to share. You'll both pick from a shared queue of games once
+    connected.</p>
     <div class="mp-actions">
       <button id="mpHostBtn" class="mp-primary">Host a match</button>
       <button id="mpJoinBtn">Join a match</button>
@@ -722,10 +874,6 @@ function renderLobby(){
 // already showing.
 function handleSessionStateChange(state, session){
   pushDiag(`session state: ${state}` + (session.error ? ` (${session.error})` : ''));
-  if(state === 'connected'){
-    beginSyncedMatch(session);
-    return;
-  }
   if(state === 'peer-left'){
     stopSync();
     document.getElementById('mpOverlay').classList.add('active');
@@ -733,10 +881,16 @@ function handleSessionStateChange(state, session){
   renderLobby();
 }
 
-let lobbyCart = null;
+// Only the host auto-seeds the queue (with whatever's currently
+// loaded), once, right here — never inside hostMatch/joinMatch
+// themselves, which stay pure connection primitives. The guest relies
+// entirely on the peer-join re-broadcast (connectToRoom's own
+// room.onPeerJoin, above) to receive it; both sides seeding
+// independently would race under the full-replace broadcast model,
+// with whichever peer's broadcast lands last silently winning.
 let lobbyOpts = undefined;
 function startSession(role, code){
-  activeSession = role === 'host' ? hostMatch(lobbyCart, lobbyOpts) : joinMatch(lobbyCart, code, lobbyOpts);
+  activeSession = role === 'host' ? hostMatch(lobbyOpts) : joinMatch(code, lobbyOpts);
   activeSession._role = role;
   startDiag(role, activeSession.roomCode);
   // connectToRoom sets the session's initial state (normally
@@ -747,20 +901,33 @@ function startSession(role, code){
   // transition does.
   pushDiag(`session state: ${activeSession.state}` + (activeSession.error ? ` (${activeSession.error})` : ''));
   unsubscribeSession = activeSession.onStateChange(handleSessionStateChange);
+  unsubscribeQueue = activeSession.onQueueChange(() => renderLobby());
+  unsubscribeMatchStart = activeSession.onMatchStart(fragment => beginSyncedMatch(activeSession, fragment));
+  if(role === 'host'){
+    try{
+      const fragment = getCurrentFragment();
+      const world = getWorld();
+      if(fragment && world && world.cart){
+        const { name, author } = K.decodeCartUrl(fragment);
+        activeSession.addToQueue({fragment, name, author, maxPlayers: world.cart.maxPlayers});
+      }
+    } catch(err){ /* seeding is best-effort — an empty queue is a fine starting state too */ }
+  }
   renderLobby();
 }
 
-// Opens the lobby modal for `cart` — the caller (main.js) is responsible
-// for only ever calling this when cart.maxPlayers >= 2 (the "Multiplayer"
-// button is itself hidden otherwise, see updateMultiplayerButton below).
+// Opens the lobby modal — no longer scoped to a particular cart (the
+// party room is a fixed topic now, see PARTY_APP_ID above); the caller
+// (main.js) still only shows the "Multiplayer" button when the
+// currently-loaded cart supports it (updateMultiplayerButton below),
+// since that's what gets auto-seeded into the queue on Host.
 // `opts` (an optional {joinRoomFn}) passes straight through to
 // hostMatch/joinMatch — main.js's real button click never supplies one
 // (so real Trystero is used), but test/smoke.js reaches this same
 // function via window.__urlcadeDebug with a mock, to drive the full
 // lobby UI/state-machine wiring without ever touching the real network
 // (see this repo's own note on why live P2P can't be tested here).
-function openLobby(cart, opts){
-  lobbyCart = cart;
+function openLobby(opts){
   lobbyOpts = opts;
   lobbyMode = 'choice';
   document.getElementById('mpOverlay').classList.add('active');
@@ -774,8 +941,7 @@ function openLobby(cart, opts){
 // into the join form themselves. main.js's boot() is the only real
 // caller (via parseJoinLinkHash on the incoming hash); test/smoke.js
 // reaches it directly with a mock joinRoomFn, same pattern as openLobby.
-function openLobbyAndJoin(cart, code, opts){
-  lobbyCart = cart;
+function openLobbyAndJoin(code, opts){
   lobbyOpts = opts;
   document.getElementById('mpOverlay').classList.add('active');
   startSession('join', code);
@@ -798,7 +964,7 @@ function initMultiplayerUI(){
 }
 
 export {
-  hostMatch, joinMatch, connectToRoom, generateRoomCode, appIdForCart, selfId,
+  hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
   openLobby, openLobbyAndJoin, closeLobby, updateMultiplayerButton, initMultiplayerUI,
   startMatchSync, parseJoinLinkHash,
 };
