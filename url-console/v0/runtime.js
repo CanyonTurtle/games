@@ -1141,6 +1141,7 @@ async function renderMenu(){
         <div class="cart-body">
           <h2>${esc(name) || '(untitled)'}</h2>
           <p class="cart-author">${author ? 'by ' + esc(author) : ''}</p>
+          ${cart.maxPlayers >= 2 ? `<p class="cart-players">&#128101; ${cart.maxPlayers} players</p>` : ''}
           <a class="playbtn" href="#${fragment}">&#9654; PLAY</a>
         </div>`;
       const thumb = buildCardThumbnail(cart);

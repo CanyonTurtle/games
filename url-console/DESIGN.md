@@ -3242,7 +3242,17 @@ Docs: none — a config addition to an already-vendored, already-documented libr
 
 Verified via `test/smoke.js`: a new regression check asserts `connectToRoom` actually hands `joinRoomFn` a `turnConfig` array with at least one `turn:`-prefixed URL and real username/credential fields, so this can't silently rot back to STUN-only. Not yet re-verified against the exact real-device scenario that produced the original `onJoinError` — that retest is what finally closes this whole arc out, one way or the other.
 
-## 96. Open questions
+## 96. Multiplayer Party — first stage: a player-count badge on the shelf
+
+With Multiplayer actually working cross-device (§79-95), the next question is the *experience* around it: joining a match today means "join once, play one round of one game, done" — every game switch re-negotiates a whole new WebRTC connection. The plan going forward is a persistent party — one long-lived room, a shared queue either player can add to, and a post-round Ready/Skip vote that cascades from "restart" through the queue — built as a sequence of independently-shippable stages, the same way every other multiplayer round shipped. This is the first: a small, fully independent piece with no `multiplayer.js` involvement at all.
+
+`cart.maxPlayers` has been encoded/decoded since §148 but was only ever read in one place (`updateMultiplayerButton`, gating the topbar button) — nowhere on the shelf itself said which games support a friend. `renderMenu()` (runtime.js) already fully decodes every cart to build its card (thumbnail, name, author), so `cart.maxPlayers` was already sitting right there, unread. Added a small "👥 N players" badge, shown only when `maxPlayers >= 2` — omitted entirely (not "👥 1 players") for the overwhelming majority of single-player carts, so the badge stays a signal instead of shelf noise.
+
+Docs: none — `maxPlayers` itself was already documented (`cart-object.md`); this is a display-only addition, no field/format change.
+
+Verified via `test/smoke.js`: extended the existing shelf-rendering DOM check to also capture each card's badge text, asserting exactly one of the 9 shipped carts (Race Car, the only `maxPlayers:2` cart today) shows a "2 players" badge and no other card shows one. 3 clean full-suite runs.
+
+## 97. Open questions
 
 **Format & encoding**
 - ~~§26's `kernel.js` is a copy of part of `urlcade.html`, not an
