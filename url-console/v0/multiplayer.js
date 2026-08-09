@@ -67,23 +67,67 @@ const PARTY_APP_ID = 'urlcade-mp-party-v1';
 // through. TURN is the standard, user-transparent answer: a relay
 // server WebRTC falls back to automatically, no player action needed.
 //
-// Open Relay Project (openrelayproject.org, served from metered.ca) is
-// used here specifically because its TURN credentials are meant to be
-// publicly embedded — no account for this project, no account or config
-// for a player, satisfying the same constraint every fix in this arc has
-// had to respect. The tradeoff, accepted deliberately for now (this
-// project is still rapid-prototyping, not yet needing production-grade
-// guarantees): it's free, shared public infrastructure, not capacity
-// reserved for this app, so its own reliability under load is out of
-// this project's control. If that ever becomes the bottleneck, revisit
-// with a dedicated/paid TURN provider — nothing else about this wiring
-// (`turnConfig`, Trystero's own first-class extension point) would need
-// to change, only which credentials fill it.
-const TURN_CONFIG = [
-  {urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject'},
-  {urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject'},
-  {urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject'},
-];
+// Open Relay Project's old static, publicly-embeddable credentials
+// (`openrelayproject`/`openrelayproject`) stopped authenticating —
+// confirmed via a second real two-device session reproducing the exact
+// same SDP-exchange failure with those credentials still wired in
+// (DESIGN.md §10x). metered.ca's current model requires an account and
+// mints short-lived credentials per-app via their TURN REST API, so
+// TURN_CONFIG below is now populated at runtime by fetchTurnCredentials()
+// rather than hardcoded. METERED_API_KEY gates *credential minting only*
+// (it is not itself a TURN password) and is meant to ship in client-side
+// code the same way the old static credentials did — metered.ca's own
+// docs assume this deployment shape.
+const METERED_SUBDOMAIN = ''; // TODO: metered.ca dashboard "App name" (the `<subdomain>` in `<subdomain>.metered.ca`)
+const METERED_API_KEY = ''; // TODO: metered.ca dashboard API key
+
+// Mutated in place (never reassigned) once fetchTurnCredentials() resolves
+// — starts empty (STUN-only) rather than stale/broken entries, since a
+// wrong TURN entry actively made things worse (DESIGN.md §10x: Trystero
+// treats "a turnConfig is present" as license to report the specific
+// "check your TURN credentials" error, which is only accurate once real
+// credentials are actually in here). joinRoomFn's config below hands
+// Trystero this exact array by reference — vendor/trystero/torrent.mjs's
+// joinRoom() spreads the outer config object but not the array inside
+// it, and vendor/trystero/strategy.mjs's ctx.config keeps that same
+// reference for the room's whole lifetime, read fresh by peer.mjs each
+// time a peer connection is actually created (initPeer(false,
+// ctx.config), destructuring turnConfig at call time, not join time) —
+// so a fetch that resolves *after* joinRoomFn is called below still
+// reaches the first real peer connection, as long as it beats the
+// tracker-signaling handshake that has to happen first (observed taking
+// seconds to over a minute in practice, comfortably longer than a single
+// HTTP round trip).
+const TURN_CONFIG = [];
+
+// Takes the target array as a parameter (mutated in place) rather than
+// closing over TURN_CONFIG directly, so test/smoke.js can inject a fake
+// fetcher (connectToRoom's own fetchTurnCredentialsFn option, same
+// override convention as joinRoomFn) that still exercises the real
+// by-reference wiring joinRoomFn's config relies on, without a real
+// network call or real metered.ca credentials.
+async function fetchTurnCredentials(targetArray){
+  if(!METERED_SUBDOMAIN || !METERED_API_KEY){
+    pushDiag('TURN not configured (METERED_SUBDOMAIN/METERED_API_KEY empty) — STUN-only');
+    return;
+  }
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 4000);
+  try{
+    const url = `https://${METERED_SUBDOMAIN}.metered.ca/api/v1/turn/credentials?apiKey=${encodeURIComponent(METERED_API_KEY)}`;
+    const res = await fetch(url, {signal: controller.signal});
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    const servers = await res.json();
+    if(!Array.isArray(servers) || !servers.length) throw new Error('empty credential list');
+    targetArray.length = 0;
+    targetArray.push(...servers);
+    pushDiag(`TURN credentials refreshed (${servers.length} servers)`);
+  } catch(err){
+    pushDiag(`TURN credential fetch failed: ${err.message} (falling back to STUN-only)`);
+  } finally{
+    clearTimeout(timeoutId);
+  }
+}
 
 // A session wraps one joined Trystero room end to end: the room code,
 // current connection state, this peer's assigned slot (0 or 1) once a
@@ -106,7 +150,7 @@ const TURN_CONFIG = [
 // see the wire-protocol note above `session.queue`/`startMatch` below.
 // A match only ever begins on an explicit party-start message, never as
 // a side effect of a peer joining the room.
-function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs = 5000} = {}){
+function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs = 5000, fetchTurnCredentialsFn = fetchTurnCredentials} = {}){
   const listeners = new Set();
   const queueListeners = new Set();
   const matchStartListeners = new Set();
@@ -160,6 +204,7 @@ function connectToRoom(roomCode, {joinRoomFn = trysteroJoinRoom, voteTimeoutMs =
     const sorted = [selfId, session.peerId].slice().sort();
     session.playerSlot = sorted.indexOf(selfId);
   }
+  fetchTurnCredentialsFn(TURN_CONFIG); // fire-and-forget — see TURN_CONFIG's own comment for why joining doesn't need to wait on this
   let room;
   try{
     // Trystero's own default is 3 of its 5 hardcoded public trackers
@@ -1304,5 +1349,5 @@ export {
   hostMatch, joinMatch, connectToRoom, generateRoomCode, selfId, PARTY_APP_ID,
   openLobby, openLobbyAndJoin, closeLobby, hideLobby, leaveMatchKeepParty,
   updateMultiplayerButton, initMultiplayerUI, broadcastIdentity, endRound,
-  startMatchSync, parseJoinLinkHash,
+  startMatchSync, parseJoinLinkHash, TURN_CONFIG, fetchTurnCredentials,
 };
