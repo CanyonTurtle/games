@@ -2591,6 +2591,102 @@ async function main(){
   check('startMatch fires the local match-start listener immediately (Trystero\'s send() never loops back to its own sender)', queueSyncResult.startedOnB === 'FRAGMENT_TWO', JSON.stringify(queueSyncResult));
   check('startMatch on one peer starts a match on the other peer too, with the exact same peer-verified fragment (the desync-risk regression test)', queueSyncResult.startedOnA === 'FRAGMENT_TWO', JSON.stringify(queueSyncResult));
 
+  // Identity broadcast (DESIGN.md §101, Multiplayer Party Stage 3) —
+  // session.broadcastOwnIdentity() sends Runtime.getIdentity() over a
+  // new 'party-identity' action, on every peer-join/reconnect (same
+  // re-broadcast reasoning as the queue) and on an explicit call (the
+  // identity picker's Save button, main.js). Both "sessions" here run in
+  // the same page, so they share one Runtime.getIdentity() — the test
+  // changes the *local* identity between each session's own broadcast
+  // call to get two genuinely different values sent, exercising exactly
+  // what two distinct real peers with distinct saved identities would
+  // each independently send.
+  const partyIdentityResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeLinkedRoomPair(){
+      const actionsA = {}, actionsB = {};
+      function makeRoom(mySide, otherSide){
+        return {
+          onPeerJoin: null, onPeerLeave: null, leave(){},
+          makeAction(type){
+            if(!mySide[type]) mySide[type] = { handler: null };
+            const slot = mySide[type];
+            return {
+              get onMessage(){ return slot.handler; },
+              set onMessage(fn){ slot.handler = fn; },
+              send(data){
+                const otherSlot = otherSide[type] || (otherSide[type] = { handler: null });
+                if(otherSlot.handler) otherSlot.handler(data);
+              },
+            };
+          },
+        };
+      }
+      return { roomA: makeRoom(actionsA, actionsB), roomB: makeRoom(actionsB, actionsA) };
+    }
+    const { roomA, roomB } = makeLinkedRoomPair();
+    const sessionA = D.connectToRoom('TESTI', {joinRoomFn: () => roomA});
+    const sessionB = D.connectToRoom('TESTI', {joinRoomFn: () => roomB});
+    const originalIdentity = D.getIdentity();
+
+    D.setIdentity({name: 'Alice', avatarId: 2});
+    roomA.onPeerJoin('peerB'); // A's own onPeerJoin re-broadcasts A's current identity to B
+    const peerSeenByBAfterConnect = sessionB.peerIdentity;
+
+    D.setIdentity({name: 'Bob', avatarId: 5});
+    roomB.onPeerJoin('peerA'); // B's own onPeerJoin re-broadcasts B's current (now different) identity to A
+    const peerSeenByAAfterConnect = sessionA.peerIdentity;
+
+    D.setIdentity({name: 'Bob Two', avatarId: 7});
+    sessionB.broadcastOwnIdentity(); // the explicit call the Save button uses for a live mid-party edit
+    const peerSeenByAAfterLiveEdit = sessionA.peerIdentity;
+
+    D.setIdentity(originalIdentity); // restore for whatever runs next
+    return { peerSeenByBAfterConnect, peerSeenByAAfterConnect, peerSeenByAAfterLiveEdit };
+  });
+  check('a peer identity is received and stored on connect', partyIdentityResult.peerSeenByBAfterConnect && partyIdentityResult.peerSeenByBAfterConnect.name === 'Alice' && partyIdentityResult.peerSeenByBAfterConnect.avatarId === 2, JSON.stringify(partyIdentityResult));
+  check('each side receives its own peer\'s distinct identity, not a shared/confused value', partyIdentityResult.peerSeenByAAfterConnect && partyIdentityResult.peerSeenByAAfterConnect.name === 'Bob' && partyIdentityResult.peerSeenByAAfterConnect.avatarId === 5, JSON.stringify(partyIdentityResult));
+  check('a live identity edit mid-party (broadcastOwnIdentity) is received immediately, not just at connect time', partyIdentityResult.peerSeenByAAfterLiveEdit && partyIdentityResult.peerSeenByAAfterLiveEdit.name === 'Bob Two' && partyIdentityResult.peerSeenByAAfterLiveEdit.avatarId === 7, JSON.stringify(partyIdentityResult));
+
+  // Same feature, driven through the real lobby UI/panel this time (not
+  // just the session API directly above) — confirms the peer's identity
+  // actually reaches the DOM: the panel's own peer-info line, a queue
+  // item's "added by <name>", and the page-level party indicator.
+  const identityUiResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leave(){}, actions:{}};
+      room.makeAction = (type) => {
+        let onMessage = null;
+        const action = { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} };
+        room.actions[type] = action;
+        return action;
+      };
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby({joinRoomFn: () => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].onPeerJoin('mockPeer');
+    // Simulate the peer's own party-identity message arriving — the mock
+    // room has no real other end to send it from, so it's delivered
+    // directly to the local identityAction's onMessage, the same way the
+    // diagnostics tests elsewhere in this file invoke a captured callback
+    // directly to simulate something only a real second peer could do.
+    rooms[0].actions['party-identity'].onMessage({name: 'Casey', avatarId: 4});
+    const panelHtml = document.getElementById('mpBody').innerHTML;
+    const indicatorHtml = document.getElementById('partyIndicator').innerHTML;
+    D.closeMultiplayerLobby();
+    return {
+      panelShowsPeerName: panelHtml.includes('Casey'),
+      panelHasAvatarCanvas: panelHtml.includes('mp-peer-avatar') && panelHtml.includes('<canvas'),
+      indicatorShowsPeerName: indicatorHtml.includes('Casey'),
+    };
+  });
+  check('the party panel shows the peer\'s real name once their identity arrives', identityUiResult.panelShowsPeerName, JSON.stringify(identityUiResult));
+  check('the party panel renders the peer\'s real avatar as a canvas, not just their name', identityUiResult.panelHasAvatarCanvas, JSON.stringify(identityUiResult));
+  check('the party indicator shows the peer\'s real name too, not just the panel', identityUiResult.indicatorShowsPeerName, JSON.stringify(identityUiResult));
+
   // STORE_PERSIST gating itself (DESIGN.md §81), isolated from the match
   // flow above — a tick that later gets rolled back by resimulateFrom()
   // (DESIGN.md §78) can't take a localStorage write back the way it can

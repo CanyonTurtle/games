@@ -518,12 +518,21 @@
      above every view's own chrome (.topbar's 3) but below the panel
      itself (.mp-overlay's 10, so opening the panel never shows the
      indicator floating on top of its own scrim). */
-  #partyIndicator{display:none;position:fixed;z-index:8;
+  #partyIndicator{display:none;position:fixed;z-index:8;align-items:center;gap:7px;
     top:calc(54px + var(--safe-t));right:calc(10px + var(--safe-r));
     background:var(--bg-elevated);border:1px solid var(--accent);border-radius:20px;
-    padding:6px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;
+    padding:5px 14px 5px 6px;cursor:pointer;font-family:var(--mono);font-size:12px;
     color:var(--ink);box-shadow:0 2px 10px rgba(0,0,0,.3);}
   #partyIndicator:hover{color:var(--accent);}
+  .mp-indicator-avatar{display:flex;align-items:center;justify-content:center;
+    width:20px;height:20px;flex:0 0 auto;font-size:13px;}
+  .mp-indicator-avatar canvas{width:20px;height:20px;border-radius:50%;image-rendering:pixelated;}
+
+  /* Peer name/avatar in the panel itself (DESIGN.md §101) — same small
+     circular-canvas convention as .identity-chip's own avatar. */
+  .mp-peer-info{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:12.5px;color:var(--ink);}
+  .mp-peer-avatar{display:flex;align-items:center;justify-content:center;width:22px;height:22px;flex:0 0 auto;}
+  .mp-peer-avatar canvas{width:22px;height:22px;border-radius:50%;image-rendering:pixelated;background:var(--bg);}
   .identity-chip canvas{width:22px;height:22px;border-radius:50%;image-rendering:pixelated;
     background:var(--bg);flex:0 0 auto;}
   .identity-avatar-grid{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px;}
