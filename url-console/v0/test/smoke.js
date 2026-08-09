@@ -1934,14 +1934,9 @@ async function main(){
   // number -> that peer leaves -> peer-left -> close leaves the room.
   const lobbyResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
       room.leave = () => { room.leaveCalled = true; };
-      // A 'connected' transition now (DESIGN.md §80) triggers a real
-      // match start, which calls session._room.makeAction('input') —
-      // needs a stand-in here even though this test doesn't inspect
-      // what's sent, or beginSyncedMatch() throws.
       // onMessage is a real getter/setter *property* on Trystero's
       // public makeAction() (vendor/trystero/actions.mjs), assigned to
       // rather than called — this mock has to match that shape, not the
@@ -1950,26 +1945,34 @@ async function main(){
       // (DESIGN.md §93): startMatchSync calling `inputAction.onMessage(fn)`
       // instead of `inputAction.onMessage = fn` threw the instant a real
       // connection ever reached 'connected', invisible to every mock in
-      // this file until they were all fixed to match reality.
+      // this file until they were all fixed to match reality. Also
+      // stands in for 'party-queue'/'party-start' (DESIGN.md §97) — a
+      // single generic action shape covers all three, none of which this
+      // particular test inspects the wire content of.
       room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
       return room;
     }
     const rooms = [];
     const mockJoinRoomFn = (config, roomId) => { const room = makeMockRoom(); rooms.push({config, roomId, room}); return room; };
 
-    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
     const choiceHtml = document.getElementById('mpBody').innerHTML;
     document.getElementById('mpHostBtn').click();
     const roomCodeShown = document.querySelector('.mp-room-code')?.textContent;
     const roomIdMatches = rooms[0] && rooms[0].roomId === roomCodeShown;
 
     rooms[0].room.onPeerJoin('mockPeerId');
-    // 'connected' now hides the modal and restarts into a real synced
-    // match almost immediately (DESIGN.md §80) rather than sitting on a
-    // static "Connected!" message — the overlay itself being hidden is
-    // the observable proof this happened; player-number/full-flow
-    // coverage lives in the gameplay-sync tests below instead.
-    const overlayHiddenOnConnect = !document.getElementById('mpOverlay').classList.contains('active');
+    // Connecting no longer auto-starts a match (DESIGN.md §97) — it
+    // shows the shared party queue instead, unilateral Play only
+    // happening on an explicit party-start message. The overlay staying
+    // open (not hidden) is itself the observable proof of that; the
+    // gameplay-sync tests below cover an actual match starting.
+    const overlayStillActiveOnConnect = document.getElementById('mpOverlay').classList.contains('active');
+    const connectedHtml = document.getElementById('mpBody').innerHTML;
+    // The host's own currently-loaded game auto-seeds the queue once,
+    // at connect time (startSession's host-only seeding) — one queue
+    // item, with one Play button, should already be showing.
+    const queuePlayButtons = document.querySelectorAll('.mp-queue-play').length;
 
     rooms[0].room.onPeerLeave('mockPeerId');
     const peerLeftHtml = document.getElementById('mpBody').innerHTML;
@@ -1981,7 +1984,9 @@ async function main(){
       hadHostJoinButtons: choiceHtml.includes('mpHostBtn') && choiceHtml.includes('mpJoinBtn'),
       roomCodeLen: (roomCodeShown || '').length,
       roomIdMatches,
-      overlayHiddenOnConnect,
+      overlayStillActiveOnConnect,
+      showsPartyOnConnect: /Party/i.test(connectedHtml),
+      queuePlayButtons,
       peerLeftShowsDisconnect: /disconnected/i.test(peerLeftHtml),
       roomLeaveWasCalled: rooms[0].room.leaveCalled,
       overlayActiveAfterClose,
@@ -2000,7 +2005,8 @@ async function main(){
     Array.isArray(lobbyResult.turnConfig) && lobbyResult.turnConfig.length > 0 &&
     lobbyResult.turnConfig.every(s => /^turns?:/i.test(s.urls) && s.username && s.credential),
     JSON.stringify(lobbyResult));
-  check('a mock peer joining hides the lobby modal (a real match starts immediately, not a static "connected" message)', lobbyResult.overlayHiddenOnConnect, JSON.stringify(lobbyResult));
+  check('a mock peer joining shows the shared party queue instead of auto-starting a match', lobbyResult.overlayStillActiveOnConnect && lobbyResult.showsPartyOnConnect, JSON.stringify(lobbyResult));
+  check('the host\'s currently-loaded game is auto-seeded into the queue on connect', lobbyResult.queuePlayButtons === 1, JSON.stringify(lobbyResult));
   check('that peer leaving shows the disconnected state (room stays open, not silently frozen)', lobbyResult.peerLeftShowsDisconnect, JSON.stringify(lobbyResult));
   check('closing the lobby actually leaves the underlying room, not just hides the modal', lobbyResult.roomLeaveWasCalled && !lobbyResult.overlayActiveAfterClose, JSON.stringify(lobbyResult));
 
@@ -2008,10 +2014,13 @@ async function main(){
   // before being handed to joinRoomFn.
   const joinResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     const rooms = [];
-    const mockJoinRoomFn = (config, roomId) => { rooms.push(roomId); return {onPeerJoin:null, onPeerLeave:null, leave(){}}; };
-    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    // connectToRoom (DESIGN.md §97) now creates the party-queue/party-start
+    // actions immediately on connect, not just once a match starts — every
+    // mock room needs a makeAction stub now, not only the ones a peer
+    // actually joins in.
+    const mockJoinRoomFn = (config, roomId) => { rooms.push(roomId); return {onPeerJoin:null, onPeerLeave:null, leave(){}, makeAction(){ return { set onMessage(fn){}, get onMessage(){ return null; }, send(){} }; }}; };
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
     document.getElementById('mpJoinBtn').click();
     const joinFormShown = !!document.getElementById('mpJoinCode');
     document.getElementById('mpJoinCode').value = '  abcde  ';
@@ -2028,9 +2037,8 @@ async function main(){
   // state, not a silent no-op.
   const mpErrorResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     const throwingJoinRoomFn = () => { throw new Error('mock signaling failure'); };
-    D.openMultiplayerLobby(cart, {joinRoomFn: throwingJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: throwingJoinRoomFn});
     document.getElementById('mpHostBtn').click();
     const errorHtml = document.getElementById('mpBody').innerHTML;
     D.closeMultiplayerLobby();
@@ -2047,7 +2055,6 @@ async function main(){
   // surface needed).
   const diagResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     function makeMockRoom(){
       const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
       room.leave = () => { room.leaveCalled = true; };
@@ -2065,7 +2072,7 @@ async function main(){
     }
     const rooms = [];
     const mockJoinRoomFn = (config, roomId, callbacks) => { const room = makeMockRoom(); rooms.push({roomId, room, callbacks}); return room; };
-    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
     const hiddenOnChoiceScreen = getComputedStyle(document.getElementById('mpDiag')).display === 'none';
     document.getElementById('mpHostBtn').click();
     const logAfterHost = document.getElementById('mpDiagLog').textContent;
@@ -2094,7 +2101,7 @@ async function main(){
       hiddenOnChoiceScreen, visibleAfterHost, logAfterHost, logAfterJoinError, logAfterConnect,
       copiedText, hiddenAfterClose, emptyAfterClose,
       roomCode: rooms[0] && rooms[0].roomId,
-      expectedAppId: D.appIdForCart(cart),
+      expectedAppId: D.PARTY_APP_ID,
     };
   });
   check('the connection log is hidden on the initial Host/Join choice screen (nothing attempted yet)', diagResult.hiddenOnChoiceScreen, JSON.stringify(diagResult));
@@ -2104,8 +2111,11 @@ async function main(){
   // to ever find each other — logging it lets that be compared directly
   // between two devices' diag logs, no separate network inspector
   // needed (found to be genuinely necessary investigating a real
-  // "relays connect, no peer ever found" report, DESIGN.md §90).
-  check('the connection log records the same appId appIdForCart() itself computes for this cart', diagResult.logAfterHost.includes(diagResult.expectedAppId), JSON.stringify(diagResult));
+  // "relays connect, no peer ever found" report, DESIGN.md §90). It's a
+  // fixed constant now (DESIGN.md §97: every party uses the same topic,
+  // PARTY_APP_ID), not a per-cart hash — still worth asserting it's
+  // exactly what the diag log reports, not a silently drifted value.
+  check('the connection log records the party\'s fixed PARTY_APP_ID topic', diagResult.logAfterHost.includes(diagResult.expectedAppId), JSON.stringify(diagResult));
   check('a peer joining is recorded as a "connected" session-state line', /session state: connected/.test(diagResult.logAfterConnect), JSON.stringify(diagResult));
   check('the Copy button on the connection log copies its exact text', diagResult.copiedText === diagResult.logAfterConnect, JSON.stringify(diagResult));
   check('closing the lobby hides the connection log and clears it for next time', diagResult.hiddenAfterClose && diagResult.emptyAfterClose, JSON.stringify(diagResult));
@@ -2115,9 +2125,8 @@ async function main(){
   // listener attached to relay it (see startSession's own comment).
   const diagErrorResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     const throwingJoinRoomFn = () => { throw new Error('mock signaling failure'); };
-    D.openMultiplayerLobby(cart, {joinRoomFn: throwingJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: throwingJoinRoomFn});
     document.getElementById('mpHostBtn').click();
     const log = document.getElementById('mpDiagLog').textContent;
     D.closeMultiplayerLobby();
@@ -2136,9 +2145,8 @@ async function main(){
   // into later, unrelated test output.
   const consoleWarnCaptureResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
-    const mockJoinRoomFn = () => ({ onPeerJoin:null, onPeerLeave:null, leave(){} });
-    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    const mockJoinRoomFn = () => ({ onPeerJoin:null, onPeerLeave:null, leave(){}, makeAction(){ return { set onMessage(fn){}, get onMessage(){ return null; }, send(){} }; } });
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
     document.getElementById('mpHostBtn').click();
     console.warn('Trystero: torrent tracker failure from wss://tracker.example.com - mock tracker rejection');
     const logWithTrackerWarning = document.getElementById('mpDiagLog').textContent;
@@ -2201,14 +2209,13 @@ async function main(){
   await page.waitForTimeout(250);
   const copyLinkResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     const fragment = D.getCurrentFragment();
-    const mockJoinRoomFn = () => ({ onPeerJoin: null, onPeerLeave: null, leave(){} });
+    const mockJoinRoomFn = () => ({ onPeerJoin: null, onPeerLeave: null, leave(){}, makeAction(){ return { set onMessage(fn){}, get onMessage(){ return null; }, send(){} }; } });
     let copiedText = null;
     if(!navigator.clipboard) navigator.clipboard = {};
     const originalWriteText = navigator.clipboard.writeText;
     navigator.clipboard.writeText = (text) => { copiedText = text; return Promise.resolve(); };
-    D.openMultiplayerLobby(cart, {joinRoomFn: mockJoinRoomFn});
+    D.openMultiplayerLobby({joinRoomFn: mockJoinRoomFn});
     document.getElementById('mpHostBtn').click();
     const roomCode = document.querySelector('.mp-room-code').textContent;
     const copyBtn = document.getElementById('mpCopyLinkBtn');
@@ -2261,10 +2268,9 @@ async function main(){
   // still have to choose Join and retype a code."
   const autoJoinResult = await page.evaluate(() => {
     const D = window.__urlcadeDebug;
-    const cart = D.getWorld().cart;
     const rooms = [];
-    const mockJoinRoomFn = (config, roomId) => { const room = {onPeerJoin:null, onPeerLeave:null, leave(){}}; rooms.push({roomId, room}); return room; };
-    D.openLobbyAndJoin(cart, 'QRSTU', {joinRoomFn: mockJoinRoomFn});
+    const mockJoinRoomFn = (config, roomId) => { const room = {onPeerJoin:null, onPeerLeave:null, leave(){}, makeAction(){ return { set onMessage(fn){}, get onMessage(){ return null; }, send(){} }; }}; rooms.push({roomId, room}); return room; };
+    D.openLobbyAndJoin('QRSTU', {joinRoomFn: mockJoinRoomFn});
     const bodyHtml = document.getElementById('mpBody').innerHTML;
     const overlayActive = document.getElementById('mpOverlay').classList.contains('active');
     D.closeMultiplayerLobby();
@@ -2366,9 +2372,13 @@ async function main(){
   check('two independently-simulated Worlds still converge after a real misprediction + resimulateFrom correction (30ms one-way delay)', syncResult.delayedConverged && syncResult.delayedTick === 10, JSON.stringify(syncResult));
   check('neither the fast nor the delayed sync run ever faults either World', !syncResult.fastFault && !syncResult.delayedFault, JSON.stringify(syncResult));
 
-  // Full UI-driven path: hosting a match and a peer joining actually
-  // restarts the game (fresh, tick-0 World) and attaches live sync —
-  // not just the pure startMatchSync logic tested above in isolation.
+  // Full UI-driven path: hosting a match, a peer joining, and clicking
+  // Play on the auto-seeded queue item actually restarts the game
+  // (fresh, tick-0 World) and attaches live sync — not just the pure
+  // startMatchSync logic tested above in isolation. Connecting no
+  // longer starts a match by itself (DESIGN.md §97) — it takes the
+  // explicit party-start Play click, exactly the way the real UI's
+  // "unilateral Play" is meant to work.
   await page.evaluate(() => { location.hash = ''; });
   await page.waitForTimeout(200);
   await page.evaluate((f) => { location.hash = f; }, mpFragment);
@@ -2385,18 +2395,26 @@ async function main(){
       // (DESIGN.md §93): startMatchSync calling `inputAction.onMessage(fn)`
       // instead of `inputAction.onMessage = fn` threw the instant a real
       // connection ever reached 'connected', invisible to every mock in
-      // this file until they were all fixed to match reality.
+      // this file until they were all fixed to match reality. Also
+      // stands in for 'party-queue'/'party-start' (DESIGN.md §97).
       room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
       return room;
     }
     const rooms = [];
-    D.openMultiplayerLobby(D.getWorld().cart, {joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push(room); return room; }});
+    D.openMultiplayerLobby({joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push(room); return room; }});
     document.getElementById('mpHostBtn').click();
     rooms[0].onPeerJoin('mockPeer');
+    const overlayActiveRightAfterJoin = document.getElementById('mpOverlay').classList.contains('active');
+    const playBtn = document.querySelector('.mp-queue-play'); // the host's own currently-loaded game, auto-seeded
+    const hadAutoSeededPlayButton = !!playBtn;
+    if(playBtn) playBtn.click();
     return {
-      overlayActiveRightAfterJoin: document.getElementById('mpOverlay').classList.contains('active'),
+      overlayActiveRightAfterJoin,
+      hadAutoSeededPlayButton,
     };
   });
+  check('a peer joining shows the party queue instead of auto-starting a match', uiSyncResult.overlayActiveRightAfterJoin, JSON.stringify(uiSyncResult));
+  check('the host\'s currently-loaded game is auto-seeded into the queue with a working Play button', uiSyncResult.hadAutoSeededPlayButton, JSON.stringify(uiSyncResult));
   await page.waitForTimeout(400); // beginSyncedMatch() awaits Runtime.startGame()
   const afterMatchStart = await page.evaluate(() => ({
     overlayActive: document.getElementById('mpOverlay').classList.contains('active'),
@@ -2405,10 +2423,10 @@ async function main(){
     fault: window.__urlcadeDebug.getWorld().cartFault,
     multiplayerActive: window.__urlcadeDebug.getWorld().multiplayerActive,
   }));
-  check('a peer joining restarts the game and hides the lobby modal (a real match is now playing, not just "connected")', !afterMatchStart.overlayActive, JSON.stringify({uiSyncResult, afterMatchStart}));
+  check('clicking Play on the queued game restarts it and hides the lobby modal (a real match is now playing, not just showing the queue)', !afterMatchStart.overlayActive, JSON.stringify({uiSyncResult, afterMatchStart}));
   check('the restart button hides during a synced match (no well-defined meaning yet, see multiplayer.js)', afterMatchStart.restartHidden, JSON.stringify(afterMatchStart));
   check('the synced match keeps running live (rAF-driven) without faulting', afterMatchStart.worldAlive && !afterMatchStart.fault, JSON.stringify(afterMatchStart));
-  check('a peer joining sets World.multiplayerActive (DESIGN.md §81, gates STORE_PERSIST)', afterMatchStart.multiplayerActive === true, JSON.stringify(afterMatchStart));
+  check('starting a match sets World.multiplayerActive (DESIGN.md §81, gates STORE_PERSIST)', afterMatchStart.multiplayerActive === true, JSON.stringify(afterMatchStart));
   await page.evaluate(() => window.__urlcadeDebug.closeMultiplayerLobby());
   await page.waitForTimeout(100);
   const afterClose = await page.evaluate(() => ({
@@ -2417,6 +2435,97 @@ async function main(){
   }));
   check('closing the lobby after a match restores the restart button', afterClose.restartRestored, JSON.stringify(afterClose));
   check('closing the lobby after a match clears World.multiplayerActive again (the World keeps playing, just no longer gated)', afterClose.multiplayerActive === false, JSON.stringify(afterClose));
+
+  // Shared party queue (DESIGN.md §97, Multiplayer Party Stage 1) —
+  // exercised directly via connectToRoom's own session API (addToQueue/
+  // removeFromQueue/startMatch/onQueueChange/onMatchStart), not through
+  // the lobby UI, the same way syncResult above tests startMatchSync in
+  // isolation. Two sessions share a pair of linked in-process mock rooms
+  // (send() on one side calls the other's registered onMessage handler
+  // for that same action type — 'party-queue'/'party-start' both need
+  // their own independent channel, unlike the single 'input' channel
+  // the syncResult pair above only needed).
+  const queueSyncResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeLinkedRoomPair(){
+      const actionsA = {}, actionsB = {};
+      const sendLog = { A: [], B: [] };
+      function makeRoom(mySide, otherSide, label){
+        return {
+          onPeerJoin: null, onPeerLeave: null, leave(){},
+          makeAction(type){
+            if(!mySide[type]) mySide[type] = { handler: null };
+            const slot = mySide[type];
+            return {
+              get onMessage(){ return slot.handler; },
+              set onMessage(fn){ slot.handler = fn; },
+              send(data){
+                sendLog[label].push(type);
+                const otherSlot = otherSide[type] || (otherSide[type] = { handler: null });
+                if(otherSlot.handler) otherSlot.handler(data);
+              },
+            };
+          },
+        };
+      }
+      const roomA = makeRoom(actionsA, actionsB, 'A');
+      const roomB = makeRoom(actionsB, actionsA, 'B');
+      return { roomA, roomB, sendLog };
+    }
+
+    const { roomA, roomB, sendLog } = makeLinkedRoomPair();
+    // Two sessions on the *same* fixed room code reach 'connected' with
+    // no cart involved at all — connectToRoom no longer takes one. This
+    // is the structural form of the "room topic decoupled from cart
+    // content" decision: there's simply nothing cart-shaped left for two
+    // differently-loaded peers to disagree about at the room-topic level
+    // any more (DESIGN.md §97's "core architectural decision").
+    const sessionA = D.connectToRoom('TESTQ', {joinRoomFn: () => roomA});
+    const sessionB = D.connectToRoom('TESTQ', {joinRoomFn: () => roomB});
+    roomA.onPeerJoin('peerB');
+    roomB.onPeerJoin('peerA');
+    const bothConnected = sessionA.state === 'connected' && sessionB.state === 'connected';
+    // The peer-join handler re-broadcasts the (here, still-empty) queue
+    // regardless of local queue contents — the fix for a peer who joins
+    // (or reconnects) after the other side's queue was already built up,
+    // since Trystero's send() never replays past sends to a late joiner.
+    const peerJoinBroadcastQueue = sendLog.A.includes('party-queue') && sendLog.B.includes('party-queue');
+
+    const entryA = sessionA.addToQueue({fragment: 'FRAGMENT_ONE', name: 'Game One', author: 'A', maxPlayers: 2});
+    const queueSeenByBAfterAAdd = sessionB.queue.map(i => i.fragment);
+
+    sessionB.addToQueue({fragment: 'FRAGMENT_TWO', name: 'Game Two', author: 'B', maxPlayers: 2});
+    const queueSeenByAAfterBAdd = sessionA.queue.map(i => i.fragment);
+
+    sessionA.removeFromQueue(entryA.id);
+    const queueSeenByBAfterRemove = sessionB.queue.map(i => i.fragment);
+
+    // Unilateral Play (DESIGN.md §97) — no approval round-trip. Clicking
+    // Play calls the local match-start listeners directly (Trystero's
+    // send() never loops back to its own sender) *and* sends
+    // party-start over the wire, so the other peer's listeners fire too,
+    // with the exact same fragment either side agreed on — the concrete
+    // mechanism behind "explicit cart agreement," this round's actual
+    // fix for the desync risk a decoupled room topic would otherwise
+    // reopen.
+    let startedOnA = null, startedOnB = null;
+    sessionA.onMatchStart(f => { startedOnA = f; });
+    sessionB.onMatchStart(f => { startedOnB = f; });
+    sessionB.startMatch('FRAGMENT_TWO');
+
+    return {
+      bothConnected, peerJoinBroadcastQueue,
+      queueSeenByBAfterAAdd, queueSeenByAAfterBAdd, queueSeenByBAfterRemove,
+      startedOnA, startedOnB,
+    };
+  });
+  check('two sessions on the same room code reach \'connected\' with no cart passed to connectToRoom at all', queueSyncResult.bothConnected, JSON.stringify(queueSyncResult));
+  check('a peer joining re-broadcasts the party queue (closes the gap Trystero\'s send() leaves for a late-joining or reconnecting peer)', queueSyncResult.peerJoinBroadcastQueue, JSON.stringify(queueSyncResult));
+  check('addToQueue on one side is broadcast and shows up in the other side\'s queue', queueSyncResult.queueSeenByBAfterAAdd.length === 1 && queueSyncResult.queueSeenByBAfterAAdd[0] === 'FRAGMENT_ONE', JSON.stringify(queueSyncResult));
+  check('addToQueue works from either side (both entries visible after both peers add one)', queueSyncResult.queueSeenByAAfterBAdd.length === 2 && queueSyncResult.queueSeenByAAfterBAdd.includes('FRAGMENT_TWO'), JSON.stringify(queueSyncResult));
+  check('removeFromQueue on one side is broadcast and removes the item on the other side too', queueSyncResult.queueSeenByBAfterRemove.length === 1 && queueSyncResult.queueSeenByBAfterRemove[0] === 'FRAGMENT_TWO', JSON.stringify(queueSyncResult));
+  check('startMatch fires the local match-start listener immediately (Trystero\'s send() never loops back to its own sender)', queueSyncResult.startedOnB === 'FRAGMENT_TWO', JSON.stringify(queueSyncResult));
+  check('startMatch on one peer starts a match on the other peer too, with the exact same peer-verified fragment (the desync-risk regression test)', queueSyncResult.startedOnA === 'FRAGMENT_TWO', JSON.stringify(queueSyncResult));
 
   // STORE_PERSIST gating itself (DESIGN.md §81), isolated from the match
   // flow above — a tick that later gets rolled back by resimulateFrom()

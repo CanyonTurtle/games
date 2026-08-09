@@ -448,6 +448,33 @@
   .mp-status-dot.mp-pending{background:var(--accent);animation:mp-pulse 1.2s ease-in-out infinite;}
   @keyframes mp-pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
 
+  /* Shared party queue (DESIGN.md §97, Multiplayer Party Stage 1) — the
+     'connected' state's real body: a list of queued games plus an "Add
+     a game" section, replacing what used to be a static "Starting the
+     match…" message now that connecting no longer auto-starts one. */
+  .mp-queue-empty{margin:0 0 14px;font-size:12.5px;color:var(--ink-dim);}
+  .mp-queue-list{display:flex;flex-direction:column;gap:8px;margin-bottom:16px;
+    max-height:220px;overflow-y:auto;}
+  .mp-queue-item{display:flex;align-items:center;justify-content:space-between;gap:10px;
+    background:var(--bg-elevated);border:1px solid var(--rule);border-radius:4px;padding:8px 10px;}
+  .mp-queue-info{display:flex;flex-direction:column;gap:2px;min-width:0;}
+  .mp-queue-name{font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .mp-queue-added-by{font-size:10.5px;color:var(--ink-dim);}
+  .mp-queue-item-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto;}
+  .mp-queue-item-actions button{font-family:var(--mono);font-size:11.5px;cursor:pointer;
+    border-radius:3px;border:1px solid var(--rule);background:var(--bg);color:var(--ink);}
+  .mp-queue-play{padding:5px 10px;}
+  .mp-queue-play:hover{border-color:var(--accent);color:var(--accent);}
+  .mp-queue-remove{padding:5px 8px;color:var(--ink-dim);}
+  .mp-queue-remove:hover{border-color:var(--bad);color:var(--bad);}
+  .mp-queue-add h4{margin:0 0 8px;font-size:11px;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-dim);}
+  .mp-queue-add-list{display:flex;flex-direction:column;gap:6px;margin-bottom:16px;}
+  .mp-queue-add-btn{font-family:var(--mono);font-size:12px;text-align:left;cursor:pointer;
+    padding:8px 10px;border-radius:4px;border:1px solid var(--rule);background:var(--bg-elevated);color:var(--ink);
+    display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .mp-queue-add-btn:hover{border-color:var(--accent);color:var(--accent);}
+  .mp-queue-add-players{color:var(--ink-dim);font-size:10.5px;}
+
   /* Connection diagnostics (DESIGN.md §88) — a small always-present log
      of what the signaling relays and (once found) the peer's WebRTC
      connection are actually doing underneath the lobby's own

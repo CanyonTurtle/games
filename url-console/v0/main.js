@@ -102,9 +102,8 @@ async function boot(){
       // works exactly the same way). If it doesn't decode, fall into
       // Debug's own decode-error UI instead of duplicating that messaging.
       if(await Runtime.startGame(gameHash)){
-        const cart = Runtime.getWorld().cart;
-        Multiplayer.updateMultiplayerButton(cart);
-        if(code) Multiplayer.openLobbyAndJoin(cart, code);
+        Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart);
+        if(code) Multiplayer.openLobbyAndJoin(code);
         return;
       }
       if(await Inspector.startInspect(gameHash)) return;
@@ -201,8 +200,7 @@ document.getElementById('restartBtn').addEventListener('click', async () => {
 });
 Multiplayer.initMultiplayerUI();
 document.getElementById('multiplayerBtn').addEventListener('click', () => {
-  const world = Runtime.getWorld();
-  if(world) Multiplayer.openLobby(world.cart);
+  Multiplayer.openLobby();
 });
 document.getElementById('inspectBackBtn').addEventListener('click', goBackFromDebug);
 document.getElementById('debugBtn').addEventListener('click', () => {
@@ -277,8 +275,8 @@ window.__urlcadeDebug = {
   // the only way to exercise it without reaching a real signaling
   // network this sandbox/CI can't reach (see multiplayer.js's own note).
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
-  hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch,
+  hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch, connectToRoom: Multiplayer.connectToRoom,
   startMatchSync: Multiplayer.startMatchSync,
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
-  appIdForCart: Multiplayer.appIdForCart,
+  PARTY_APP_ID: Multiplayer.PARTY_APP_ID,
 };
