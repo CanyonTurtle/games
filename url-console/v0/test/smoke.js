@@ -1907,13 +1907,17 @@ async function main(){
   check('an explicit maxPlayers:2 round-trips through encode/decode unchanged', maxPlayersKernelResult.explicit2MaxPlayers === 2, JSON.stringify(maxPlayersKernelResult));
   check('encodeCart throws for maxPlayers outside 1-2 (a hard v1 cap, not a soft default)', maxPlayersKernelResult.threwFor0 && maxPlayersKernelResult.threwFor3, JSON.stringify(maxPlayersKernelResult));
 
-  // Button visibility: shown only for a cart that opted in.
+  // Button visibility (DESIGN.md §100): the party room is no longer
+  // scoped to whatever cart is loaded (§99), so the "Multiplayer" entry
+  // point is unconditional now — shown for a single-player cart too, not
+  // just a maxPlayers:2 one. Queue-*adding* stays gated on maxPlayers>=2
+  // regardless (checked separately, below, via the "Add a game" list).
   await page.evaluate(() => { location.hash = ''; });
   await page.waitForTimeout(200);
   await page.evaluate((k) => { location.hash = window.__urlcadeDebug.CARTS[k].fragment; }, 'flappy');
   await page.waitForTimeout(300);
-  const btnHiddenForSingplePlayer = await page.evaluate(() => getComputedStyle(document.getElementById('multiplayerBtn')).display === 'none');
-  check('the Multiplayer button stays hidden for a single-player cart (maxPlayers:1)', btnHiddenForSingplePlayer);
+  const btnVisibleForSinglePlayer = await page.evaluate(() => getComputedStyle(document.getElementById('multiplayerBtn')).display !== 'none');
+  check('the Multiplayer button is shown even for a single-player cart (maxPlayers:1) — the party is not cart-scoped', btnVisibleForSinglePlayer);
 
   const mpFragment = await page.evaluate(async () => {
     const K2 = window.__urlcadeDebug;
@@ -2009,6 +2013,66 @@ async function main(){
   check('the host\'s currently-loaded game is auto-seeded into the queue on connect', lobbyResult.queuePlayButtons === 1, JSON.stringify(lobbyResult));
   check('that peer leaving shows the disconnected state (room stays open, not silently frozen)', lobbyResult.peerLeftShowsDisconnect, JSON.stringify(lobbyResult));
   check('closing the lobby actually leaves the underlying room, not just hides the modal', lobbyResult.roomLeaveWasCalled && !lobbyResult.overlayActiveAfterClose, JSON.stringify(lobbyResult));
+
+  // Persistent party chrome (DESIGN.md §100, Multiplayer Party Stage 2):
+  // the X/scrim now only hides the panel — the room stays open — and a
+  // page-level #partyIndicator reopens it, reachable even after
+  // navigating away from the game that started the party (the shelf's
+  // own backBtn -> goToMenu(), which now keeps the party connected
+  // instead of leaving it). Only the panel's own explicit Leave Party
+  // button actually ends the party.
+  const chromeResult = await page.evaluate(() => {
+    const D = window.__urlcadeDebug;
+    function makeMockRoom(){
+      const room = {onPeerJoin:null, onPeerLeave:null, leaveCalled:false};
+      room.leave = () => { room.leaveCalled = true; };
+      room.makeAction = () => { let onMessage = null; return { get onMessage(){ return onMessage; }, set onMessage(fn){ onMessage = fn; }, send(){} }; };
+      return room;
+    }
+    const rooms = [];
+    D.openMultiplayerLobby({joinRoomFn: (c,r) => { const room = makeMockRoom(); rooms.push({roomId:r, room}); return room; }});
+    document.getElementById('mpHostBtn').click();
+    rooms[0].room.onPeerJoin('mockPeer');
+    const indicatorVisibleWhileConnected = getComputedStyle(document.getElementById('partyIndicator')).display !== 'none';
+
+    document.getElementById('mpCloseBtn').click(); // the X — should only hide
+    const overlayHiddenAfterX = !document.getElementById('mpOverlay').classList.contains('active');
+    const roomStillOpenAfterX = !rooms[0].room.leaveCalled;
+    const indicatorStillVisibleAfterHide = getComputedStyle(document.getElementById('partyIndicator')).display !== 'none';
+
+    document.getElementById('partyIndicator').click(); // reopens the same connected session
+    const overlayReopenedByIndicator = document.getElementById('mpOverlay').classList.contains('active');
+    const showsPartyPanelAfterReopen = document.getElementById('mpBody').innerHTML.includes('Party');
+
+    document.getElementById('mpCloseBtn').click(); // hide again — the overlay's scrim would otherwise block backBtn
+    document.getElementById('backBtn').click(); // goToMenu() — used to closeLobby(), now leaveMatchKeepParty()
+    const roomStillOpenAfterNav = !rooms[0].room.leaveCalled;
+    const indicatorVisibleOnShelf = getComputedStyle(document.getElementById('partyIndicator')).display !== 'none';
+
+    document.getElementById('partyIndicator').click(); // reachable from the shelf, not just the game view
+    document.getElementById('mpCancelBtn').click(); // 'connected' state's own "Leave Party" button
+    const roomLeftAfterExplicitLeave = rooms[0].room.leaveCalled;
+    const indicatorHiddenAfterLeave = getComputedStyle(document.getElementById('partyIndicator')).display === 'none';
+
+    return {
+      indicatorVisibleWhileConnected, overlayHiddenAfterX, roomStillOpenAfterX, indicatorStillVisibleAfterHide,
+      overlayReopenedByIndicator, showsPartyPanelAfterReopen,
+      roomStillOpenAfterNav, indicatorVisibleOnShelf,
+      roomLeftAfterExplicitLeave, indicatorHiddenAfterLeave,
+    };
+  });
+  check('the party indicator appears once connected', chromeResult.indicatorVisibleWhileConnected, JSON.stringify(chromeResult));
+  check('clicking the X only hides the panel — the room stays open', chromeResult.overlayHiddenAfterX && chromeResult.roomStillOpenAfterX, JSON.stringify(chromeResult));
+  check('the party indicator stays visible while the panel is hidden', chromeResult.indicatorStillVisibleAfterHide, JSON.stringify(chromeResult));
+  check('clicking the party indicator reopens the same connected session\'s panel', chromeResult.overlayReopenedByIndicator && chromeResult.showsPartyPanelAfterReopen, JSON.stringify(chromeResult));
+  check('navigating to the shelf (backBtn) keeps the party connected instead of leaving it', chromeResult.roomStillOpenAfterNav, JSON.stringify(chromeResult));
+  check('the party indicator is reachable from the shelf, not just the game view it was started from', chromeResult.indicatorVisibleOnShelf, JSON.stringify(chromeResult));
+  check('the explicit "Leave Party" button actually leaves the room', chromeResult.roomLeftAfterExplicitLeave, JSON.stringify(chromeResult));
+  check('the party indicator disappears once the party is actually left', chromeResult.indicatorHiddenAfterLeave, JSON.stringify(chromeResult));
+  // chromeResult's own backBtn click navigated to the shelf — restore the
+  // maxPlayers:2 game view every test after this one already assumes.
+  await page.evaluate((f) => { location.hash = f; }, mpFragment);
+  await page.waitForTimeout(300);
 
   // Join flow: room code input is normalized (trimmed, uppercased)
   // before being handed to joinRoomFn.

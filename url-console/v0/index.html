@@ -505,6 +505,25 @@
     background:var(--bg-elevated);border:1px solid var(--rule);border-radius:20px;
     padding:5px 12px 5px 5px;cursor:pointer;font-family:var(--mono);font-size:12px;color:var(--ink);}
   .identity-chip:hover{border-color:var(--accent);color:var(--accent);}
+
+  /* Party indicator (DESIGN.md §100) — reopens the panel without ending
+     the party, shown whenever a party is actually connected (or between
+     peers, 'peer-left'). Deliberately page-level `position:fixed`, not
+     nested inside any one of the 3 views' own topbars — the whole point
+     of a persistent party is that it survives switching between shelf,
+     game, and Tinker, so the one thing that lets you get back to it has
+     to survive that too, not live inside whichever view happened to
+     start it. Offset below each view's own top row rather than sharing
+     it, to sidestep needing 3 different exact alignments; z-index 8 —
+     above every view's own chrome (.topbar's 3) but below the panel
+     itself (.mp-overlay's 10, so opening the panel never shows the
+     indicator floating on top of its own scrim). */
+  #partyIndicator{display:none;position:fixed;z-index:8;
+    top:calc(54px + var(--safe-t));right:calc(10px + var(--safe-r));
+    background:var(--bg-elevated);border:1px solid var(--accent);border-radius:20px;
+    padding:6px 14px;cursor:pointer;font-family:var(--mono);font-size:12px;
+    color:var(--ink);box-shadow:0 2px 10px rgba(0,0,0,.3);}
+  #partyIndicator:hover{color:var(--accent);}
   .identity-chip canvas{width:22px;height:22px;border-radius:50%;image-rendering:pixelated;
     background:var(--bg);flex:0 0 auto;}
   .identity-avatar-grid{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 16px;}
@@ -587,6 +606,8 @@
   <div id="faultBanner">CART FAULT — step budget exceeded</div>
   <div id="touchControls" class="touch-controls"></div>
 </div>
+
+<button type="button" id="partyIndicator" title="Reopen your party"></button>
 
 <div id="mpOverlay" class="mp-overlay">
   <div class="mp-card">

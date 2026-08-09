@@ -27,7 +27,7 @@ import * as Avatars from './avatars.js';
 import { CARTS, registerAllCarts } from './carts/index.js';
 
 function goToMenu(){
-  Multiplayer.closeLobby(); // leaves any open room rather than abandoning it silently in the background
+  Multiplayer.leaveMatchKeepParty(); // ends any live match's sync but keeps a connected party room open (DESIGN.md §100) — only the panel's own Leave Party button actually leaves
   Runtime.stopGame();
   Inspector.closeInspector();
   Runtime.showMenu();
@@ -49,7 +49,7 @@ function goToMenu(){
 // see. That's exactly what "Debug/New Cart do nothing" turned out to
 // be. See inspector.js's startInspect/startNewCart for the same fix.
 async function openDebug(payload){
-  Multiplayer.closeLobby(); // same reasoning as goToMenu() — never leave a room joined in the background
+  Multiplayer.leaveMatchKeepParty(); // same reasoning as goToMenu() — Tinker ends the live match, not the party
   const resuming = !!Runtime.getWorld() && Runtime.getCurrentFragment() === payload;
   if(resuming) Runtime.pauseGame(); else Runtime.stopGame();
   let ok = false;
@@ -102,7 +102,7 @@ async function boot(){
       // works exactly the same way). If it doesn't decode, fall into
       // Debug's own decode-error UI instead of duplicating that messaging.
       if(await Runtime.startGame(gameHash)){
-        Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart);
+        Multiplayer.updateMultiplayerButton();
         if(code) Multiplayer.openLobbyAndJoin(code);
         return;
       }
@@ -193,7 +193,7 @@ document.getElementById('restartBtn').addEventListener('click', async () => {
   if(!fragment) return;
   try{
     await Runtime.startGame(fragment);
-    Multiplayer.updateMultiplayerButton(Runtime.getWorld().cart);
+    Multiplayer.updateMultiplayerButton();
   } catch(err){
     console.error('restart failed:', err);
   }
@@ -275,6 +275,7 @@ window.__urlcadeDebug = {
   // the only way to exercise it without reaching a real signaling
   // network this sandbox/CI can't reach (see multiplayer.js's own note).
   openMultiplayerLobby: Multiplayer.openLobby, closeMultiplayerLobby: Multiplayer.closeLobby,
+  hideMultiplayerLobby: Multiplayer.hideLobby, leaveMatchKeepParty: Multiplayer.leaveMatchKeepParty,
   hostMatch: Multiplayer.hostMatch, joinMatch: Multiplayer.joinMatch, connectToRoom: Multiplayer.connectToRoom,
   startMatchSync: Multiplayer.startMatchSync,
   openLobbyAndJoin: Multiplayer.openLobbyAndJoin, parseJoinLinkHash: Multiplayer.parseJoinLinkHash,
